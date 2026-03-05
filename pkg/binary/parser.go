@@ -5,6 +5,7 @@ import (
 	"debug/elf"
 	"debug/macho"
 	"debug/pe"
+	"encoding/binary"
 	"fmt"
 )
 
@@ -175,37 +176,22 @@ func (p *StandardLibParser) parsePE(data []byte) (*BinaryInfo, error) {
 
 // parseMachO parses a Mach-O binary using debug/macho
 func (p *StandardLibParser) parseMachO(data []byte) (*BinaryInfo, error) {
+	// check if this is a fat binary first
+	if len(data) >= 4 {
+		magic := binary.BigEndian.Uint32(data[0:4])
+		if magic == machoMagicFat {
+			return p.parseFatMachO(data)
+		}
+	}
+
+	// parse single mach-o binary
 	reader := bytes.NewReader(data)
 	machoFile, err := macho.NewFile(reader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse Mach-O: %w", err)
 	}
 
-	info := &BinaryInfo{
-		Format:        BinaryFormatMachO,
-		Architecture:  p.detectMachOArchitecture(machoFile),
-		EntryPoint:    p.findMachOEntryPoint(machoFile),
-		BaseAddress:   0, // mach-o uses vmaddr from segments
-		GroundTruthDB: NewGroundTruthDatabase(),
-		machoFile:     machoFile,
-	}
-
-	// extract sections
-	info.Sections = p.extractMachOSections(machoFile)
-
-	// extract symbols
-	info.Symbols = p.extractMachOSymbols(machoFile)
-
-	// extract relocations
-	info.Relocations = p.extractMachORelocations(machoFile)
-
-	// extract imports and exports (dyld info)
-	info.Imports, info.Exports = p.extractMachOImportsExports(machoFile)
-
-	// build ground-truth database
-	p.buildGroundTruthDB(info)
-
-	return info, nil
+	return p.parseSingleMachO(data, machoFile)
 }
 
 // buildGroundTruthDB populates the ground-truth database from extracted data
