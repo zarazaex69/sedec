@@ -363,13 +363,13 @@ func TestGetIncrementalUpdateStats(t *testing.T) {
 // TestUpdateType_String tests string representation of update types
 func TestUpdateType_String(t *testing.T) {
 	tests := []struct {
-		updateType UpdateType
 		expected   string
+		updateType UpdateType
 	}{
-		{UpdateTypeAddEdge, "AddEdge"},
-		{UpdateTypeAddBlock, "AddBlock"},
-		{UpdateTypeResolveIndirect, "ResolveIndirect"},
-		{UpdateTypeSplitBlock, "SplitBlock"},
+		{"AddEdge", UpdateTypeAddEdge},
+		{"AddBlock", UpdateTypeAddBlock},
+		{"ResolveIndirect", UpdateTypeResolveIndirect},
+		{"SplitBlock", UpdateTypeSplitBlock},
 	}
 
 	for _, tt := range tests {

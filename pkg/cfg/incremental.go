@@ -8,11 +8,11 @@ import (
 
 // IncrementalUpdate represents a pending CFG update operation
 type IncrementalUpdate struct {
-	UpdateType UpdateType
-	JumpSite   disasm.Address
-	Targets    []disasm.Address
 	Provenance *EdgeProvenance
 	Metadata   map[string]any
+	Targets    []disasm.Address
+	JumpSite   disasm.Address
+	UpdateType UpdateType
 }
 
 // UpdateType classifies the type of incremental update
@@ -134,7 +134,7 @@ func (b *Builder) applyAddEdge(update *IncrementalUpdate) error {
 }
 
 // applyAddBlock adds a new basic block (for discovered code regions)
-func (b *Builder) applyAddBlock(update *IncrementalUpdate) error {
+func (b *Builder) applyAddBlock(_ *IncrementalUpdate) error {
 	// this would require new instructions to be provided
 	// placeholder for future implementation when discovering new code
 	return fmt.Errorf("AddBlock update type not yet implemented")
@@ -142,92 +142,115 @@ func (b *Builder) applyAddBlock(update *IncrementalUpdate) error {
 
 // applySplitBlock splits an existing block when new branch target is discovered mid-block
 func (b *Builder) applySplitBlock(update *IncrementalUpdate) error {
-	// find block containing the split point
 	splitAddr := update.Targets[0]
-	blockID, exists := b.addressToBlock[splitAddr]
-	if !exists {
-		return fmt.Errorf("split address 0x%x not found in any block", splitAddr)
-	}
 
-	block, exists := b.cfg.GetBlock(blockID)
-	if !exists {
-		return fmt.Errorf("block %d not found in cfg", blockID)
+	block, blockID, err := b.findBlockForSplit(splitAddr)
+	if err != nil {
+		return err
 	}
 
 	// check if split point is already block start (no split needed)
 	if block.StartAddress == splitAddr {
-		return nil // already a block boundary
+		return nil
 	}
 
-	// find split point in instructions
-	splitIndex := -1
-	for i, instr := range block.Instructions {
-		if instr.Address == splitAddr {
-			splitIndex = i
-			break
-		}
-	}
-
-	if splitIndex == -1 {
-		return fmt.Errorf("split address 0x%x not found in block instructions", splitAddr)
+	splitIndex, err := b.findSplitIndex(block, splitAddr)
+	if err != nil {
+		return err
 	}
 
 	if splitIndex == 0 {
-		return nil // already at block start
+		return nil
 	}
 
-	// create new block for second half
+	newBlock := b.createSplitBlock(block, splitIndex, blockID)
+	b.updateOriginalBlock(block, splitIndex, newBlock.ID)
+	b.updateAddressMappings(newBlock)
+	b.updateSuccessorPredecessors(newBlock, blockID)
+	b.cfg.AddEdge(blockID, newBlock.ID, EdgeTypeFallthrough)
+	b.redirectEdgesToNewBlock(newBlock, blockID)
+
+	return nil
+}
+
+// findBlockForSplit locates the block containing the split address
+func (b *Builder) findBlockForSplit(splitAddr disasm.Address) (*BasicBlock, BlockID, error) {
+	blockID, exists := b.addressToBlock[splitAddr]
+	if !exists {
+		return nil, 0, fmt.Errorf("split address 0x%x not found in any block", splitAddr)
+	}
+
+	block, exists := b.cfg.GetBlock(blockID)
+	if !exists {
+		return nil, 0, fmt.Errorf("block %d not found in cfg", blockID)
+	}
+
+	return block, blockID, nil
+}
+
+// findSplitIndex finds the instruction index where the split should occur
+func (b *Builder) findSplitIndex(block *BasicBlock, splitAddr disasm.Address) (int, error) {
+	for i, instr := range block.Instructions {
+		if instr.Address == splitAddr {
+			return i, nil
+		}
+	}
+	return -1, fmt.Errorf("split address 0x%x not found in block instructions", splitAddr)
+}
+
+// createSplitBlock creates a new block from the split point onwards
+func (b *Builder) createSplitBlock(originalBlock *BasicBlock, splitIndex int, _ BlockID) *BasicBlock {
 	newBlockID := b.nextBlockID
 	b.nextBlockID++
 
 	newBlock := &BasicBlock{
 		ID:           newBlockID,
-		StartAddress: block.Instructions[splitIndex].Address,
-		EndAddress:   block.EndAddress,
-		Instructions: block.Instructions[splitIndex:],
+		StartAddress: originalBlock.Instructions[splitIndex].Address,
+		EndAddress:   originalBlock.EndAddress,
+		Instructions: originalBlock.Instructions[splitIndex:],
 		Predecessors: make([]BlockID, 0),
-		Successors:   block.Successors, // inherit successors
+		Successors:   originalBlock.Successors,
 	}
 
-	// update original block
+	b.cfg.AddBlock(newBlock)
+	return newBlock
+}
+
+// updateOriginalBlock modifies the original block after split
+func (b *Builder) updateOriginalBlock(block *BasicBlock, splitIndex int, newBlockID BlockID) {
 	block.Instructions = block.Instructions[:splitIndex]
 	block.EndAddress = block.Instructions[len(block.Instructions)-1].Address
-	block.Successors = []BlockID{newBlockID} // now only points to new block
+	block.Successors = []BlockID{newBlockID}
+}
 
-	// add new block to cfg
-	b.cfg.AddBlock(newBlock)
-
-	// update address mapping for new block instructions
+// updateAddressMappings updates address-to-block mappings for new block
+func (b *Builder) updateAddressMappings(newBlock *BasicBlock) {
 	for _, instr := range newBlock.Instructions {
-		b.addressToBlock[instr.Address] = newBlockID
+		b.addressToBlock[instr.Address] = newBlock.ID
 	}
+}
 
-	// update successor blocks' predecessors
+// updateSuccessorPredecessors updates predecessor lists in successor blocks
+func (b *Builder) updateSuccessorPredecessors(newBlock *BasicBlock, oldBlockID BlockID) {
 	for _, succID := range newBlock.Successors {
-		if succBlock, exists := b.cfg.GetBlock(succID); exists {
-			// replace old block with new block in predecessors
+		if succBlock, blockExists := b.cfg.GetBlock(succID); blockExists {
 			for i, predID := range succBlock.Predecessors {
-				if predID == blockID {
-					succBlock.Predecessors[i] = newBlockID
+				if predID == oldBlockID {
+					succBlock.Predecessors[i] = newBlock.ID
 				}
 			}
 		}
 	}
+}
 
-	// add edge from old block to new block
-	b.cfg.AddEdge(blockID, newBlockID, EdgeTypeFallthrough)
-
-	// update edges that pointed to old block
+// redirectEdgesToNewBlock redirects edges that should point to the new block
+func (b *Builder) redirectEdgesToNewBlock(newBlock *BasicBlock, oldBlockID BlockID) {
 	for i, edge := range b.cfg.Edges {
-		if edge.To == blockID && edge.From != blockID {
-			// check if this edge should point to new block instead
-			// (if target address is in new block range)
-			b.cfg.Edges[i].To = newBlockID
+		if edge.To == oldBlockID && edge.From != oldBlockID {
+			b.cfg.Edges[i].To = newBlock.ID
 			newBlock.Predecessors = append(newBlock.Predecessors, edge.From)
 		}
 	}
-
-	return nil
 }
 
 // BatchApplyUpdates applies multiple incremental updates efficiently

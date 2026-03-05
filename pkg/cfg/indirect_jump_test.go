@@ -392,15 +392,15 @@ func TestMarkIndirectJumpResolved(t *testing.T) {
 // TestIndirectJumpKind_String tests string representation of jump kinds
 func TestIndirectJumpKind_String(t *testing.T) {
 	tests := []struct {
-		kind     IndirectJumpKind
 		expected string
+		kind     IndirectJumpKind
 	}{
-		{IndirectJumpUnknown, "Unknown"},
-		{IndirectJumpVTable, "VTable"},
-		{IndirectJumpHandlerTable, "HandlerTable"},
-		{IndirectJumpInterfaceTable, "InterfaceTable"},
-		{IndirectJumpFunctionPointer, "FunctionPointer"},
-		{IndirectJumpComputedGoto, "ComputedGoto"},
+		{"Unknown", IndirectJumpUnknown},
+		{"VTable", IndirectJumpVTable},
+		{"HandlerTable", IndirectJumpHandlerTable},
+		{"InterfaceTable", IndirectJumpInterfaceTable},
+		{"FunctionPointer", IndirectJumpFunctionPointer},
+		{"ComputedGoto", IndirectJumpComputedGoto},
 	}
 
 	for _, tt := range tests {
@@ -508,8 +508,7 @@ func TestMultipleIndirectJumps(t *testing.T) {
 	// verify each jump is tracked
 	addresses := []disasm.Address{0x8000, 0x8003, 0x8006}
 	for _, addr := range addresses {
-		_, found := cfg.GetUnresolvedIndirectJump(addr)
-		if !found {
+		if _, jumpFound := cfg.GetUnresolvedIndirectJump(addr); !jumpFound {
 			t.Errorf("indirect jump at 0x%x not found", addr)
 		}
 	}
@@ -535,8 +534,7 @@ func TestMultipleIndirectJumps(t *testing.T) {
 
 	// verify others still present
 	for _, addr := range []disasm.Address{0x8000, 0x8006} {
-		_, found := cfg.GetUnresolvedIndirectJump(addr)
-		if !found {
+		if _, stillPresent := cfg.GetUnresolvedIndirectJump(addr); !stillPresent {
 			t.Errorf("unresolved jump at 0x%x should still be present", addr)
 		}
 	}

@@ -12,15 +12,18 @@ type BasicBlock struct {
 	Instructions []*disasm.Instruction // instructions in this block
 	Predecessors []BlockID             // blocks that can jump to this block
 	Successors   []BlockID             // blocks this block can jump to
-	ID           BlockID               // unique identifier for this block
 	StartAddress disasm.Address        // virtual address of first instruction
 	EndAddress   disasm.Address        // virtual address of last instruction
+	ID           BlockID               // unique identifier for this block
 }
 
 // EdgeType represents the type of control flow edge
 type EdgeType int
 
 const (
+	// unknownEdgeTypeString is the string representation for unknown edge types
+	unknownEdgeTypeString = "Unknown"
+
 	// EdgeTypeUnknown represents an unknown edge type
 	EdgeTypeUnknown EdgeType = iota
 	// EdgeTypeFallthrough represents sequential execution to next block
@@ -52,33 +55,33 @@ func (e EdgeType) String() string {
 	case EdgeTypeIndirect:
 		return "Indirect"
 	default:
-		return "Unknown"
+		return unknownEdgeTypeString
 	}
 }
 
 // Edge represents a directed edge in the control flow graph
 type Edge struct {
+	Provenance *EdgeProvenance // tracks how this edge was discovered (nil for direct edges)
 	From       BlockID         // source block
 	To         BlockID         // destination block
 	Type       EdgeType        // type of control flow edge
-	Provenance *EdgeProvenance // tracks how this edge was discovered (nil for direct edges)
 }
 
 // EdgeProvenance tracks the source of edge discovery for debugging and analysis
 type EdgeProvenance struct {
+	Metadata     map[string]any // additional metadata about edge discovery
 	AnalysisPass string         // which analysis pass discovered this edge (e.g., "initial", "type_inference", "vsa")
 	Confidence   float64        // confidence level (0.0 to 1.0) for inferred edges
-	Metadata     map[string]any // additional metadata about edge discovery
 }
 
 // UnresolvedIndirectJump represents an indirect jump that needs resolution
 type UnresolvedIndirectJump struct {
-	JumpSite        disasm.Address      // address of the indirect jump instruction
-	BlockID         BlockID             // block containing the jump
-	Instruction     *disasm.Instruction // the actual jump instruction
-	PossibleTargets []disasm.Address    // candidate targets discovered so far
-	JumpKind        IndirectJumpKind    // classification of indirect jump type
-	Metadata        map[string]any      // additional analysis metadata
+	Instruction     *disasm.Instruction
+	Metadata        map[string]any
+	PossibleTargets []disasm.Address
+	JumpSite        disasm.Address
+	BlockID         BlockID
+	JumpKind        IndirectJumpKind
 }
 
 // IndirectJumpKind classifies types of indirect jumps for targeted resolution
@@ -112,7 +115,7 @@ func (k IndirectJumpKind) String() string {
 	case IndirectJumpComputedGoto:
 		return "ComputedGoto"
 	default:
-		return "Unknown"
+		return unknownEdgeTypeString
 	}
 }
 
@@ -121,8 +124,8 @@ type CFG struct {
 	Blocks                  map[BlockID]*BasicBlock   // all basic blocks indexed by ID
 	Edges                   []*Edge                   // all control flow edges
 	Exits                   []BlockID                 // exit block IDs (blocks ending with return)
-	Entry                   BlockID                   // entry block ID
 	UnresolvedIndirectJumps []*UnresolvedIndirectJump // indirect jumps awaiting resolution
+	Entry                   BlockID                   // entry block ID
 }
 
 // NewCFG creates a new empty control flow graph
