@@ -17,10 +17,13 @@ type Builder struct {
 	// tracks which addresses are block leaders (start of basic blocks)
 	blockLeaders map[disasm.Address]bool
 
-	// tracks unresolved indirect jumps for later resolution
+	// tracks unresolved indirect jumps for later resolution (deprecated - use cfg.UnresolvedIndirectJumps)
 	unresolvedIndirectJumps map[disasm.Address]bool
 	instructions            []*disasm.Instruction
 	nextBlockID             BlockID
+
+	// incremental update tracking
+	incrementalMode bool // whether builder is in incremental update mode
 }
 
 // NewCFGBuilder creates a new CFG builder
@@ -31,6 +34,7 @@ func NewCFGBuilder() *Builder {
 		addressToBlock:          make(map[disasm.Address]BlockID),
 		blockLeaders:            make(map[disasm.Address]bool),
 		unresolvedIndirectJumps: make(map[disasm.Address]bool),
+		incrementalMode:         false,
 	}
 }
 
@@ -49,10 +53,13 @@ func (b *Builder) Build(instructions []*disasm.Instruction) (*CFG, error) {
 	// phase 2: create basic blocks from identified leaders
 	b.createBasicBlocks()
 
-	// phase 3: build control flow edges between blocks
+	// phase 3: update block IDs in unresolved indirect jump structures
+	b.updateUnresolvedIndirectJumpBlocks()
+
+	// phase 4: build control flow edges between blocks
 	b.buildControlFlowEdges()
 
-	// phase 4: identify entry and exit blocks
+	// phase 5: identify entry and exit blocks
 	b.identifyEntryAndExits()
 
 	return b.cfg, nil
@@ -81,8 +88,9 @@ func (b *Builder) identifyBlockLeaders() {
 			if target := extractJumpTarget(instr); target != 0 {
 				b.blockLeaders[target] = true
 			} else {
-				// indirect jump - mark as unresolved
+				// indirect jump - mark as unresolved and create tracking structure
 				b.unresolvedIndirectJumps[instr.Address] = true
+				b.registerUnresolvedIndirectJump(instr, IndirectJumpUnknown)
 			}
 
 			// instruction after unconditional jump is a block leader (if exists)
@@ -343,6 +351,15 @@ func (b *Builder) GetUnresolvedIndirectJumps() []disasm.Address {
 // AddIndirectTarget adds a resolved indirect jump target to the CFG
 // This is used during cyclic feedback from type inference
 func (b *Builder) AddIndirectTarget(jumpSite, target disasm.Address) error {
+	return b.AddIndirectTargetWithProvenance(jumpSite, target, &EdgeProvenance{
+		AnalysisPass: "type_inference",
+		Confidence:   0.9,
+		Metadata:     make(map[string]any),
+	})
+}
+
+// AddIndirectTargetWithProvenance adds a resolved indirect jump target with provenance tracking
+func (b *Builder) AddIndirectTargetWithProvenance(jumpSite, target disasm.Address, provenance *EdgeProvenance) error {
 	// find block containing jump site
 	jumpBlockID, exists := b.addressToBlock[jumpSite]
 	if !exists {
@@ -355,11 +372,90 @@ func (b *Builder) AddIndirectTarget(jumpSite, target disasm.Address) error {
 		return fmt.Errorf("target address 0x%x not found in any block", target)
 	}
 
-	// add indirect edge
-	b.cfg.AddEdge(jumpBlockID, targetBlockID, EdgeTypeIndirect)
+	// add indirect edge with provenance
+	b.cfg.AddEdgeWithProvenance(jumpBlockID, targetBlockID, EdgeTypeIndirect, provenance)
 
-	// remove from unresolved set
+	// update unresolved indirect jump tracking
+	if jump, found := b.cfg.GetUnresolvedIndirectJump(jumpSite); found {
+		// add to possible targets if not already present
+		targetExists := false
+		for _, existingTarget := range jump.PossibleTargets {
+			if existingTarget == target {
+				targetExists = true
+				break
+			}
+		}
+		if !targetExists {
+			jump.PossibleTargets = append(jump.PossibleTargets, target)
+		}
+	}
+
+	// remove from legacy unresolved set
 	delete(b.unresolvedIndirectJumps, jumpSite)
 
 	return nil
+}
+
+// AddIndirectTargets adds multiple resolved targets for an indirect jump (e.g., switch table)
+func (b *Builder) AddIndirectTargets(jumpSite disasm.Address, targets []disasm.Address, provenance *EdgeProvenance) error {
+	for _, target := range targets {
+		if err := b.AddIndirectTargetWithProvenance(jumpSite, target, provenance); err != nil {
+			return fmt.Errorf("failed to add target 0x%x: %w", target, err)
+		}
+	}
+	return nil
+}
+
+// MarkIndirectJumpResolved marks an indirect jump as fully resolved and removes from unresolved list
+func (b *Builder) MarkIndirectJumpResolved(jumpSite disasm.Address) bool {
+	return b.cfg.RemoveUnresolvedIndirectJump(jumpSite)
+}
+
+// ClassifyIndirectJump updates the classification of an indirect jump
+func (b *Builder) ClassifyIndirectJump(jumpSite disasm.Address, kind IndirectJumpKind) error {
+	jump, found := b.cfg.GetUnresolvedIndirectJump(jumpSite)
+	if !found {
+		return fmt.Errorf("indirect jump at 0x%x not found in unresolved list", jumpSite)
+	}
+	jump.JumpKind = kind
+	return nil
+}
+
+// registerUnresolvedIndirectJump creates tracking structure for unresolved indirect jump
+func (b *Builder) registerUnresolvedIndirectJump(instr *disasm.Instruction, kind IndirectJumpKind) {
+	// find block containing this instruction (may not exist yet during initial scan)
+	blockID, exists := b.addressToBlock[instr.Address]
+	if !exists {
+		blockID = 0 // will be updated during createBasicBlocks
+	}
+
+	jump := &UnresolvedIndirectJump{
+		JumpSite:        instr.Address,
+		BlockID:         blockID,
+		Instruction:     instr,
+		PossibleTargets: make([]disasm.Address, 0),
+		JumpKind:        kind,
+		Metadata:        make(map[string]any),
+	}
+
+	b.cfg.AddUnresolvedIndirectJump(jump)
+}
+
+// UpdateUnresolvedIndirectJumpBlocks updates block IDs for unresolved jumps after block creation
+func (b *Builder) updateUnresolvedIndirectJumpBlocks() {
+	for _, jump := range b.cfg.UnresolvedIndirectJumps {
+		if blockID, exists := b.addressToBlock[jump.JumpSite]; exists {
+			jump.BlockID = blockID
+		}
+	}
+}
+
+// EnableIncrementalMode enables incremental CFG update mode
+func (b *Builder) EnableIncrementalMode() {
+	b.incrementalMode = true
+}
+
+// DisableIncrementalMode disables incremental CFG update mode
+func (b *Builder) DisableIncrementalMode() {
+	b.incrementalMode = false
 }

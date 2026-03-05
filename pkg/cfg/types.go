@@ -58,25 +58,80 @@ func (e EdgeType) String() string {
 
 // Edge represents a directed edge in the control flow graph
 type Edge struct {
-	From BlockID  // source block
-	To   BlockID  // destination block
-	Type EdgeType // type of control flow edge
+	From       BlockID         // source block
+	To         BlockID         // destination block
+	Type       EdgeType        // type of control flow edge
+	Provenance *EdgeProvenance // tracks how this edge was discovered (nil for direct edges)
+}
+
+// EdgeProvenance tracks the source of edge discovery for debugging and analysis
+type EdgeProvenance struct {
+	AnalysisPass string         // which analysis pass discovered this edge (e.g., "initial", "type_inference", "vsa")
+	Confidence   float64        // confidence level (0.0 to 1.0) for inferred edges
+	Metadata     map[string]any // additional metadata about edge discovery
+}
+
+// UnresolvedIndirectJump represents an indirect jump that needs resolution
+type UnresolvedIndirectJump struct {
+	JumpSite        disasm.Address      // address of the indirect jump instruction
+	BlockID         BlockID             // block containing the jump
+	Instruction     *disasm.Instruction // the actual jump instruction
+	PossibleTargets []disasm.Address    // candidate targets discovered so far
+	JumpKind        IndirectJumpKind    // classification of indirect jump type
+	Metadata        map[string]any      // additional analysis metadata
+}
+
+// IndirectJumpKind classifies types of indirect jumps for targeted resolution
+type IndirectJumpKind int
+
+const (
+	// IndirectJumpUnknown represents unclassified indirect jump
+	IndirectJumpUnknown IndirectJumpKind = iota
+	// IndirectJumpVTable represents C++ virtual function call through vtable
+	IndirectJumpVTable
+	// IndirectJumpHandlerTable represents switch jump table or handler array
+	IndirectJumpHandlerTable
+	// IndirectJumpInterfaceTable represents Go interface method call through itab
+	IndirectJumpInterfaceTable
+	// IndirectJumpFunctionPointer represents generic function pointer call
+	IndirectJumpFunctionPointer
+	// IndirectJumpComputedGoto represents computed goto (GCC extension)
+	IndirectJumpComputedGoto
+)
+
+func (k IndirectJumpKind) String() string {
+	switch k {
+	case IndirectJumpVTable:
+		return "VTable"
+	case IndirectJumpHandlerTable:
+		return "HandlerTable"
+	case IndirectJumpInterfaceTable:
+		return "InterfaceTable"
+	case IndirectJumpFunctionPointer:
+		return "FunctionPointer"
+	case IndirectJumpComputedGoto:
+		return "ComputedGoto"
+	default:
+		return "Unknown"
+	}
 }
 
 // CFG represents a control flow graph for a function
 type CFG struct {
-	Blocks map[BlockID]*BasicBlock // all basic blocks indexed by ID
-	Edges  []*Edge                 // all control flow edges
-	Exits  []BlockID               // exit block IDs (blocks ending with return)
-	Entry  BlockID                 // entry block ID
+	Blocks                  map[BlockID]*BasicBlock   // all basic blocks indexed by ID
+	Edges                   []*Edge                   // all control flow edges
+	Exits                   []BlockID                 // exit block IDs (blocks ending with return)
+	Entry                   BlockID                   // entry block ID
+	UnresolvedIndirectJumps []*UnresolvedIndirectJump // indirect jumps awaiting resolution
 }
 
 // NewCFG creates a new empty control flow graph
 func NewCFG() *CFG {
 	return &CFG{
-		Blocks: make(map[BlockID]*BasicBlock),
-		Edges:  make([]*Edge, 0),
-		Exits:  make([]BlockID, 0),
+		Blocks:                  make(map[BlockID]*BasicBlock),
+		Edges:                   make([]*Edge, 0),
+		Exits:                   make([]BlockID, 0),
+		UnresolvedIndirectJumps: make([]*UnresolvedIndirectJump, 0),
 	}
 }
 
@@ -87,10 +142,16 @@ func (cfg *CFG) AddBlock(block *BasicBlock) {
 
 // AddEdge adds a control flow edge to the CFG
 func (cfg *CFG) AddEdge(from, to BlockID, edgeType EdgeType) {
+	cfg.AddEdgeWithProvenance(from, to, edgeType, nil)
+}
+
+// AddEdgeWithProvenance adds a control flow edge with provenance tracking
+func (cfg *CFG) AddEdgeWithProvenance(from, to BlockID, edgeType EdgeType, provenance *EdgeProvenance) {
 	edge := &Edge{
-		From: from,
-		To:   to,
-		Type: edgeType,
+		From:       from,
+		To:         to,
+		Type:       edgeType,
+		Provenance: provenance,
 	}
 	cfg.Edges = append(cfg.Edges, edge)
 
@@ -117,4 +178,37 @@ func (cfg *CFG) BlockCount() int {
 // EdgeCount returns the number of edges in the CFG
 func (cfg *CFG) EdgeCount() int {
 	return len(cfg.Edges)
+}
+
+// UnresolvedIndirectJumpCount returns the number of unresolved indirect jumps
+func (cfg *CFG) UnresolvedIndirectJumpCount() int {
+	return len(cfg.UnresolvedIndirectJumps)
+}
+
+// AddUnresolvedIndirectJump registers an indirect jump that needs resolution
+func (cfg *CFG) AddUnresolvedIndirectJump(jump *UnresolvedIndirectJump) {
+	cfg.UnresolvedIndirectJumps = append(cfg.UnresolvedIndirectJumps, jump)
+}
+
+// RemoveUnresolvedIndirectJump removes an indirect jump from unresolved list
+func (cfg *CFG) RemoveUnresolvedIndirectJump(jumpSite disasm.Address) bool {
+	for i, jump := range cfg.UnresolvedIndirectJumps {
+		if jump.JumpSite == jumpSite {
+			// remove by swapping with last element and truncating
+			cfg.UnresolvedIndirectJumps[i] = cfg.UnresolvedIndirectJumps[len(cfg.UnresolvedIndirectJumps)-1]
+			cfg.UnresolvedIndirectJumps = cfg.UnresolvedIndirectJumps[:len(cfg.UnresolvedIndirectJumps)-1]
+			return true
+		}
+	}
+	return false
+}
+
+// GetUnresolvedIndirectJump retrieves unresolved indirect jump by address
+func (cfg *CFG) GetUnresolvedIndirectJump(jumpSite disasm.Address) (*UnresolvedIndirectJump, bool) {
+	for _, jump := range cfg.UnresolvedIndirectJumps {
+		if jump.JumpSite == jumpSite {
+			return jump, true
+		}
+	}
+	return nil, false
 }
