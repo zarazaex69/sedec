@@ -1,103 +1,97 @@
-// Package cfg implements Control Flow Graph (CFG) construction and analysis for sedec decompiler.
+// Package cfg provides control flow graph construction and analysis for sedec decompiler.
 //
-// # Overview
-//
-// This package provides comprehensive CFG construction with support for:
-//   - Basic block identification and boundary detection
-//   - Control flow edge creation (conditional, unconditional, fallthrough, indirect)
+// The package implements sophisticated CFG building with support for:
+//   - Basic block identification and edge construction
 //   - Indirect jump tracking and resolution
 //   - Incremental CFG updates for cyclic feedback with type inference
-//   - Edge provenance tracking for debugging and analysis
+//   - Dominator tree construction using Lengauer-Tarjan algorithm
+//   - Dominance frontier computation for SSA phi-node placement
+//   - Loop detection via back-edge analysis
 //
 // # Architecture
 //
-// The CFG builder follows a multi-phase construction process:
+// The CFG builder follows a multi-phase approach:
 //
-//  1. Block Leader Identification: Determines basic block boundaries at branch targets
-//     and after control flow instructions
+//  1. Block Leader Identification: Identifies basic block boundaries at branch targets
+//     and after branch instructions
 //  2. Basic Block Creation: Groups instructions into basic blocks with single entry/exit
-//  3. Edge Construction: Creates directed edges representing control flow between blocks
-//  4. Entry/Exit Identification: Marks function entry point and return blocks
+//  3. Edge Construction: Creates directed edges for jumps, branches, and fall-through paths
+//  4. Indirect Jump Tracking: Marks unresolved indirect jumps for later resolution
+//  5. Dominator Tree Construction: Computes dominator relationships using gonum/graph/flow
+//  6. Dominance Frontier Computation: Calculates dominance frontiers for SSA construction
 //
-// # Indirect Jump Handling
+// # Dominator Tree Algorithm
 //
-// Indirect jumps (jmp rax, jmp [rax+8]) cannot be resolved statically and require
-// runtime analysis. The package provides:
+// The package uses the Lengauer-Tarjan algorithm for dominator tree construction,
+// implemented via gonum.org/v1/gonum/graph/flow.Dominators. This provides O(n log n)
+// time complexity where n is the number of basic blocks.
 //
-//   - UnresolvedIndirectJump: Tracks indirect jumps awaiting resolution
-//   - IndirectJumpKind: Classifies jump types (vtable, handler table, interface table)
-//   - AddIndirectTarget: Resolves jump targets discovered by type inference
-//   - EdgeProvenance: Records which analysis pass discovered each edge
+// Key components:
+//   - DFS numbering for spanning tree construction
+//   - Semi-dominator computation with path compression
+//   - Immediate dominator calculation
+//   - Children mapping for tree traversal
 //
-// # Incremental Updates
+// # Cyclic Feedback Integration
 //
-// The CFG supports incremental updates for cyclic feedback with type inference:
+// The CFG builder supports incremental updates through cyclic feedback with type inference:
 //
-//   - UpdateTypeResolveIndirect: Add resolved targets to indirect jumps
-//   - UpdateTypeSplitBlock: Split blocks when new branch targets discovered
-//   - UpdateTypeAddEdge: Add edges between existing blocks
-//   - BatchApplyUpdates: Efficiently apply multiple updates
+//   - Type_Inferencer discovers function pointer arrays (vtables, handler tables)
+//   - CFG_Builder receives discovered targets and adds new edges
+//   - Incremental re-analysis updates SSA, VSA, and type constraints
+//   - Iteration continues until convergence or max iterations
+//
+// # Performance Characteristics
+//
+// Target performance metrics:
+//   - Functions < 100 basic blocks: CFG construction < 200ms
+//   - Functions < 500 basic blocks: CFG construction < 1s
+//   - Dominator tree: O(n log n) complexity
+//   - Dominance frontiers: O(n * e) where e is average edges per node
+//   - Dominance queries: O(depth) where depth is dominator tree depth
 //
 // # Example Usage
 //
-//	// construct initial cfg
+//	// build cfg from disassembled instructions
 //	builder := cfg.NewCFGBuilder()
 //	cfg, err := builder.Build(instructions)
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
 //
-//	// check for unresolved indirect jumps
-//	for _, jump := range cfg.UnresolvedIndirectJumps {
-//	    fmt.Printf("Indirect jump at 0x%x (kind: %s)\n",
-//	        jump.JumpSite, jump.JumpKind)
+//	// compute dominator tree
+//	dt, err := builder.ComputeDominators()
+//	if err != nil {
+//	    log.Fatal(err)
 //	}
 //
-//	// resolve indirect jump via type inference
-//	provenance := &cfg.EdgeProvenance{
-//	    AnalysisPass: "type_inference",
-//	    Confidence:   0.9,
+//	// check dominance relationship
+//	if dt.Dominates(blockA, blockB) {
+//	    fmt.Println("Block A dominates Block B")
 //	}
-//	err = builder.AddIndirectTargetWithProvenance(0x1000, 0x2000, provenance)
 //
-//	// apply batch updates
-//	updates := []*cfg.IncrementalUpdate{
-//	    {
-//	        UpdateType: cfg.UpdateTypeResolveIndirect,
-//	        JumpSite:   0x3000,
-//	        Targets:    []disasm.Address{0x4000, 0x5000},
-//	        Provenance: provenance,
-//	    },
+//	// compute dominance frontiers for ssa
+//	df := dt.ComputeDominanceFrontiers()
+//	for block, frontier := range df {
+//	    fmt.Printf("DF[%d] = %v\n", block, frontier)
 //	}
-//	err = builder.BatchApplyUpdates(updates)
 //
-//	// get statistics
-//	stats := builder.GetIncrementalUpdateStats()
-//	fmt.Printf("Resolution rate: %.2f%%\n", stats.ResolutionRate()*100)
-//
-// # Cyclic Feedback Loop
-//
-// The CFG builder integrates with Type_Inferencer for iterative refinement:
-//
-//  1. Initial CFG construction marks indirect jumps as unresolved
-//  2. Type inference discovers function pointer arrays (vtables, handler tables)
-//  3. Discovered targets are fed back to CFG builder via AddIndirectTarget
-//  4. CFG is incrementally updated with new edges
-//  5. Process repeats until convergence or iteration limit
-//
-// This cyclic refinement is critical for accurate decompilation of C++, Go,
-// and heavily obfuscated code where indirect control flow is prevalent.
-//
-// # Performance
-//
-// Target performance metrics:
-//   - Functions < 500 basic blocks: CFG construction in < 200ms
-//   - Dominator tree computation: O(n log n) complexity via Lengauer-Tarjan
-//   - Incremental updates: O(1) for adding edges, O(n) for splitting blocks
+//	// add indirect jump target (cyclic feedback)
+//	builder.AddIndirectTarget(jumpSite, target)
 //
 // # Thread Safety
 //
-// The CFG builder is NOT thread-safe. Each function should be analyzed by
-// a separate builder instance. For parallel analysis, use goroutine worker
-// pools with one builder per worker.
+// The CFG builder is not thread-safe. Each function should be analyzed in a separate
+// goroutine with its own CFG builder instance. The global state (XREF database, call graph)
+// should be protected with sync.Map or sync.RWMutex for concurrent access.
+//
+// # References
+//
+//   - Lengauer, T., & Tarjan, R. E. (1979). A fast algorithm for finding dominators
+//     in a flowgraph. ACM Transactions on Programming Languages and Systems, 1(1), 121-141.
+//   - Cytron, R., Ferrante, J., Rosen, B. K., Wegman, M. N., & Zadeck, F. K. (1991).
+//     Efficiently computing static single assignment form and the control dependence graph.
+//     ACM Transactions on Programming Languages and Systems, 13(4), 451-490.
+//   - Cooper, K. D., Harvey, T. J., & Kennedy, K. (2001). A simple, fast dominance algorithm.
+//     Software Practice & Experience, 4(1-10), 1-8.
 package cfg
