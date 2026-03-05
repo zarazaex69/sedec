@@ -214,12 +214,14 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
 
-# Binaries for programs and plugins
+# Go binaries and build artifacts
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
+sedec
+cmd/sedec/sedec
 
 # Test binary, built with `go test -c`
 *.test
@@ -229,17 +231,49 @@ vite.config.ts.timestamp-*
 coverage.*
 *.coverprofile
 profile.cov
+coverage.html
+coverage.txt
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
+# Dependency directories
+vendor/
 
 # Go workspace file
 go.work
 go.work.sum
 
+# Fuzzing artifacts
+testdata/fuzz/
+
+# Profiling data
+*.prof
+*.pprof
+cpu.prof
+mem.prof
+trace.out
+
+# Benchmark results
+*.bench
+
 # env file
 .env
+.env.local
+.env.*.local
 
 # Editor/IDE
-# .idea/
-# .vscode/
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Decompiler output artifacts
+*.decompiled
+*.ir
+*.ssa
+*.cfg.dot
+*.dom.dot
+
+# Temporary analysis files
+*.tmp
+*.temp

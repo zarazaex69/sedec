@@ -1,0 +1,145 @@
+version: 2
+
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - gocritic
+    - revive
+    - unconvert
+    - unparam
+    - gosec
+    - bodyclose
+    - errname
+    - errorlint
+    - goconst
+    - gocyclo
+    - nestif
+    - prealloc
+    - predeclared
+    - whitespace
+    - dupl
+    - nakedret
+    - goprintffuncname
+    - nolintlint
+    - rowserrcheck
+    - sqlclosecheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+linters-settings:
+  govet:
+    enable-all: true
+    settings:
+      shadow:
+        strict: true
+  
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+  
+  staticcheck:
+    checks: ["all"]
+  
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - experimental
+      - opinionated
+      - performance
+      - style
+    disabled-checks:
+      - commentedOutCode
+  
+  revive:
+    rules:
+      - name: exported
+        severity: warning
+      - name: error-return
+      - name: error-naming
+      - name: if-return
+      - name: var-naming
+      - name: package-comments
+      - name: range
+      - name: receiver-naming
+      - name: indent-error-flow
+      - name: blank-imports
+      - name: context-as-argument
+      - name: dot-imports
+      - name: error-strings
+      - name: errorf
+      - name: increment-decrement
+      - name: var-declaration
+      - name: range-val-in-closure
+      - name: range-val-address
+      - name: waitgroup-by-value
+      - name: atomic
+      - name: empty-lines
+      - name: call-to-gc
+      - name: duplicated-imports
+      - name: import-shadowing
+      - name: bare-return
+      - name: unused-parameter
+      - name: unreachable-code
+      - name: redefines-builtin-id
+  
+  gocyclo:
+    min-complexity: 15
+  
+  nestif:
+    min-complexity: 5
+  
+  gosec:
+    excludes:
+      - G304
+    config:
+      G101:
+        pattern: "(?i)passwd|pass|password|pwd|secret|token|key|api"
+  
+  goconst:
+    min-len: 3
+    min-occurrences: 3
+  
+  nakedret:
+    max-func-lines: 30
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - errcheck
+        - gosec
+        - goconst
+        - dupl
+    
+    - path: doc\.go
+      linters:
+        - revive
+  
+  exclude: []
+
+output:
+  formats:
+    colored-line-number:
+      path: stdout
+  print-issued-lines: true
+  print-linter-name: true
+  uniq-by-line: true
+  sort-results: true
