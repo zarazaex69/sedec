@@ -221,6 +221,7 @@ func (p *StandardLibParser) parseELFRelocation(data []byte, elfFile *elf.File,
 	var symIdx uint32
 	var relocType uint32
 	if elfFile.Class == elf.ELFCLASS64 {
+		// elf64 relocation info encoding: high 32 bits = symbol index, low 32 bits = type
 		symIdx = uint32(info >> 32)
 		relocType = uint32(info & 0xffffffff)
 	} else {
