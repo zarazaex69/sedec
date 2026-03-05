@@ -329,7 +329,7 @@ func TestELFCloseHandling(t *testing.T) {
 func readTestELFBinary() ([]byte, error) {
 	// try to read test elf binary
 	testPaths := []string{
-		"testdata/test_elf_x64",
+		"testdata/binary/test_elf_x64",
 		"/bin/true",
 		"/usr/bin/true",
 	}

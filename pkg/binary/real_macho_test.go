@@ -12,7 +12,7 @@ func TestWithRealMachOBinary(t *testing.T) {
 	// try to find a real mach-o binary on the system
 	// common locations: /bin/ls, /usr/bin/true, etc.
 	testPaths := []string{
-		"testdata/test_macho_x64",
+		"testdata/binary/test_macho_x64",
 	}
 
 	var data []byte

@@ -7,9 +7,9 @@ import (
 
 // TestWithRealELFBinary tests parser with real ELF binary from testdata
 func TestWithRealELFBinary(t *testing.T) {
-	data, err := os.ReadFile("testdata/test_elf_x64")
+	data, err := os.ReadFile("testdata/binary/test_elf_x64")
 	if err != nil {
-		t.Skipf("Skipping: real ELF binary not found (run 'gcc -o testdata/test_elf_x64 testdata/test_elf.c'): %v", err)
+		t.Skipf("Skipping: real ELF binary not found (run 'make -C testdata'): %v", err)
 	}
 
 	parser := NewStandardLibParser()
@@ -128,7 +128,7 @@ func TestWithRealELFBinary(t *testing.T) {
 
 // TestELFSectionProperties tests section property extraction
 func TestELFSectionProperties(t *testing.T) {
-	data, err := os.ReadFile("testdata/test_elf_x64")
+	data, err := os.ReadFile("testdata/binary/test_elf_x64")
 	if err != nil {
 		t.Skipf("Skipping: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestELFSectionProperties(t *testing.T) {
 
 // TestELFSymbolTypes tests symbol type conversion
 func TestELFSymbolTypes(t *testing.T) {
-	data, err := os.ReadFile("testdata/test_elf_x64")
+	data, err := os.ReadFile("testdata/binary/test_elf_x64")
 	if err != nil {
 		t.Skipf("Skipping: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestELFSymbolTypes(t *testing.T) {
 
 // TestELFSymbolBindings tests symbol binding conversion
 func TestELFSymbolBindings(t *testing.T) {
-	data, err := os.ReadFile("testdata/test_elf_x64")
+	data, err := os.ReadFile("testdata/binary/test_elf_x64")
 	if err != nil {
 		t.Skipf("Skipping: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestELFSymbolBindings(t *testing.T) {
 
 // TestELFImportsExports tests import/export extraction
 func TestELFImportsExports(t *testing.T) {
-	data, err := os.ReadFile("testdata/test_elf_x64")
+	data, err := os.ReadFile("testdata/binary/test_elf_x64")
 	if err != nil {
 		t.Skipf("Skipping: %v", err)
 	}

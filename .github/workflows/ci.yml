@@ -48,6 +48,23 @@ jobs:
           go-version: '1.22'
           cache: true
       
+      - name: Install Zig for cross-compilation
+        run: |
+          wget -q https://ziglang.org/download/0.11.0/zig-linux-x86_64-0.11.0.tar.xz
+          tar -xf zig-linux-x86_64-0.11.0.tar.xz
+          sudo mv zig-linux-x86_64-0.11.0 /usr/local/zig
+          echo "/usr/local/zig" >> $GITHUB_PATH
+      
+      - name: Build test binaries
+        run: |
+          cd pkg/binary/testdata
+          mkdir -p binary
+          gcc -o binary/test_elf_x64 test_elf.c -O0 -g
+          /usr/local/zig/zig cc -target x86_64-windows -o binary/test_pe_x64.exe test_pe.c -O0
+          /usr/local/zig/zig cc -target x86_64-macos -o binary/test_macho_x64 test_elf.c -O0
+          ls -lh binary/
+          cd ../../..
+      
       - name: Run tests
         run: go test -v -race -timeout 10m ./...
       
@@ -108,6 +125,22 @@ jobs:
         with:
           go-version: '1.22'
           cache: true
+      
+      - name: Install Zig for cross-compilation
+        run: |
+          wget -q https://ziglang.org/download/0.11.0/zig-linux-x86_64-0.11.0.tar.xz
+          tar -xf zig-linux-x86_64-0.11.0.tar.xz
+          sudo mv zig-linux-x86_64-0.11.0 /usr/local/zig
+          echo "/usr/local/zig" >> $GITHUB_PATH
+      
+      - name: Build test binaries
+        run: |
+          cd pkg/binary/testdata
+          mkdir -p binary
+          gcc -o binary/test_elf_x64 test_elf.c -O0 -g
+          /usr/local/zig/zig cc -target x86_64-windows -o binary/test_pe_x64.exe test_pe.c -O0
+          /usr/local/zig/zig cc -target x86_64-macos -o binary/test_macho_x64 test_elf.c -O0
+          cd ../../..
       
       - name: Generate coverage report
         run: |

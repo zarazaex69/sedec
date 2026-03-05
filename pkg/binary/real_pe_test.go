@@ -7,7 +7,7 @@ import (
 
 // TestWithRealPEBinary tests parser with real PE binary from testdata
 func TestWithRealPEBinary(t *testing.T) {
-	data, err := os.ReadFile("testdata/test_pe_x64.exe")
+	data, err := os.ReadFile("testdata/binary/test_pe_x64.exe")
 	if err != nil {
 		t.Skipf("Skipping: real PE binary not found: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestWithRealPEBinary(t *testing.T) {
 
 // TestPESectionProperties tests PE section property extraction
 func TestPESectionProperties(t *testing.T) {
-	data, err := os.ReadFile("testdata/test_pe_x64.exe")
+	data, err := os.ReadFile("testdata/binary/test_pe_x64.exe")
 	if err != nil {
 		t.Skipf("Skipping: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestPESectionProperties(t *testing.T) {
 
 // TestPESymbolExtraction tests PE symbol extraction
 func TestPESymbolExtraction(t *testing.T) {
-	data, err := os.ReadFile("testdata/test_pe_x64.exe")
+	data, err := os.ReadFile("testdata/binary/test_pe_x64.exe")
 	if err != nil {
 		t.Skipf("Skipping: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestPESymbolExtraction(t *testing.T) {
 
 // TestPEImportExtraction tests PE import extraction
 func TestPEImportExtraction(t *testing.T) {
-	data, err := os.ReadFile("testdata/test_pe_x64.exe")
+	data, err := os.ReadFile("testdata/binary/test_pe_x64.exe")
 	if err != nil {
 		t.Skipf("Skipping: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestPEImportExtraction(t *testing.T) {
 
 // TestPEExportExtraction tests PE export extraction
 func TestPEExportExtraction(t *testing.T) {
-	data, err := os.ReadFile("testdata/test_pe_x64.exe")
+	data, err := os.ReadFile("testdata/binary/test_pe_x64.exe")
 	if err != nil {
 		t.Skipf("Skipping: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestPEExportExtraction(t *testing.T) {
 
 // TestPERelocationExtraction tests PE relocation extraction
 func TestPERelocationExtraction(t *testing.T) {
-	data, err := os.ReadFile("testdata/test_pe_x64.exe")
+	data, err := os.ReadFile("testdata/binary/test_pe_x64.exe")
 	if err != nil {
 		t.Skipf("Skipping: %v", err)
 	}
@@ -303,7 +303,7 @@ func TestPERelocationExtraction(t *testing.T) {
 
 // TestPEGroundTruthDatabase tests ground truth database for PE
 func TestPEGroundTruthDatabase(t *testing.T) {
-	data, err := os.ReadFile("testdata/test_pe_x64.exe")
+	data, err := os.ReadFile("testdata/binary/test_pe_x64.exe")
 	if err != nil {
 		t.Skipf("Skipping: %v", err)
 	}
@@ -381,7 +381,7 @@ func TestPEOptionalHeader32(t *testing.T) {
 
 // TestPEWithSections tests PE parsing with actual sections
 func TestPEWithSections(t *testing.T) {
-	data, err := os.ReadFile("testdata/test_pe_x64.exe")
+	data, err := os.ReadFile("testdata/binary/test_pe_x64.exe")
 	if err != nil {
 		t.Skipf("Skipping: %v", err)
 	}
@@ -419,7 +419,7 @@ func TestPEWithSections(t *testing.T) {
 
 // TestPECloseHandling tests PE file handle closing
 func TestPECloseHandling(t *testing.T) {
-	data, err := os.ReadFile("testdata/test_pe_x64.exe")
+	data, err := os.ReadFile("testdata/binary/test_pe_x64.exe")
 	if err != nil {
 		t.Skipf("Skipping: %v", err)
 	}

@@ -43,7 +43,6 @@
 *.pdb
 
 # Kernel Module Compile Results
-*.mod*
 *.cmd
 .tmp_versions/
 modules.order
@@ -240,6 +239,13 @@ vendor/
 # Go workspace file
 go.work
 go.work.sum
+
+# Test binary artifacts
+pkg/binary/testdata/binary/
+pkg/binary/testdata/*.exe
+pkg/binary/testdata/*.pdb
+pkg/binary/testdata/test_*_x64
+pkg/binary/testdata/test_*_x86
 
 # Fuzzing artifacts
 testdata/fuzz/
