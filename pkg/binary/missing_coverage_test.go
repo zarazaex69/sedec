@@ -22,8 +22,8 @@ func TestReadPEDataAtRVA_Comprehensive(t *testing.T) {
 
 	tests := []struct {
 		name      string
-		rva       uint32
 		size      int
+		rva       uint32
 		expectNil bool
 	}{
 		{
@@ -265,15 +265,15 @@ func TestFindSymbolForGOTAddress_Comprehensive(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		gotAddr        Address
 		expectedSymbol string
+		gotAddr        Address
 	}{
-		{"printf jump slot", 0x601018, "printf"},
-		{"malloc jump slot", 0x601020, "malloc"},
-		{"free jump slot", 0x601028, "free"},
-		{"glob_dat not jump_slot", 0x601030, ""},
-		{"copy relocation", 0x601038, ""},
-		{"non-existent address", 0x999999, ""},
+		{"printf jump slot", "printf", 0x601018},
+		{"malloc jump slot", "malloc", 0x601020},
+		{"free jump slot", "free", 0x601028},
+		{"glob_dat not jump_slot", "", 0x601030},
+		{"copy relocation", "", 0x601038},
+		{"non-existent address", "", 0x999999},
 	}
 
 	for _, tt := range tests {
