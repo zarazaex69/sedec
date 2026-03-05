@@ -108,8 +108,13 @@ func (b *Builder) ComputeDominators() (*DominatorTree, error) {
 		g.AddNode(simple.Node(int64(id)))
 	}
 
-	// add all edges
+	// add all edges (skip self-loops as gonum doesn't support them)
 	for _, edge := range b.cfg.Edges {
+		// skip self-loops (gonum simple graph doesn't allow self-edges)
+		if edge.From == edge.To {
+			continue
+		}
+
 		g.SetEdge(simple.Edge{
 			//nolint:gosec // blockid is controlled, overflow impossible in practice
 			F: simple.Node(int64(edge.From)),

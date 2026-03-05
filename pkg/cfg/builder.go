@@ -9,7 +9,8 @@ import (
 
 // Builder constructs control flow graphs from disassembled instructions
 type Builder struct {
-	cfg *CFG
+	cfg           *CFG
+	dominatorTree *DominatorTree // cached dominator tree for loop detection
 
 	// maps instruction address to block id for quick lookup
 	addressToBlock map[disasm.Address]BlockID
