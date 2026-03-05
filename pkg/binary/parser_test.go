@@ -311,6 +311,68 @@ func createMinimalMachO64() []byte {
 	return buf.Bytes()
 }
 
+// createMinimalPE32 creates a minimal valid PE32 binary for testing
+func createMinimalPE32() []byte {
+	buf := new(bytes.Buffer)
+
+	// dos header (64 bytes)
+	buf.Write([]byte{'M', 'Z'})                        // magic
+	buf.Write(make([]byte, 58))                        // dos header padding
+	binary.Write(buf, binary.LittleEndian, uint32(64)) // e_lfanew (pe header offset)
+
+	// pe signature (4 bytes)
+	buf.Write([]byte{'P', 'E', 0, 0})
+
+	// coff header (20 bytes)
+	binary.Write(buf, binary.LittleEndian, uint16(0x14c)) // machine: I386
+	binary.Write(buf, binary.LittleEndian, uint16(0))     // number of sections
+	binary.Write(buf, binary.LittleEndian, uint32(0))     // timestamp
+	binary.Write(buf, binary.LittleEndian, uint32(0))     // symbol table pointer
+	binary.Write(buf, binary.LittleEndian, uint32(0))     // number of symbols
+	binary.Write(buf, binary.LittleEndian, uint16(224))   // optional header size
+	binary.Write(buf, binary.LittleEndian, uint16(0x102)) // characteristics
+
+	// optional header (pe32) - 224 bytes
+	binary.Write(buf, binary.LittleEndian, uint16(0x10B))    // magic: PE32
+	binary.Write(buf, binary.LittleEndian, uint8(14))        // major linker version
+	binary.Write(buf, binary.LittleEndian, uint8(0))         // minor linker version
+	binary.Write(buf, binary.LittleEndian, uint32(0))        // size of code
+	binary.Write(buf, binary.LittleEndian, uint32(0))        // size of initialized data
+	binary.Write(buf, binary.LittleEndian, uint32(0))        // size of uninitialized data
+	binary.Write(buf, binary.LittleEndian, uint32(0x1000))   // address of entry point
+	binary.Write(buf, binary.LittleEndian, uint32(0x1000))   // base of code
+	binary.Write(buf, binary.LittleEndian, uint32(0x2000))   // base of data
+	binary.Write(buf, binary.LittleEndian, uint32(0x400000)) // image base
+	binary.Write(buf, binary.LittleEndian, uint32(0x1000))   // section alignment
+	binary.Write(buf, binary.LittleEndian, uint32(0x200))    // file alignment
+	binary.Write(buf, binary.LittleEndian, uint16(6))        // major os version
+	binary.Write(buf, binary.LittleEndian, uint16(0))        // minor os version
+	binary.Write(buf, binary.LittleEndian, uint16(0))        // major image version
+	binary.Write(buf, binary.LittleEndian, uint16(0))        // minor image version
+	binary.Write(buf, binary.LittleEndian, uint16(6))        // major subsystem version
+	binary.Write(buf, binary.LittleEndian, uint16(0))        // minor subsystem version
+	binary.Write(buf, binary.LittleEndian, uint32(0))        // win32 version value
+	binary.Write(buf, binary.LittleEndian, uint32(0x2000))   // size of image
+	binary.Write(buf, binary.LittleEndian, uint32(0x200))    // size of headers
+	binary.Write(buf, binary.LittleEndian, uint32(0))        // checksum
+	binary.Write(buf, binary.LittleEndian, uint16(3))        // subsystem: console
+	binary.Write(buf, binary.LittleEndian, uint16(0))        // dll characteristics
+	binary.Write(buf, binary.LittleEndian, uint32(0x100000)) // size of stack reserve
+	binary.Write(buf, binary.LittleEndian, uint32(0x1000))   // size of stack commit
+	binary.Write(buf, binary.LittleEndian, uint32(0x100000)) // size of heap reserve
+	binary.Write(buf, binary.LittleEndian, uint32(0x1000))   // size of heap commit
+	binary.Write(buf, binary.LittleEndian, uint32(0))        // loader flags
+	binary.Write(buf, binary.LittleEndian, uint32(16))       // number of rva and sizes
+
+	// data directories (16 * 8 = 128 bytes)
+	for i := 0; i < 16; i++ {
+		binary.Write(buf, binary.LittleEndian, uint32(0)) // virtual address
+		binary.Write(buf, binary.LittleEndian, uint32(0)) // size
+	}
+
+	return buf.Bytes()
+}
+
 // TestArchitectureDetection tests architecture detection for all formats
 func TestArchitectureDetection(t *testing.T) {
 	parser := NewStandardLibParser()
