@@ -104,13 +104,16 @@ func (b *Builder) ComputeDominators() (*DominatorTree, error) {
 
 	// add all nodes
 	for id := range b.cfg.Blocks {
+		//nolint:gosec // blockid is controlled, overflow impossible in practice
 		g.AddNode(simple.Node(int64(id)))
 	}
 
 	// add all edges
 	for _, edge := range b.cfg.Edges {
 		g.SetEdge(simple.Edge{
+			//nolint:gosec // blockid is controlled, overflow impossible in practice
 			F: simple.Node(int64(edge.From)),
+			//nolint:gosec // blockid is controlled, overflow impossible in practice
 			T: simple.Node(int64(edge.To)),
 		})
 	}
@@ -138,6 +141,7 @@ func (b *Builder) ComputeDominators() (*DominatorTree, error) {
 			continue
 		}
 
+		//nolint:gosec // node id from gonum graph, controlled value
 		idomID := BlockID(idomNode.ID())
 		dt.Idom[id] = idomID
 	}
@@ -235,8 +239,8 @@ func (dt *DominatorTree) ComputeDominanceFrontiers() map[BlockID][]BlockID {
 					}
 
 					// move to immediate dominator
-					idom, exists := dt.Idom[runner]
-					if !exists || idom == runner {
+					idom, idomExists := dt.Idom[runner]
+					if !idomExists || idom == runner {
 						break
 					}
 					runner = idom
