@@ -219,8 +219,8 @@ vite.config.ts.timestamp-*
 *.dll
 *.so
 *.dylib
-sedec
-cmd/sedec/sedec
+/sedec
+/cmd/sedec/sedec
 
 # Test binary, built with `go test -c`
 *.test
