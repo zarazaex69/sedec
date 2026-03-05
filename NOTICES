@@ -1,0 +1,9 @@
+This project uses the following third-party libraries:
+
+gonum (gonum.org/v1/gonum)
+Copyright ©2013 The Gonum Authors. All rights reserved.
+Licensed under BSD-3-Clause: https://github.com/gonum/gonum/blob/master/LICENSE
+
+Capstone disassembly framework (www.capstone-engine.org)
+Copyright ©2013, Nguyen Anh Quynh. All rights reserved.
+Licensed under BSD-3-Clause: https://github.com/capstone-engine/capstone/blob/master/LICENSE.TXT
