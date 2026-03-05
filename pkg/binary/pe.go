@@ -287,6 +287,13 @@ func (p *StandardLibParser) extractPERelocations(peFile *pe.File, _ []byte) []*R
 		return relocations
 	}
 
+	return p.parsePERelocationData(relocData)
+}
+
+// parsePERelocationData parses base relocation blocks from raw data
+func (p *StandardLibParser) parsePERelocationData(relocData []byte) []*Relocation {
+	relocations := make([]*Relocation, 0, 256)
+
 	// parse base relocation blocks
 	offset := 0
 	for offset+8 <= len(relocData) {
