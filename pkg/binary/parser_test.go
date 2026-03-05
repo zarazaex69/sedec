@@ -59,27 +59,27 @@ func TestStandardLibParser_DetectFormat(t *testing.T) {
 
 			// test full parse
 			info, err := parser.Parse(tt.data)
-			if tt.shouldError {
-				if err == nil {
-					t.Error("Parse() expected error, got nil")
-				}
-			} else {
+			if !tt.shouldError {
 				if err != nil {
 					t.Errorf("Parse() unexpected error: %v", err)
 				}
 				if info == nil {
 					t.Error("Parse() returned nil info")
-				} else {
-					if info.Format != tt.expectedFormat {
-						t.Errorf("Parse() format = %v, want %v", info.Format, tt.expectedFormat)
-					}
-					// verify ground truth database is initialized
-					if info.GroundTruthDB == nil {
-						t.Error("Parse() GroundTruthDB is nil")
-					}
-					// cleanup
-					info.Close()
+					return
 				}
+				if info.Format != tt.expectedFormat {
+					t.Errorf("Parse() format = %v, want %v", info.Format, tt.expectedFormat)
+				}
+				// verify ground truth database is initialized
+				if info.GroundTruthDB == nil {
+					t.Error("Parse() GroundTruthDB is nil")
+				}
+				// cleanup
+				info.Close()
+				return
+			}
+			if err == nil {
+				t.Error("Parse() expected error, got nil")
 			}
 		})
 	}
@@ -91,9 +91,9 @@ func TestStandardLibParser_ErrorHandling(t *testing.T) {
 
 	tests := []struct {
 		name        string
+		errorType   string
 		data        []byte
 		expectError bool
-		errorType   string
 	}{
 		{
 			name:        "Empty data",
@@ -570,15 +570,15 @@ func TestMachOParsing(t *testing.T) {
 // TestSymbolTypes tests symbol type conversions
 func TestSymbolTypes(t *testing.T) {
 	tests := []struct {
-		symType SymbolType
 		want    string
+		symType SymbolType
 	}{
-		{SymbolTypeFunction, "Function"},
-		{SymbolTypeObject, "Object"},
-		{SymbolTypeSection, "Section"},
-		{SymbolTypeFile, "File"},
-		{SymbolTypeTLS, "TLS"},
-		{SymbolTypeUnknown, "Unknown"},
+		{"Function", SymbolTypeFunction},
+		{"Object", SymbolTypeObject},
+		{"Section", SymbolTypeSection},
+		{"File", SymbolTypeFile},
+		{"TLS", SymbolTypeTLS},
+		{"Unknown", SymbolTypeUnknown},
 	}
 
 	for _, tt := range tests {
@@ -594,13 +594,13 @@ func TestSymbolTypes(t *testing.T) {
 // TestSymbolBindings tests symbol binding conversions
 func TestSymbolBindings(t *testing.T) {
 	tests := []struct {
-		binding SymbolBinding
 		want    string
+		binding SymbolBinding
 	}{
-		{SymbolBindingLocal, "Local"},
-		{SymbolBindingGlobal, "Global"},
-		{SymbolBindingWeak, "Weak"},
-		{SymbolBindingUnknown, "Unknown"},
+		{"Local", SymbolBindingLocal},
+		{"Global", SymbolBindingGlobal},
+		{"Weak", SymbolBindingWeak},
+		{"Unknown", SymbolBindingUnknown},
 	}
 
 	for _, tt := range tests {
@@ -616,17 +616,17 @@ func TestSymbolBindings(t *testing.T) {
 // TestRelocationTypes tests relocation type conversions
 func TestRelocationTypes(t *testing.T) {
 	tests := []struct {
-		relocType RelocationType
 		want      string
+		relocType RelocationType
 	}{
-		{RelocationTypeAbsolute, "Absolute"},
-		{RelocationTypeRelative, "Relative"},
-		{RelocationTypePLT, "PLT"},
-		{RelocationTypeGOT, "GOT"},
-		{RelocationTypeCopy, "Copy"},
-		{RelocationTypeJumpSlot, "JumpSlot"},
-		{RelocationTypeGlobDat, "GlobDat"},
-		{RelocationTypeUnknown, "Unknown"},
+		{"Absolute", RelocationTypeAbsolute},
+		{"Relative", RelocationTypeRelative},
+		{"PLT", RelocationTypePLT},
+		{"GOT", RelocationTypeGOT},
+		{"Copy", RelocationTypeCopy},
+		{"JumpSlot", RelocationTypeJumpSlot},
+		{"GlobDat", RelocationTypeGlobDat},
+		{"Unknown", RelocationTypeUnknown},
 	}
 
 	for _, tt := range tests {
@@ -642,13 +642,13 @@ func TestRelocationTypes(t *testing.T) {
 // TestBinaryFormats tests binary format conversions
 func TestBinaryFormats(t *testing.T) {
 	tests := []struct {
-		format BinaryFormat
 		want   string
+		format BinaryFormat
 	}{
-		{BinaryFormatELF, "ELF"},
-		{BinaryFormatPE, "PE"},
-		{BinaryFormatMachO, "Mach-O"},
-		{BinaryFormatUnknown, "Unknown"},
+		{"ELF", BinaryFormatELF},
+		{"PE", BinaryFormatPE},
+		{"Mach-O", BinaryFormatMachO},
+		{"Unknown", BinaryFormatUnknown},
 	}
 
 	for _, tt := range tests {
@@ -664,20 +664,20 @@ func TestBinaryFormats(t *testing.T) {
 // TestArchitectures tests architecture conversions
 func TestArchitectures(t *testing.T) {
 	tests := []struct {
-		arch Architecture
 		want string
+		arch Architecture
 	}{
-		{ArchitectureX86_64, "x86_64"},
-		{ArchitectureX86, "x86"},
-		{ArchitectureARM64, "ARM64"},
-		{ArchitectureARM, "ARM"},
-		{ArchitectureMIPS, "MIPS"},
-		{ArchitectureMIPS64, "MIPS64"},
-		{ArchitecturePPC, "PowerPC"},
-		{ArchitecturePPC64, "PowerPC64"},
-		{ArchitectureRISCV, "RISC-V"},
-		{ArchitectureRISCV64, "RISC-V64"},
-		{ArchitectureUnknown, "Unknown"},
+		{"x86_64", ArchitectureX86_64},
+		{"x86", ArchitectureX86},
+		{"ARM64", ArchitectureARM64},
+		{"ARM", ArchitectureARM},
+		{"MIPS", ArchitectureMIPS},
+		{"MIPS64", ArchitectureMIPS64},
+		{"PowerPC", ArchitecturePPC},
+		{"PowerPC64", ArchitecturePPC64},
+		{"RISC-V", ArchitectureRISCV},
+		{"RISC-V64", ArchitectureRISCV64},
+		{"Unknown", ArchitectureUnknown},
 	}
 
 	for _, tt := range tests {
@@ -692,36 +692,36 @@ func TestArchitectures(t *testing.T) {
 
 // TestErrorTypes tests custom error types
 func TestErrorTypes(t *testing.T) {
-	t.Run("ErrInvalidMagic", func(t *testing.T) {
-		err := &ErrInvalidMagic{Magic: []byte{0xFF, 0xFF, 0xFF, 0xFF}}
+	t.Run("InvalidMagicError", func(t *testing.T) {
+		err := &InvalidMagicError{Magic: []byte{0xFF, 0xFF, 0xFF, 0xFF}}
 		if err.Error() == "" {
 			t.Error("Error() returned empty string")
 		}
 	})
 
-	t.Run("ErrUnsupportedFormat", func(t *testing.T) {
-		err := &ErrUnsupportedFormat{Format: "test"}
+	t.Run("UnsupportedFormatError", func(t *testing.T) {
+		err := &UnsupportedFormatError{Format: "test"}
 		if err.Error() == "" {
 			t.Error("Error() returned empty string")
 		}
 	})
 
-	t.Run("ErrInvalidOffset", func(t *testing.T) {
-		err := &ErrInvalidOffset{Offset: 0x1000, Reason: "test"}
+	t.Run("InvalidOffsetError", func(t *testing.T) {
+		err := &InvalidOffsetError{Offset: 0x1000, Reason: "test"}
 		if err.Error() == "" {
 			t.Error("Error() returned empty string")
 		}
 	})
 
-	t.Run("ErrTruncatedFile", func(t *testing.T) {
-		err := &ErrTruncatedFile{Expected: 100, Actual: 50}
+	t.Run("TruncatedFileError", func(t *testing.T) {
+		err := &TruncatedFileError{Expected: 100, Actual: 50}
 		if err.Error() == "" {
 			t.Error("Error() returned empty string")
 		}
 	})
 
-	t.Run("ErrCorruptedSection", func(t *testing.T) {
-		err := &ErrCorruptedSection{Section: ".text", Reason: "test"}
+	t.Run("CorruptedSectionError", func(t *testing.T) {
+		err := &CorruptedSectionError{Section: ".text", Reason: "test"}
 		if err.Error() == "" {
 			t.Error("Error() returned empty string")
 		}

@@ -119,110 +119,96 @@ func (p *StandardLibParser) extractPEImports(peFile *pe.File) []*Import {
 func (p *StandardLibParser) extractPEExports(peFile *pe.File) []*Export {
 	exports := make([]*Export, 0, 64)
 
-	// pe package doesn't provide direct export access
-	// we need to parse export directory manually
-	var exportDirRVA, exportDirSize uint32
-
-	switch oh := peFile.OptionalHeader.(type) {
-	case *pe.OptionalHeader32:
-		if len(oh.DataDirectory) > 0 {
-			exportDirRVA = oh.DataDirectory[0].VirtualAddress
-			exportDirSize = oh.DataDirectory[0].Size
-		}
-	case *pe.OptionalHeader64:
-		if len(oh.DataDirectory) > 0 {
-			exportDirRVA = oh.DataDirectory[0].VirtualAddress
-			exportDirSize = oh.DataDirectory[0].Size
-		}
-	}
-
-	// if no export directory, return empty
+	// get export directory location
+	exportDirRVA, exportDirSize := p.getPEExportDirectory(peFile)
 	if exportDirRVA == 0 || exportDirSize == 0 {
 		return exports
 	}
 
-	// find section containing export directory
-	var exportData []byte
-	for _, sec := range peFile.Sections {
-		if exportDirRVA >= sec.VirtualAddress &&
-			exportDirRVA < sec.VirtualAddress+sec.VirtualSize {
-			offset := exportDirRVA - sec.VirtualAddress
-			data, err := sec.Data()
-			if err == nil && uint32(len(data)) > offset {
-				exportData = data[offset:]
-				break
-			}
-		}
-	}
-
+	// read export directory data
+	exportData := p.readPEDataAtRVA(peFile, exportDirRVA, 40)
 	if len(exportData) < 40 {
 		return exports
 	}
 
 	// parse export directory structure
-	numberOfFunctions := binary.LittleEndian.Uint32(exportData[20:24])
-	numberOfNames := binary.LittleEndian.Uint32(exportData[24:28])
-	addressOfFunctions := binary.LittleEndian.Uint32(exportData[28:32])
-	addressOfNames := binary.LittleEndian.Uint32(exportData[32:36])
-	addressOfNameOrdinals := binary.LittleEndian.Uint32(exportData[36:40])
-
-	// helper to read data at rva
-	readAtRVA := func(rva uint32, size int) []byte {
-		for _, sec := range peFile.Sections {
-			if rva >= sec.VirtualAddress &&
-				rva < sec.VirtualAddress+sec.VirtualSize {
-				offset := rva - sec.VirtualAddress
-				data, err := sec.Data()
-				if err == nil && uint32(len(data)) >= offset+uint32(size) {
-					return data[offset : offset+uint32(size)]
-				}
-			}
-		}
-		return nil
-	}
+	exportDir := p.parsePEExportDirectory(exportData)
 
 	// read function addresses
-	funcAddrs := make([]uint32, numberOfFunctions)
-	funcData := readAtRVA(addressOfFunctions, int(numberOfFunctions*4))
+	funcAddrs := p.readPEFunctionAddresses(peFile, exportDir)
+
+	// read and process exported names
+	return p.processPEExportNames(peFile, exportDir, funcAddrs)
+}
+
+// getPEExportDirectory retrieves export directory RVA and size from optional header
+func (p *StandardLibParser) getPEExportDirectory(peFile *pe.File) (rva, size uint32) {
+	switch oh := peFile.OptionalHeader.(type) {
+	case *pe.OptionalHeader32:
+		if len(oh.DataDirectory) > 0 {
+			return oh.DataDirectory[0].VirtualAddress, oh.DataDirectory[0].Size
+		}
+	case *pe.OptionalHeader64:
+		if len(oh.DataDirectory) > 0 {
+			return oh.DataDirectory[0].VirtualAddress, oh.DataDirectory[0].Size
+		}
+	}
+	return 0, 0
+}
+
+// peExportDirectory holds parsed export directory fields
+type peExportDirectory struct {
+	numberOfFunctions     uint32
+	numberOfNames         uint32
+	addressOfFunctions    uint32
+	addressOfNames        uint32
+	addressOfNameOrdinals uint32
+}
+
+// parsePEExportDirectory parses export directory structure from raw data
+func (p *StandardLibParser) parsePEExportDirectory(data []byte) peExportDirectory {
+	return peExportDirectory{
+		numberOfFunctions:     binary.LittleEndian.Uint32(data[20:24]),
+		numberOfNames:         binary.LittleEndian.Uint32(data[24:28]),
+		addressOfFunctions:    binary.LittleEndian.Uint32(data[28:32]),
+		addressOfNames:        binary.LittleEndian.Uint32(data[32:36]),
+		addressOfNameOrdinals: binary.LittleEndian.Uint32(data[36:40]),
+	}
+}
+
+// readPEDataAtRVA reads data at specified RVA from PE file sections
+func (p *StandardLibParser) readPEDataAtRVA(peFile *pe.File, rva uint32, size int) []byte {
+	for _, sec := range peFile.Sections {
+		if rva >= sec.VirtualAddress && rva < sec.VirtualAddress+sec.VirtualSize {
+			offset := rva - sec.VirtualAddress
+			data, err := sec.Data()
+			if err == nil && len(data) >= int(offset)+size {
+				return data[offset : offset+uint32(size)] //nolint:gosec // size is controlled
+			}
+		}
+	}
+	return nil
+}
+
+// readPEFunctionAddresses reads function address table from export directory
+func (p *StandardLibParser) readPEFunctionAddresses(peFile *pe.File, exportDir peExportDirectory) []uint32 {
+	funcAddrs := make([]uint32, exportDir.numberOfFunctions)
+	funcData := p.readPEDataAtRVA(peFile, exportDir.addressOfFunctions, int(exportDir.numberOfFunctions*4))
 	if funcData != nil {
-		for i := uint32(0); i < numberOfFunctions; i++ {
+		for i := uint32(0); i < exportDir.numberOfFunctions; i++ {
 			funcAddrs[i] = binary.LittleEndian.Uint32(funcData[i*4:])
 		}
 	}
+	return funcAddrs
+}
 
-	// read name pointers and ordinals
-	for i := uint32(0); i < numberOfNames; i++ {
-		// read name rva
-		nameRVAData := readAtRVA(addressOfNames+i*4, 4)
-		if nameRVAData == nil {
-			continue
-		}
-		nameRVA := binary.LittleEndian.Uint32(nameRVAData)
+// processPEExportNames reads and processes exported function names
+func (p *StandardLibParser) processPEExportNames(peFile *pe.File, exportDir peExportDirectory, funcAddrs []uint32) []*Export {
+	exports := make([]*Export, 0, exportDir.numberOfNames)
 
-		// read ordinal
-		ordinalData := readAtRVA(addressOfNameOrdinals+i*2, 2)
-		if ordinalData == nil {
-			continue
-		}
-		ordinal := binary.LittleEndian.Uint16(ordinalData)
-
-		// read name string
-		nameData := readAtRVA(nameRVA, 256)
-		if nameData == nil {
-			continue
-		}
-		var name string
-		for j := 0; j < len(nameData) && nameData[j] != 0; j++ {
-			name += string(nameData[j])
-		}
-
-		// create export entry
-		if uint32(ordinal) < numberOfFunctions {
-			exp := &Export{
-				Name:    name,
-				Address: Address(funcAddrs[ordinal]),
-				Ordinal: uint32(ordinal),
-			}
+	for i := uint32(0); i < exportDir.numberOfNames; i++ {
+		exp := p.readPEExportEntry(peFile, exportDir, funcAddrs, i)
+		if exp != nil {
 			exports = append(exports, exp)
 		}
 	}
@@ -230,8 +216,56 @@ func (p *StandardLibParser) extractPEExports(peFile *pe.File) []*Export {
 	return exports
 }
 
+// readPEExportEntry reads a single export entry by index
+func (p *StandardLibParser) readPEExportEntry(peFile *pe.File, exportDir peExportDirectory, funcAddrs []uint32, index uint32) *Export {
+	// read name rva
+	nameRVAData := p.readPEDataAtRVA(peFile, exportDir.addressOfNames+index*4, 4)
+	if nameRVAData == nil {
+		return nil
+	}
+	nameRVA := binary.LittleEndian.Uint32(nameRVAData)
+
+	// read ordinal
+	ordinalData := p.readPEDataAtRVA(peFile, exportDir.addressOfNameOrdinals+index*2, 2)
+	if ordinalData == nil {
+		return nil
+	}
+	ordinal := binary.LittleEndian.Uint16(ordinalData)
+
+	// read name string
+	name := p.readPEExportName(peFile, nameRVA)
+	if name == "" {
+		return nil
+	}
+
+	// create export entry
+	if int(ordinal) < len(funcAddrs) {
+		return &Export{
+			Name:    name,
+			Address: Address(funcAddrs[ordinal]),
+			Ordinal: uint32(ordinal),
+		}
+	}
+
+	return nil
+}
+
+// readPEExportName reads null-terminated export name string at RVA
+func (p *StandardLibParser) readPEExportName(peFile *pe.File, nameRVA uint32) string {
+	nameData := p.readPEDataAtRVA(peFile, nameRVA, 256)
+	if nameData == nil {
+		return ""
+	}
+
+	var name string
+	for j := 0; j < len(nameData) && nameData[j] != 0; j++ {
+		name += string(nameData[j])
+	}
+	return name
+}
+
 // extractPERelocations extracts base relocations from .reloc section
-func (p *StandardLibParser) extractPERelocations(peFile *pe.File, data []byte) []*Relocation {
+func (p *StandardLibParser) extractPERelocations(peFile *pe.File, _ []byte) []*Relocation {
 	relocations := make([]*Relocation, 0, 256)
 
 	// find .reloc section

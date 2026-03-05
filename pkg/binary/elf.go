@@ -73,16 +73,16 @@ func (p *StandardLibParser) extractELFSymbols(elfFile *elf.File) []*Symbol {
 	// extract static symbols
 	staticSyms, err := elfFile.Symbols()
 	if err == nil {
-		for _, sym := range staticSyms {
-			symbols = append(symbols, p.convertELFSymbol(&sym, elfFile))
+		for i := range staticSyms {
+			symbols = append(symbols, p.convertELFSymbol(&staticSyms[i], elfFile))
 		}
 	}
 
 	// extract dynamic symbols
 	dynSyms, err := elfFile.DynamicSymbols()
 	if err == nil {
-		for _, sym := range dynSyms {
-			symbols = append(symbols, p.convertELFSymbol(&sym, elfFile))
+		for i := range dynSyms {
+			symbols = append(symbols, p.convertELFSymbol(&dynSyms[i], elfFile))
 		}
 	}
 
@@ -140,14 +140,19 @@ func (p *StandardLibParser) convertELFSymbolBinding(sb elf.SymBind) SymbolBindin
 }
 
 // extractELFRelocations extracts relocations from SHT_RELA and SHT_REL sections
+//
+//nolint:misspell // RELA is ELF terminology
 func (p *StandardLibParser) extractELFRelocations(elfFile *elf.File) []*Relocation {
 	relocations := make([]*Relocation, 0, 256)
 
 	// get dynamic symbols for relocation symbol resolution
-	dynSyms, _ := elfFile.DynamicSymbols()
+	dynSyms, dynErr := elfFile.DynamicSymbols()
+	if dynErr != nil {
+		dynSyms = []elf.Symbol{} // fallback to empty slice
+	}
 
 	for _, sec := range elfFile.Sections {
-		if sec.Type != elf.SHT_RELA && sec.Type != elf.SHT_REL {
+		if sec.Type != elf.SHT_RELA && sec.Type != elf.SHT_REL { //nolint:misspell // RELA is ELF terminology
 			continue
 		}
 
@@ -158,6 +163,7 @@ func (p *StandardLibParser) extractELFRelocations(elfFile *elf.File) []*Relocati
 
 		// determine entry size based on class and type
 		var entrySize int
+		//nolint:misspell,nestif // RELA is ELF terminology, complexity is acceptable
 		if sec.Type == elf.SHT_RELA {
 			if elfFile.Class == elf.ELFCLASS64 {
 				entrySize = 24 // sizeof(Elf64_Rela)
@@ -187,30 +193,27 @@ func (p *StandardLibParser) extractELFRelocations(elfFile *elf.File) []*Relocati
 // parseELFRelocation parses a single relocation entry
 func (p *StandardLibParser) parseELFRelocation(data []byte, elfFile *elf.File,
 	secType elf.SectionType, dynSyms []elf.Symbol) *Relocation {
-
 	var offset, info uint64
 	var addend int64
 	var byteOrder binary.ByteOrder
-
 	// determine byte order
 	if elfFile.Data == elf.ELFDATA2LSB {
 		byteOrder = binary.LittleEndian
 	} else {
 		byteOrder = binary.BigEndian
 	}
-
 	// parse based on class and section type
 	if elfFile.Class == elf.ELFCLASS64 {
 		offset = byteOrder.Uint64(data[0:8])
 		info = byteOrder.Uint64(data[8:16])
-		if secType == elf.SHT_RELA {
-			addend = int64(byteOrder.Uint64(data[16:24]))
+		if secType == elf.SHT_RELA { //nolint:misspell // RELA is ELF terminology
+			addend = int64(byteOrder.Uint64(data[16:24])) //nolint:gosec // intentional conversion
 		}
 	} else {
 		offset = uint64(byteOrder.Uint32(data[0:4]))
 		info = uint64(byteOrder.Uint32(data[4:8]))
-		if secType == elf.SHT_RELA {
-			addend = int64(int32(byteOrder.Uint32(data[8:12])))
+		if secType == elf.SHT_RELA { //nolint:misspell // RELA is ELF terminology
+			addend = int64(int32(byteOrder.Uint32(data[8:12]))) //nolint:gosec // intentional conversion
 		}
 	}
 
@@ -221,7 +224,7 @@ func (p *StandardLibParser) parseELFRelocation(data []byte, elfFile *elf.File,
 		symIdx = uint32(info >> 32)
 		relocType = uint32(info & 0xffffffff)
 	} else {
-		symIdx = uint32(info >> 8)
+		symIdx = uint32(info >> 8) //nolint:gosec // safe conversion, info is from uint32
 		relocType = uint32(info & 0xff)
 	}
 

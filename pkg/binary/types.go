@@ -6,6 +6,8 @@ import (
 	"debug/pe"
 )
 
+const unknownStr = "Unknown"
+
 // Address represents a virtual address in the binary
 type Address uint64
 
@@ -13,9 +15,13 @@ type Address uint64
 type BinaryFormat int
 
 const (
+	// BinaryFormatUnknown represents an unknown or unsupported binary format
 	BinaryFormatUnknown BinaryFormat = iota
+	// BinaryFormatELF represents the ELF (Executable and Linkable Format)
 	BinaryFormatELF
+	// BinaryFormatPE represents the PE (Portable Executable) format
 	BinaryFormatPE
+	// BinaryFormatMachO represents the Mach-O (Mach Object) format
 	BinaryFormatMachO
 )
 
@@ -28,7 +34,7 @@ func (f BinaryFormat) String() string {
 	case BinaryFormatMachO:
 		return "Mach-O"
 	default:
-		return "Unknown"
+		return unknownStr
 	}
 }
 
@@ -36,16 +42,27 @@ func (f BinaryFormat) String() string {
 type Architecture int
 
 const (
+	// ArchitectureUnknown represents an unknown or unsupported architecture
 	ArchitectureUnknown Architecture = iota
+	// ArchitectureX86_64 represents the x86-64 (AMD64) architecture
 	ArchitectureX86_64
+	// ArchitectureX86 represents the x86 (i386) architecture
 	ArchitectureX86
+	// ArchitectureARM64 represents the ARM64 (AArch64) architecture
 	ArchitectureARM64
+	// ArchitectureARM represents the ARM architecture
 	ArchitectureARM
+	// ArchitectureMIPS represents the MIPS architecture
 	ArchitectureMIPS
+	// ArchitectureMIPS64 represents the MIPS64 architecture
 	ArchitectureMIPS64
+	// ArchitecturePPC represents the PowerPC architecture
 	ArchitecturePPC
+	// ArchitecturePPC64 represents the PowerPC64 architecture
 	ArchitecturePPC64
+	// ArchitectureRISCV represents the RISC-V 32-bit architecture
 	ArchitectureRISCV
+	// ArchitectureRISCV64 represents the RISC-V 64-bit architecture
 	ArchitectureRISCV64
 )
 
@@ -72,19 +89,19 @@ func (a Architecture) String() string {
 	case ArchitectureRISCV64:
 		return "RISC-V64"
 	default:
-		return "Unknown"
+		return unknownStr
 	}
 }
 
 // Section represents a section in the binary
 type Section struct {
 	Name         string
+	Data         []byte
 	Address      Address
 	Size         uint64
 	Offset       uint64
 	Flags        uint64
 	Type         uint32
-	Data         []byte
 	IsExecutable bool
 	IsWritable   bool
 	IsAllocated  bool
@@ -93,22 +110,28 @@ type Section struct {
 // Symbol represents a symbol in the binary
 type Symbol struct {
 	Name    string
+	Section string
 	Address Address
 	Size    uint64
 	Type    SymbolType
 	Binding SymbolBinding
-	Section string
 }
 
 // SymbolType represents the type of a symbol
 type SymbolType int
 
 const (
+	// SymbolTypeUnknown represents an unknown symbol type
 	SymbolTypeUnknown SymbolType = iota
+	// SymbolTypeFunction represents a function symbol
 	SymbolTypeFunction
+	// SymbolTypeObject represents a data object symbol
 	SymbolTypeObject
+	// SymbolTypeSection represents a section symbol
 	SymbolTypeSection
+	// SymbolTypeFile represents a file symbol
 	SymbolTypeFile
+	// SymbolTypeTLS represents a thread-local storage symbol
 	SymbolTypeTLS
 )
 
@@ -125,7 +148,7 @@ func (t SymbolType) String() string {
 	case SymbolTypeTLS:
 		return "TLS"
 	default:
-		return "Unknown"
+		return unknownStr
 	}
 }
 
@@ -133,9 +156,13 @@ func (t SymbolType) String() string {
 type SymbolBinding int
 
 const (
+	// SymbolBindingUnknown represents an unknown symbol binding
 	SymbolBindingUnknown SymbolBinding = iota
+	// SymbolBindingLocal represents a local symbol binding
 	SymbolBindingLocal
+	// SymbolBindingGlobal represents a global symbol binding
 	SymbolBindingGlobal
+	// SymbolBindingWeak represents a weak symbol binding
 	SymbolBindingWeak
 )
 
@@ -148,14 +175,14 @@ func (b SymbolBinding) String() string {
 	case SymbolBindingWeak:
 		return "Weak"
 	default:
-		return "Unknown"
+		return unknownStr
 	}
 }
 
 // Relocation represents a relocation entry
 type Relocation struct {
-	Address   Address
 	Symbol    string
+	Address   Address
 	Type      RelocationType
 	Addend    int64
 	SymbolIdx uint32
@@ -165,13 +192,21 @@ type Relocation struct {
 type RelocationType int
 
 const (
+	// RelocationTypeUnknown represents an unknown relocation type
 	RelocationTypeUnknown RelocationType = iota
+	// RelocationTypeAbsolute represents an absolute relocation
 	RelocationTypeAbsolute
+	// RelocationTypeRelative represents a relative relocation
 	RelocationTypeRelative
+	// RelocationTypePLT represents a PLT (Procedure Linkage Table) relocation
 	RelocationTypePLT
+	// RelocationTypeGOT represents a GOT (Global Offset Table) relocation
 	RelocationTypeGOT
+	// RelocationTypeCopy represents a copy relocation
 	RelocationTypeCopy
+	// RelocationTypeJumpSlot represents a jump slot relocation
 	RelocationTypeJumpSlot
+	// RelocationTypeGlobDat represents a global data relocation
 	RelocationTypeGlobDat
 )
 
@@ -192,15 +227,15 @@ func (t RelocationType) String() string {
 	case RelocationTypeGlobDat:
 		return "GlobDat"
 	default:
-		return "Unknown"
+		return unknownStr
 	}
 }
 
 // Import represents an imported symbol
 type Import struct {
 	Name    string
-	Address Address
 	Library string
+	Address Address
 }
 
 // Export represents an exported symbol
@@ -247,21 +282,19 @@ func NewGroundTruthDatabase() *GroundTruthDatabase {
 
 // BinaryInfo contains all extracted information from a binary
 type BinaryInfo struct {
-	Format        BinaryFormat
-	Architecture  Architecture
-	EntryPoint    Address
-	BaseAddress   Address
+	GroundTruthDB *GroundTruthDatabase
+	elfFile       *elf.File
+	peFile        *pe.File
+	machoFile     *macho.File
 	Sections      []*Section
 	Symbols       []*Symbol
 	Relocations   []*Relocation
 	Imports       []*Import
 	Exports       []*Export
-	GroundTruthDB *GroundTruthDatabase
-
-	// raw file handles for format-specific operations
-	elfFile   *elf.File
-	peFile    *pe.File
-	machoFile *macho.File
+	EntryPoint    Address
+	BaseAddress   Address
+	Format        BinaryFormat
+	Architecture  Architecture
 }
 
 // Close releases resources associated with the binary

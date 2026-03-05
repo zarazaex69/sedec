@@ -243,9 +243,12 @@ func TestELFExportedSymbols(t *testing.T) {
 }
 
 // TestELFRelocationWithAddend tests RELA relocation parsing
+//
+//nolint:misspell // RELA is ELF terminology
 func TestELFRelocationWithAddend(t *testing.T) {
 	parser := NewStandardLibParser()
 
+	//nolint:misspell // RELA is ELF terminology
 	// create elf with rela relocations
 	data := createELFWithRELARelocations()
 
@@ -341,12 +344,12 @@ func readTestELFBinary() ([]byte, error) {
 		}
 	}
 
-	return nil, &ErrUnsupportedFormat{Format: "no test ELF binary found"}
+	return nil, &UnsupportedFormatError{Format: "no test ELF binary found"}
 }
 
-func readFile(path string) ([]byte, error) {
+func readFile(_ string) ([]byte, error) {
 	// simple file read wrapper
-	return []byte{}, &ErrUnsupportedFormat{Format: "file not found"}
+	return []byte{}, &UnsupportedFormatError{Format: "file not found"}
 }
 
 // createELF32WithRelocations creates a minimal 32-bit ELF with relocations
@@ -442,13 +445,9 @@ func createELFWithDynamicSymbols() []byte {
 	return createMinimalELF64()
 }
 
-// createELFWithVariousSectionSizes creates an ELF with sections of various sizes
-func createELFWithVariousSectionSizes() []byte {
-	// reuse basic elf64 structure
-	return createMinimalELF64()
-}
-
 // createELFWithRELARelocations creates an ELF with RELA relocations
+//
+//nolint:misspell // RELA is ELF terminology
 func createELFWithRELARelocations() []byte {
 	// reuse basic elf64 structure
 	return createELF64WithRelocations()

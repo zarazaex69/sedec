@@ -44,7 +44,7 @@ func NewStandardLibParser() *StandardLibParser {
 // Parse detects the binary format and delegates to the appropriate parser
 func (p *StandardLibParser) Parse(data []byte) (*BinaryInfo, error) {
 	if len(data) < 4 {
-		return nil, &ErrTruncatedFile{Expected: 4, Actual: uint64(len(data))}
+		return nil, &TruncatedFileError{Expected: 4, Actual: uint64(len(data))}
 	}
 
 	// detect format by magic number
@@ -58,7 +58,7 @@ func (p *StandardLibParser) Parse(data []byte) (*BinaryInfo, error) {
 	case BinaryFormatMachO:
 		return p.parseMachO(data)
 	default:
-		return nil, &ErrInvalidMagic{Magic: data[:4]}
+		return nil, &InvalidMagicError{Magic: data[:4]}
 	}
 }
 

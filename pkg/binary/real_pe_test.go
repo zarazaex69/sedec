@@ -61,7 +61,7 @@ func TestWithRealPEBinary(t *testing.T) {
 		if textSection.Size == 0 {
 			t.Error(".text section has zero size")
 		}
-		if textSection.Data == nil || len(textSection.Data) == 0 {
+		if len(textSection.Data) == 0 {
 			t.Error(".text section data not loaded")
 		}
 	}

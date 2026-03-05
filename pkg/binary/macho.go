@@ -161,11 +161,9 @@ func (p *StandardLibParser) extractMachORelocations(machoFile *macho.File) []*Re
 // parseMachORelocation parses a single Mach-O relocation entry
 func (p *StandardLibParser) parseMachORelocation(data []byte, machoFile *macho.File,
 	sec *macho.Section) *Relocation {
-
 	// parse relocation info structure
 	var addr uint32
 	var value uint32
-
 	if machoFile.ByteOrder == binary.LittleEndian {
 		addr = binary.LittleEndian.Uint32(data[0:4])
 		value = binary.LittleEndian.Uint32(data[4:8])
