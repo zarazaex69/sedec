@@ -376,3 +376,107 @@ func createTestELFBinary(t *testing.T) string {
 
 	return tmpFile.Name()
 }
+
+func TestRunCFG_WithAddress(t *testing.T) {
+	testBinary := createTestELFBinary(t)
+	defer os.Remove(testBinary)
+
+	var stdout, stderr bytes.Buffer
+
+	// test with hex address (0x400078 is .text section start in our test ELF)
+	err := runCFG([]string{"--address", "0x400078", "--size", "6", testBinary}, nil, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("runCFG with address failed: %v", err)
+	}
+
+	output := stdout.String()
+
+	// verify dot format
+	if !strings.Contains(output, "digraph CFG") {
+		t.Error("output missing digraph header")
+	}
+	if !strings.Contains(output, "block_") {
+		t.Error("output missing block nodes")
+	}
+}
+
+func TestRunCFG_WithAddressDecimal(t *testing.T) {
+	testBinary := createTestELFBinary(t)
+	defer os.Remove(testBinary)
+
+	var stdout, stderr bytes.Buffer
+
+	// test with decimal address (4194424 = 0x400078)
+	err := runCFG([]string{"--address", "4194424", "--size", "6", testBinary}, nil, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("runCFG with decimal address failed: %v", err)
+	}
+
+	output := stdout.String()
+
+	// verify dot format
+	if !strings.Contains(output, "digraph CFG") {
+		t.Error("output missing digraph header")
+	}
+}
+
+func TestRunCFG_InvalidAddress(t *testing.T) {
+	testBinary := createTestELFBinary(t)
+	defer os.Remove(testBinary)
+
+	var stdout, stderr bytes.Buffer
+
+	// test with invalid address format
+	err := runCFG([]string{"--address", "invalid", testBinary}, nil, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected error for invalid address, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "invalid address format") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestRunCFG_AddressOutOfRange(t *testing.T) {
+	testBinary := createTestELFBinary(t)
+	defer os.Remove(testBinary)
+
+	var stdout, stderr bytes.Buffer
+
+	// test with address outside executable sections
+	err := runCFG([]string{"--address", "0x999999", testBinary}, nil, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected error for out-of-range address, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "not found in any executable section") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestRunCFG_AddressWithStatistics(t *testing.T) {
+	testBinary := createTestELFBinary(t)
+	defer os.Remove(testBinary)
+
+	tmpDir := t.TempDir()
+	outputFile := filepath.Join(tmpDir, "cfg.dot")
+
+	var stdout, stderr bytes.Buffer
+
+	err := runCFG([]string{"--address", "0x400078", "--size", "6", "--output", outputFile, testBinary}, nil, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("runCFG failed: %v", err)
+	}
+
+	// verify statistics in stderr
+	stderrOutput := stderr.String()
+	if !strings.Contains(stderrOutput, "address range:") {
+		t.Error("stderr missing address range")
+	}
+	if !strings.Contains(stderrOutput, "blocks:") {
+		t.Error("stderr missing block count")
+	}
+	if !strings.Contains(stderrOutput, "0x400078") {
+		t.Error("stderr missing start address")
+	}
+}

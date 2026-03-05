@@ -14,6 +14,8 @@ import (
 type cfgFlags struct {
 	output              string
 	function            string
+	address             string
+	size                uint64
 	includeInstructions bool
 	includeAddresses    bool
 	includeMetadata     bool
@@ -27,6 +29,8 @@ func runCFG(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	flags := cfgFlags{
 		output:              "",
 		function:            "",
+		address:             "",
+		size:                0,
 		includeInstructions: true,
 		includeAddresses:    true,
 		includeMetadata:     true,
@@ -58,6 +62,22 @@ func runCFG(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			}
 			i++
 			flags.function = args[i]
+
+		case "--address", "-a":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--address requires an argument")
+			}
+			i++
+			flags.address = args[i]
+
+		case "--size", "-s":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--size requires an argument")
+			}
+			i++
+			if _, err := fmt.Sscanf(args[i], "%d", &flags.size); err != nil {
+				return fmt.Errorf("invalid --size value: %v", err)
+			}
 
 		case "--no-instructions":
 			flags.includeInstructions = false
@@ -124,19 +144,6 @@ func runCFG(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return fmt.Errorf("failed to parse binary: %w", err)
 	}
 
-	// find executable section
-	var execSection *binfmt.Section
-	for i := range binaryInfo.Sections {
-		if binaryInfo.Sections[i].IsExecutable {
-			execSection = binaryInfo.Sections[i]
-			break
-		}
-	}
-
-	if execSection == nil {
-		return fmt.Errorf("no executable section found in binary")
-	}
-
 	// disassemble
 	disassembler, err := disasm.NewDisassembler()
 	if err != nil {
@@ -145,11 +152,63 @@ func runCFG(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	defer disassembler.Close()
 
 	// determine disassembly range
-	startAddr := disasm.Address(execSection.Address)
-	endAddr := disasm.Address(execSection.Address) + disasm.Address(len(execSection.Data))
+	var startAddr, endAddr disasm.Address
+	var codeBytes []byte
 
-	// if function specified, try to find it
-	if flags.function != "" {
+	if flags.address != "" {
+		// parse address (hex format: 0x1234 or 1234)
+		var addr uint64
+		if _, err := fmt.Sscanf(flags.address, "0x%x", &addr); err != nil {
+			if _, err := fmt.Sscanf(flags.address, "%d", &addr); err != nil {
+				return fmt.Errorf("invalid address format: %s (use 0x1234 or decimal)", flags.address)
+			}
+		}
+		startAddr = disasm.Address(addr)
+
+		// determine size
+		if flags.size > 0 {
+			endAddr = startAddr + disasm.Address(flags.size)
+		} else {
+			// default: analyze 1KB
+			endAddr = startAddr + 1024
+		}
+
+		// find section containing this address
+		var containingSection *binfmt.Section
+		for i := range binaryInfo.Sections {
+			sec := binaryInfo.Sections[i]
+			if !sec.IsExecutable {
+				continue
+			}
+			secStart := disasm.Address(sec.Address)
+			secEnd := disasm.Address(sec.Address) + disasm.Address(len(sec.Data))
+			if startAddr >= secStart && startAddr < secEnd {
+				containingSection = sec
+				break
+			}
+		}
+
+		if containingSection == nil {
+			return fmt.Errorf("address 0x%x not found in any executable section", startAddr)
+		}
+
+		// calculate offset within section
+		offset := startAddr - disasm.Address(containingSection.Address)
+		length := endAddr - startAddr
+
+		if offset < 0 || offset >= disasm.Address(len(containingSection.Data)) {
+			return fmt.Errorf("invalid address offset: 0x%x", offset)
+		}
+
+		if offset+length > disasm.Address(len(containingSection.Data)) {
+			length = disasm.Address(len(containingSection.Data)) - offset
+			endAddr = startAddr + length
+		}
+
+		codeBytes = containingSection.Data[offset : offset+length]
+
+	} else if flags.function != "" {
+		// find function by name
 		found := false
 		for _, sym := range binaryInfo.Symbols {
 			if sym.Name == flags.function {
@@ -162,20 +221,57 @@ func runCFG(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		if !found {
 			return fmt.Errorf("function not found: %s", flags.function)
 		}
-	}
 
-	// calculate offset into section data
-	offset := startAddr - disasm.Address(execSection.Address)
-	if offset < 0 || offset >= disasm.Address(len(execSection.Data)) {
-		return fmt.Errorf("invalid address range")
-	}
+		// find section containing this function
+		var containingSection *binfmt.Section
+		for i := range binaryInfo.Sections {
+			sec := binaryInfo.Sections[i]
+			if !sec.IsExecutable {
+				continue
+			}
+			secStart := disasm.Address(sec.Address)
+			secEnd := disasm.Address(sec.Address) + disasm.Address(len(sec.Data))
+			if startAddr >= secStart && startAddr < secEnd {
+				containingSection = sec
+				break
+			}
+		}
 
-	length := endAddr - startAddr
-	if offset+length > disasm.Address(len(execSection.Data)) {
-		length = disasm.Address(len(execSection.Data)) - offset
-	}
+		if containingSection == nil {
+			return fmt.Errorf("function address 0x%x not found in any executable section", startAddr)
+		}
 
-	codeBytes := execSection.Data[offset : offset+length]
+		// calculate offset within section
+		offset := startAddr - disasm.Address(containingSection.Address)
+		length := endAddr - startAddr
+
+		if offset < 0 || offset >= disasm.Address(len(containingSection.Data)) {
+			return fmt.Errorf("invalid function offset: 0x%x", offset)
+		}
+
+		if offset+length > disasm.Address(len(containingSection.Data)) {
+			length = disasm.Address(len(containingSection.Data)) - offset
+		}
+
+		codeBytes = containingSection.Data[offset : offset+length]
+	} else {
+		// no function specified - use first executable section
+		var execSection *binfmt.Section
+		for i := range binaryInfo.Sections {
+			if binaryInfo.Sections[i].IsExecutable {
+				execSection = binaryInfo.Sections[i]
+				break
+			}
+		}
+
+		if execSection == nil {
+			return fmt.Errorf("no executable section found in binary")
+		}
+
+		startAddr = disasm.Address(execSection.Address)
+		endAddr = disasm.Address(execSection.Address) + disasm.Address(len(execSection.Data))
+		codeBytes = execSection.Data
+	}
 
 	// disassemble instructions
 	instructions, err := disassembler.DisassembleBytes(codeBytes, startAddr)
@@ -225,6 +321,8 @@ func runCFG(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	// print statistics to stderr if output is file
 	if flags.output != "" {
 		fmt.Fprintf(stderr, "cfg exported to %s\n", flags.output)
+		fmt.Fprintf(stderr, "address range: 0x%x - 0x%x (%d bytes)\n",
+			startAddr, endAddr, endAddr-startAddr)
 		fmt.Fprintf(stderr, "blocks: %d, edges: %d, unresolved jumps: %d\n",
 			controlFlowGraph.BlockCount(),
 			controlFlowGraph.EdgeCount(),
@@ -246,6 +344,8 @@ usage:
 options:
   --output, -o <file>        write output to file (default: stdout)
   --function, -f <name>      analyze specific function by name
+  --address, -a <addr>       analyze code at specific address (hex: 0x1234 or decimal)
+  --size, -s <bytes>         number of bytes to analyze from address (default: 1024)
   --no-instructions          exclude instruction listings from nodes
   --no-addresses             exclude virtual addresses from labels
   --no-metadata              exclude block metadata (instruction counts, entry/exit markers)
@@ -266,6 +366,12 @@ examples:
 
   # export specific function
   sedec cfg --function main --output main.dot /bin/ls
+
+  # analyze code at specific address (for stripped binaries)
+  sedec cfg --address 0x1234 --size 512 --output cfg.dot /bin/cat
+
+  # analyze entry point
+  sedec cfg --address 0x2000 /bin/cat > cfg.dot
 
   # minimal output (no instructions, no metadata)
   sedec cfg --no-instructions --no-metadata /bin/ls > cfg.dot
