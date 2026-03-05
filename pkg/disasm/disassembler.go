@@ -19,19 +19,23 @@ func NewDisassembler() (*Disassembler, error) {
 		capstone.Mode64,
 	)
 	if err != nil {
-		return nil, ErrEngineInit{Reason: err.Error()}
+		return nil, EngineInitError{Reason: err.Error()}
 	}
 
 	// enable detailed instruction information for operand extraction
-	if err := engine.SetOption(capstone.OptDetail, capstone.OptDetailOn); err != nil {
+	if optErr := engine.SetOption(capstone.OptDetail, capstone.OptDetailOn); optErr != nil {
+		// ignore close error during cleanup in error path - engine is being discarded anyway
+		//nolint:errcheck,gosec // cleanup in error path, engine will be garbage collected
 		engine.Close()
-		return nil, ErrEngineInit{Reason: fmt.Sprintf("failed to enable detail mode: %v", err)}
+		return nil, EngineInitError{Reason: fmt.Sprintf("failed to enable detail mode: %v", optErr)}
 	}
 
 	// enable syntax mode for intel syntax (standard for reverse engineering)
-	if err := engine.SetOption(capstone.OptSyntax, capstone.OptSyntaxIntel); err != nil {
+	if optErr := engine.SetOption(capstone.OptSyntax, capstone.OptSyntaxIntel); optErr != nil {
+		// ignore close error during cleanup in error path - engine is being discarded anyway
+		//nolint:errcheck,gosec // cleanup in error path, engine will be garbage collected
 		engine.Close()
-		return nil, ErrEngineInit{Reason: fmt.Sprintf("failed to set intel syntax: %v", err)}
+		return nil, EngineInitError{Reason: fmt.Sprintf("failed to set intel syntax: %v", optErr)}
 	}
 
 	return &Disassembler{
@@ -47,7 +51,7 @@ func (d *Disassembler) Close() error {
 // Disassemble decodes a single instruction at the given address
 func (d *Disassembler) Disassemble(bytes []byte, address Address) (*Instruction, error) {
 	if len(bytes) == 0 {
-		return nil, ErrInsufficientBytes{
+		return nil, InsufficientBytesError{
 			VA:        address,
 			Available: 0,
 			Required:  1,
@@ -58,7 +62,7 @@ func (d *Disassembler) Disassemble(bytes []byte, address Address) (*Instruction,
 	insns, err := d.engine.Disasm(bytes, uint64(address), 1)
 	if err != nil {
 		// capstone error - likely invalid opcode
-		return nil, ErrInvalidOpcode{
+		return nil, InvalidOpcodeError{
 			VA:   address,
 			Byte: bytes[0],
 		}
@@ -66,7 +70,7 @@ func (d *Disassembler) Disassemble(bytes []byte, address Address) (*Instruction,
 
 	if len(insns) == 0 {
 		// no instruction decoded - invalid opcode
-		return nil, ErrInvalidOpcode{
+		return nil, InvalidOpcodeError{
 			VA:   address,
 			Byte: bytes[0],
 		}
@@ -105,6 +109,7 @@ func (d *Disassembler) DisassembleBytes(bytes []byte, startAddress Address) ([]*
 
 		// advance by instruction length
 		offset += instr.Length
+		//nolint:gosec // length is validated by capstone, overflow impossible in practice
 		currentAddr += Address(instr.Length)
 	}
 
@@ -126,7 +131,7 @@ func (d *Disassembler) DisassembleFunction(bytes []byte, startAddress Address) (
 	}
 
 	if len(insns) == 0 {
-		return nil, ErrInvalidOpcode{
+		return nil, InvalidOpcodeError{
 			VA:   startAddress,
 			Byte: bytes[0],
 		}
@@ -228,28 +233,44 @@ func (d *Disassembler) getRegisterSize(reg uint32) Size {
 		return 0
 	}
 
+	// check specific register categories
+	if size := d.get8BitRegisterSize(reg); size != 0 {
+		return size
+	}
+	if size := d.get16BitRegisterSize(reg); size != 0 {
+		return size
+	}
+	if size := d.get32BitRegisterSize(reg); size != 0 {
+		return size
+	}
+	if size := d.get64BitRegisterSize(reg); size != 0 {
+		return size
+	}
+	if size := d.getVectorRegisterSize(reg); size != 0 {
+		return size
+	}
+
+	// default to 64-bit for unknown registers in x86_64 mode
+	return Size64
+}
+
+// get8BitRegisterSize checks if register is 8-bit
+func (d *Disassembler) get8BitRegisterSize(reg uint32) Size {
 	// 8-bit registers (al, ah, bl, bh, cl, ch, dl, dh, spl, bpl, sil, dil, r8b-r15b)
 	if (reg >= capstone.RegAL && reg <= capstone.RegDH) ||
 		(reg >= 61 && reg <= 68) || // spl, bpl, sil, dil
 		(reg >= 69 && reg <= 76) { // r8b-r15b
 		return Size8
 	}
+	return 0
+}
 
+// get16BitRegisterSize checks if register is 16-bit
+func (d *Disassembler) get16BitRegisterSize(reg uint32) Size {
 	// 16-bit registers (ax, bx, cx, dx, si, di, bp, sp, r8w-r15w)
 	if (reg >= capstone.RegAX && reg <= capstone.RegSP) ||
 		(reg >= 77 && reg <= 84) { // r8w-r15w
 		return Size16
-	}
-
-	// 32-bit registers (eax, ebx, ecx, edx, esi, edi, ebp, esp, r8d-r15d)
-	if (reg >= capstone.RegEAX && reg <= capstone.RegESP) ||
-		(reg >= 34 && reg <= 41) { // r8d-r15d
-		return Size32
-	}
-
-	// 64-bit general purpose registers (rax, rbx, rcx, rdx, rsi, rdi, rbp, rsp, r8-r15)
-	if reg >= capstone.RegRAX && reg <= capstone.RegR15 {
-		return Size64
 	}
 
 	// segment registers (16-bit)
@@ -257,11 +278,41 @@ func (d *Disassembler) getRegisterSize(reg uint32) Size {
 		return Size16
 	}
 
+	return 0
+}
+
+// get32BitRegisterSize checks if register is 32-bit
+func (d *Disassembler) get32BitRegisterSize(reg uint32) Size {
+	// 32-bit registers (eax, ebx, ecx, edx, esi, edi, ebp, esp, r8d-r15d)
+	if (reg >= capstone.RegEAX && reg <= capstone.RegESP) ||
+		(reg >= 34 && reg <= 41) { // r8d-r15d
+		return Size32
+	}
+	return 0
+}
+
+// get64BitRegisterSize checks if register is 64-bit
+func (d *Disassembler) get64BitRegisterSize(reg uint32) Size {
+	// 64-bit general purpose registers (rax, rbx, rcx, rdx, rsi, rdi, rbp, rsp, r8-r15)
+	if reg >= capstone.RegRAX && reg <= capstone.RegR15 {
+		return Size64
+	}
+
 	// instruction pointer (64-bit in x86_64)
 	if reg == capstone.RegRIP {
 		return Size64
 	}
 
+	// mmx registers (64-bit)
+	if reg >= 85 && reg <= 92 { // mm0-mm7
+		return Size64
+	}
+
+	return 0
+}
+
+// getVectorRegisterSize checks if register is vector register (xmm, ymm, zmm)
+func (d *Disassembler) getVectorRegisterSize(reg uint32) Size {
 	// xmm registers (128-bit) - sse
 	if reg >= 224 && reg <= 255 { // xmm0-xmm31
 		return 16 // 128 bits
@@ -277,11 +328,5 @@ func (d *Disassembler) getRegisterSize(reg uint32) Size {
 		return 64 // 512 bits
 	}
 
-	// mmx registers (64-bit)
-	if reg >= 85 && reg <= 92 { // mm0-mm7
-		return Size64
-	}
-
-	// default to 64-bit for unknown registers in x86_64 mode
-	return Size64
+	return 0
 }

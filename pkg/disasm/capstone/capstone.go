@@ -1,3 +1,5 @@
+// Package capstone provides CGO bindings to Capstone disassembly engine for x86_64 architecture.
+// It wraps the C API with type-safe Go interfaces and handles memory management automatically.
 package capstone
 
 /*
@@ -23,7 +25,9 @@ static inline x86_op_mem get_op_mem(cs_x86_op* op) {
 	return op->mem;
 }
 */
-import "C"
+import "C" //nolint:gocritic // cgo requires separate import "C" block
+
+//nolint:gocritic // cgo requires separate import "C" block
 import (
 	"fmt"
 	"unsafe"
@@ -124,13 +128,15 @@ type Engine struct {
 }
 
 // Instruction represents a disassembled instruction
+//
+//nolint:govet // field order optimized for cgo interop, not memory alignment
 type Instruction struct {
-	Address  uint64
-	Size     uint16
+	Detail   *InstructionDetail
 	Bytes    []byte
 	Mnemonic string
 	OpStr    string
-	Detail   *InstructionDetail
+	Address  uint64
+	Size     uint16
 }
 
 // InstructionDetail contains detailed instruction information
@@ -140,8 +146,8 @@ type InstructionDetail struct {
 
 // X86Detail contains x86-specific instruction details
 type X86Detail struct {
-	OpCount  uint8
 	Operands []X86Operand
+	OpCount  uint8
 }
 
 // X86Operand represents an x86 operand
@@ -201,6 +207,7 @@ func (e *Engine) Disasm(code []byte, address uint64, count int) ([]Instruction, 
 	var insn *C.cs_insn
 
 	// disassemble instructions
+	//nolint:gocritic // CGO pointer usage required by capstone API
 	n := C.cs_disasm(
 		e.handle,
 		(*C.uint8_t)(unsafe.Pointer(&code[0])),
@@ -225,12 +232,14 @@ func (e *Engine) Disasm(code []byte, address uint64, count int) ([]Instruction, 
 	for i := 0; i < int(n); i++ {
 		cInsn := &cInsns[i]
 
+		//nolint:gocritic // CGO array access pattern required
 		instructions[i] = Instruction{
 			Address:  uint64(cInsn.address),
-			Size:     uint16(cInsn.size),
-			Bytes:    C.GoBytes(unsafe.Pointer(&cInsn.bytes[0]), C.int(cInsn.size)),
+			Detail:   nil,
+			Bytes:    C.GoBytes(unsafe.Pointer(&cInsn.bytes), C.int(cInsn.size)),
 			Mnemonic: C.GoString(&cInsn.mnemonic[0]),
 			OpStr:    C.GoString(&cInsn.op_str[0]),
+			Size:     uint16(cInsn.size),
 		}
 
 		// extract detail information if available

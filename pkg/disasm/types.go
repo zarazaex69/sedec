@@ -7,18 +7,22 @@ type Address uint64
 type Size uint8
 
 const (
-	Size8  Size = 1
+	// Size8 represents 8-bit (1 byte) operand size
+	Size8 Size = 1
+	// Size16 represents 16-bit (2 bytes) operand size
 	Size16 Size = 2
+	// Size32 represents 32-bit (4 bytes) operand size
 	Size32 Size = 4
+	// Size64 represents 64-bit (8 bytes) operand size
 	Size64 Size = 8
 )
 
 // Instruction represents a single disassembled instruction
 type Instruction struct {
-	Address  Address   // virtual address of instruction
 	Bytes    []byte    // raw instruction bytes
 	Mnemonic string    // instruction mnemonic (e.g., "mov", "add")
 	Operands []Operand // instruction operands
+	Address  Address   // virtual address of instruction
 	Length   int       // instruction length in bytes
 }
 
@@ -123,20 +127,30 @@ func formatMemory(m MemoryOperand) string {
 		}
 	}
 
-	if hasDisp {
-		if hasBase || hasIndex {
-			if m.Disp > 0 {
-				result += " + "
-			} else {
-				result += " - "
-			}
-			result += "0x" + formatHex(uint64(abs(m.Disp)))
-		} else {
-			result += formatImmediate(m.Disp)
-		}
-	}
+	result = formatDisplacement(result, hasBase, hasIndex, hasDisp, m.Disp)
 
 	result += "]"
+
+	return result
+}
+
+// formatDisplacement formats displacement part of memory operand
+func formatDisplacement(result string, hasBase, hasIndex, hasDisp bool, disp int64) string {
+	if !hasDisp {
+		return result
+	}
+
+	if hasBase || hasIndex {
+		if disp > 0 {
+			result += " + "
+		} else {
+			result += " - "
+		}
+		//nolint:gosec // abs value conversion is safe
+		result += "0x" + formatHex(uint64(abs(disp)))
+	} else {
+		result += formatImmediate(disp)
+	}
 
 	return result
 }
