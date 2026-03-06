@@ -9,7 +9,7 @@
 
 
 ## About
-sedec is a decompiler
+sedec is a new decompiler written in golang
 
  
 <div align="center">
