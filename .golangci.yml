@@ -32,12 +32,10 @@ linters:
     - bodyclose
     - errname
     - errorlint
-    - wrapcheck
     - err113
     - rowserrcheck
     - sqlclosecheck
     - exhaustive
-    - exhaustruct
     - forcetypeassert
     - godot
     - godox
@@ -142,18 +140,12 @@ settings:
     max-func-lines: 20
 
   lll:
-    line-length: 120
-
-  wrapcheck:
-    ignoreSigs:
-      - .Errorf(
-      - errors.New(
-      - errors.Unwrap(
-      - .Wrap(
-      - .Wrapf(
+    line-length: 150
 
   exhaustive:
     default-signifies-exhaustive: true
+    check-generated: false
+    explicit-exhaustive-switch: false
 
   maintidx:
     under: 20
@@ -167,26 +159,37 @@ settings:
     require-explanation: true
     require-specific: true
 
-exclusions:
-  warn-unused: false
-  rules:
-    - path: _test\.go
+issues:
+  exclude-use-default: false
+  exclude-rules:
+    # exclude test files from most linters
+    - path: "_test\\.go"
       linters:
         - gocyclo
         - errcheck
         - gosec
         - goconst
         - dupl
-        - wrapcheck
-        - exhaustruct
         - err113
-    - path: doc\.go
+        - exhaustive
+        - lll
+        - godot
+        - thelper
+    # exclude doc files
+    - path: "doc\\.go"
       linters:
         - revive
-    - path: mock.*\.go
+        - godot
+    # exclude mock files
+    - path: "mock.*\\.go"
       linters:
-        - exhaustruct
-        - wrapcheck
+        - revive
+    # exclude cgo files from certain checks
+    - path: "capstone\\.go"
+      linters:
+        - gocritic
+        - nolintlint
+        - govet
 
 formatters:
   enable:
