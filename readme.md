@@ -10,7 +10,7 @@
 
 ## About
 sedec is a new decompiler written in golang 
-made for freedom
+made for freedom by zarazaex 
 
  
 <div align="center">
