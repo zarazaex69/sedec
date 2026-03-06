@@ -9,7 +9,8 @@
 
 
 ## About
-sedec is a new decompiler written in golang
+sedec is a new decompiler written in golang 
+made for freedom
 
  
 <div align="center">
