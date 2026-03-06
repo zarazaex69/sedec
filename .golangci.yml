@@ -40,7 +40,6 @@ linters:
     - godot
     - godox
     - gomoddirectives
-    - lll
     - maintidx
     - makezero
     - musttag
@@ -190,6 +189,7 @@ issues:
         - gocritic
         - nolintlint
         - govet
+        - godot
 
 formatters:
   enable:
