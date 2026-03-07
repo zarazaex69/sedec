@@ -142,7 +142,6 @@ linters:
 
     exhaustive:
       default-signifies-exhaustive: true
-      check-generated: false
       explicit-exhaustive-switch: false
 
     maintidx:
