@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go-version: ['1.21', '1.22']
+        go-version: ['1.21', '1.26']
     
     steps:
       - name: Checkout code
@@ -27,7 +27,7 @@ jobs:
       - name: Install Capstone
         run: |
           sudo apt-get update
-          sudo apt-get install -y libcapstone-dev
+          sudo apt-get install -y libcapstone-dev capstone
       
       - name: Verify dependencies
         run: go mod verify
@@ -50,7 +50,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.26'
           cache: true
       
       - name: Install Capstone
@@ -101,7 +101,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.26'
           cache: true
       
       - name: Install Capstone
@@ -138,7 +138,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.26'
           cache: true
       
       - name: Install Capstone
