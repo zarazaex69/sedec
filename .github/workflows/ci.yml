@@ -27,7 +27,7 @@ jobs:
       - name: Install Capstone
         run: |
           sudo apt-get update
-          sudo apt-get install -y libcapstone-dev capstone
+          sudo apt-get install -y libcapstone-dev
       
       - name: Verify dependencies
         run: go mod verify
