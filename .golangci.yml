@@ -37,7 +37,6 @@ linters:
     - sqlclosecheck
     - exhaustive
     - forcetypeassert
-    - godot
     - godox
     - gomoddirectives
     - maintidx
@@ -148,10 +147,6 @@ settings:
 
   maintidx:
     under: 20
-
-  godot:
-    scope: all
-    capital: true
 
   nolintlint:
     allow-unused: false
