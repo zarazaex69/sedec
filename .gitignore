@@ -36,6 +36,7 @@
 *.x86_64
 *.hex
 
+
 # Debug files
 *.dSYM/
 *.su
@@ -284,3 +285,6 @@ trace.out
 # Temporary analysis files
 *.tmp
 *.temp
+.gitignore
+zowue.sh
+zarazaex.sh
