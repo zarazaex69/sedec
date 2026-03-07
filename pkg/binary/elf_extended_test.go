@@ -70,7 +70,11 @@ func TestELFRelocationParsing32Bit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() {
+		if err := info.Close(); err != nil {
+			t.Logf("failed to close binary info: %v", err)
+		}
+	}()
 
 	// verify format
 	if info.Format != BinaryFormatELF {
@@ -101,7 +105,11 @@ func TestELFRelocationParsing64Bit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() {
+		if err := info.Close(); err != nil {
+			t.Logf("failed to close binary info: %v", err)
+		}
+	}()
 
 	// verify format
 	if info.Format != BinaryFormatELF {
@@ -132,7 +140,11 @@ func TestELFBigEndian(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() {
+		if err := info.Close(); err != nil {
+			t.Logf("failed to close binary info: %v", err)
+		}
+	}()
 
 	// verify format
 	if info.Format != BinaryFormatELF {
@@ -153,7 +165,11 @@ func TestELFDynamicSymbols(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() {
+		if err := info.Close(); err != nil {
+			t.Logf("failed to close binary info: %v", err)
+		}
+	}()
 
 	// symbols should be extracted
 	if info.Symbols == nil {
@@ -174,7 +190,11 @@ func TestELFSectionDataLoading(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() {
+		if err := info.Close(); err != nil {
+			t.Logf("failed to close binary info: %v", err)
+		}
+	}()
 
 	// verify sections extracted (may be empty for minimal elf)
 	t.Logf("Extracted %d sections", len(info.Sections))
@@ -200,7 +220,11 @@ func TestELFImportedLibraries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() {
+		if err := info.Close(); err != nil {
+			t.Logf("failed to close binary info: %v", err)
+		}
+	}()
 
 	// check imports structure
 	if info.Imports == nil {
@@ -227,7 +251,11 @@ func TestELFExportedSymbols(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() {
+		if err := info.Close(); err != nil {
+			t.Logf("failed to close binary info: %v", err)
+		}
+	}()
 
 	// check exports structure
 	if info.Exports == nil {
@@ -256,7 +284,11 @@ func TestELFRelocationWithAddend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() {
+		if err := info.Close(); err != nil {
+			t.Logf("failed to close binary info: %v", err)
+		}
+	}()
 
 	// verify relocations extracted
 	t.Logf("Extracted %d relocations", len(info.Relocations))
@@ -281,7 +313,11 @@ func TestELFRelocationWithoutAddend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() {
+		if err := info.Close(); err != nil {
+			t.Logf("failed to close binary info: %v", err)
+		}
+	}()
 
 	// verify relocations extracted
 	t.Logf("Extracted %d relocations", len(info.Relocations))
@@ -355,87 +391,21 @@ func readFile(_ string) ([]byte, error) {
 // createELF32WithRelocations creates a minimal 32-bit ELF with relocations
 func createELF32WithRelocations() []byte {
 	buf := new(bytes.Buffer)
-
-	// elf header (52 bytes for 32-bit)
-	buf.Write([]byte{0x7F, 'E', 'L', 'F'}) // magic
-	buf.WriteByte(1)                       // 32-bit
-	buf.WriteByte(1)                       // little endian
-	buf.WriteByte(1)                       // elf version
-	buf.WriteByte(0)                       // system v abi
-	buf.Write(make([]byte, 8))             // padding
-
-	binary.Write(buf, binary.LittleEndian, uint16(2))         // e_type: ET_EXEC
-	binary.Write(buf, binary.LittleEndian, uint16(3))         // e_machine: EM_386
-	binary.Write(buf, binary.LittleEndian, uint32(1))         // e_version
-	binary.Write(buf, binary.LittleEndian, uint32(0x8048000)) // e_entry
-	binary.Write(buf, binary.LittleEndian, uint32(52))        // e_phoff
-	binary.Write(buf, binary.LittleEndian, uint32(0))         // e_shoff
-	binary.Write(buf, binary.LittleEndian, uint32(0))         // e_flags
-	binary.Write(buf, binary.LittleEndian, uint16(52))        // e_ehsize
-	binary.Write(buf, binary.LittleEndian, uint16(32))        // e_phentsize
-	binary.Write(buf, binary.LittleEndian, uint16(0))         // e_phnum
-	binary.Write(buf, binary.LittleEndian, uint16(40))        // e_shentsize
-	binary.Write(buf, binary.LittleEndian, uint16(0))         // e_shnum
-	binary.Write(buf, binary.LittleEndian, uint16(0))         // e_shstrndx
-
+	writeELF32Header(buf, 3, 0x8048000) // EM_386
 	return buf.Bytes()
 }
 
 // createELF64WithRelocations creates a minimal 64-bit ELF with relocations
 func createELF64WithRelocations() []byte {
 	buf := new(bytes.Buffer)
-
-	// elf header (64 bytes)
-	buf.Write([]byte{0x7F, 'E', 'L', 'F'}) // magic
-	buf.WriteByte(2)                       // 64-bit
-	buf.WriteByte(1)                       // little endian
-	buf.WriteByte(1)                       // elf version
-	buf.WriteByte(0)                       // system v abi
-	buf.Write(make([]byte, 8))             // padding
-
-	binary.Write(buf, binary.LittleEndian, uint16(2))        // e_type: ET_EXEC
-	binary.Write(buf, binary.LittleEndian, uint16(0x3E))     // e_machine: EM_X86_64
-	binary.Write(buf, binary.LittleEndian, uint32(1))        // e_version
-	binary.Write(buf, binary.LittleEndian, uint64(0x400000)) // e_entry
-	binary.Write(buf, binary.LittleEndian, uint64(64))       // e_phoff
-	binary.Write(buf, binary.LittleEndian, uint64(0))        // e_shoff
-	binary.Write(buf, binary.LittleEndian, uint32(0))        // e_flags
-	binary.Write(buf, binary.LittleEndian, uint16(64))       // e_ehsize
-	binary.Write(buf, binary.LittleEndian, uint16(56))       // e_phentsize
-	binary.Write(buf, binary.LittleEndian, uint16(0))        // e_phnum
-	binary.Write(buf, binary.LittleEndian, uint16(64))       // e_shentsize
-	binary.Write(buf, binary.LittleEndian, uint16(0))        // e_shnum
-	binary.Write(buf, binary.LittleEndian, uint16(0))        // e_shstrndx
-
+	writeELF64Header(buf, binary.LittleEndian, 0x3E, 0x400000) // EM_X86_64
 	return buf.Bytes()
 }
 
 // createELFBigEndian creates a big-endian ELF binary
 func createELFBigEndian() []byte {
 	buf := new(bytes.Buffer)
-
-	// elf header (64 bytes)
-	buf.Write([]byte{0x7F, 'E', 'L', 'F'}) // magic
-	buf.WriteByte(2)                       // 64-bit
-	buf.WriteByte(2)                       // big endian
-	buf.WriteByte(1)                       // elf version
-	buf.WriteByte(0)                       // system v abi
-	buf.Write(make([]byte, 8))             // padding
-
-	binary.Write(buf, binary.BigEndian, uint16(2))        // e_type: ET_EXEC
-	binary.Write(buf, binary.BigEndian, uint16(0x3E))     // e_machine: EM_X86_64
-	binary.Write(buf, binary.BigEndian, uint32(1))        // e_version
-	binary.Write(buf, binary.BigEndian, uint64(0x400000)) // e_entry
-	binary.Write(buf, binary.BigEndian, uint64(64))       // e_phoff
-	binary.Write(buf, binary.BigEndian, uint64(0))        // e_shoff
-	binary.Write(buf, binary.BigEndian, uint32(0))        // e_flags
-	binary.Write(buf, binary.BigEndian, uint16(64))       // e_ehsize
-	binary.Write(buf, binary.BigEndian, uint16(56))       // e_phentsize
-	binary.Write(buf, binary.BigEndian, uint16(0))        // e_phnum
-	binary.Write(buf, binary.BigEndian, uint16(64))       // e_shentsize
-	binary.Write(buf, binary.BigEndian, uint16(0))        // e_shnum
-	binary.Write(buf, binary.BigEndian, uint16(0))        // e_shstrndx
-
+	writeELF64Header(buf, binary.BigEndian, 0x3E, 0x400000) // EM_X86_64
 	return buf.Bytes()
 }
 

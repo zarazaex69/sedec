@@ -6,12 +6,12 @@ import (
 	"github.com/zarazaex69/sedec/pkg/disasm/capstone"
 )
 
-// Disassembler provides x86_64 disassembly using Capstone Engine
+// Disassembler provides x86_64 disassembly using Capstone Engine.
 type Disassembler struct {
 	engine *capstone.Engine
 }
 
-// NewDisassembler creates a new x86_64 disassembler with full ISA extension support
+// NewDisassembler creates a new x86_64 disassembler with full ISA extension support.
 func NewDisassembler() (*Disassembler, error) {
 	// initialize capstone engine for x86_64
 	engine, err := capstone.New(
@@ -43,12 +43,12 @@ func NewDisassembler() (*Disassembler, error) {
 	}, nil
 }
 
-// Close releases resources held by the disassembler engine
+// Close releases resources held by the disassembler engine.
 func (d *Disassembler) Close() error {
 	return d.engine.Close()
 }
 
-// Disassemble decodes a single instruction at the given address
+// Disassemble decodes a single instruction at the given address.
 func (d *Disassembler) Disassemble(bytes []byte, address Address) (*Instruction, error) {
 	if len(bytes) == 0 {
 		return nil, InsufficientBytesError{
@@ -79,8 +79,8 @@ func (d *Disassembler) Disassemble(bytes []byte, address Address) (*Instruction,
 	return d.convertInstruction(&insns[0]), nil
 }
 
-// DisassembleBytes decodes all instructions from the given byte slice
-// Returns partial results even if some instructions fail to decode
+// DisassembleBytes decodes all instructions from the given byte slice.
+// Returns partial results even if some instructions fail to decode.
 func (d *Disassembler) DisassembleBytes(bytes []byte, startAddress Address) ([]*Instruction, error) {
 	if len(bytes) == 0 {
 		return nil, nil
@@ -116,8 +116,8 @@ func (d *Disassembler) DisassembleBytes(bytes []byte, startAddress Address) ([]*
 	return result, nil
 }
 
-// DisassembleFunction decodes all instructions in a function
-// Stops at return instruction or when bytes are exhausted
+// DisassembleFunction decodes all instructions in a function.
+// Stops at return instruction or when bytes are exhausted.
 func (d *Disassembler) DisassembleFunction(bytes []byte, startAddress Address) ([]*Instruction, error) {
 	if len(bytes) == 0 {
 		return nil, nil
@@ -145,7 +145,7 @@ func (d *Disassembler) DisassembleFunction(bytes []byte, startAddress Address) (
 	return result, nil
 }
 
-// convertInstruction converts capstone instruction to internal Instruction type
+// convertInstruction converts capstone instruction to internal Instruction type.
 func (d *Disassembler) convertInstruction(insn *capstone.Instruction) *Instruction {
 	instr := &Instruction{
 		Address:  Address(insn.Address),
@@ -166,7 +166,7 @@ func (d *Disassembler) convertInstruction(insn *capstone.Instruction) *Instructi
 	return instr
 }
 
-// extractOperands extracts operand information from capstone instruction
+// extractOperands extracts operand information from capstone instruction.
 func (d *Disassembler) extractOperands(insn *capstone.Instruction) []Operand {
 	if insn.Detail == nil || insn.Detail.X86 == nil {
 		return nil
@@ -212,7 +212,7 @@ func (d *Disassembler) extractOperands(insn *capstone.Instruction) []Operand {
 	return operands
 }
 
-// getRegisterName converts capstone register ID to register name string
+// getRegisterName converts capstone register ID to register name string.
 func (d *Disassembler) getRegisterName(reg uint32) string {
 	if reg == capstone.RegInvalid {
 		return ""
@@ -227,7 +227,7 @@ func (d *Disassembler) getRegisterName(reg uint32) string {
 	return name
 }
 
-// getRegisterSize determines register size from capstone register ID
+// getRegisterSize determines register size from capstone register ID.
 func (d *Disassembler) getRegisterSize(reg uint32) Size {
 	if reg == capstone.RegInvalid {
 		return 0
@@ -254,7 +254,7 @@ func (d *Disassembler) getRegisterSize(reg uint32) Size {
 	return Size64
 }
 
-// get8BitRegisterSize checks if register is 8-bit
+// get8BitRegisterSize checks if register is 8-bit.
 func (d *Disassembler) get8BitRegisterSize(reg uint32) Size {
 	// 8-bit registers (al, ah, bl, bh, cl, ch, dl, dh, spl, bpl, sil, dil, r8b-r15b)
 	if (reg >= capstone.RegAL && reg <= capstone.RegDH) ||
@@ -265,7 +265,7 @@ func (d *Disassembler) get8BitRegisterSize(reg uint32) Size {
 	return 0
 }
 
-// get16BitRegisterSize checks if register is 16-bit
+// get16BitRegisterSize checks if register is 16-bit.
 func (d *Disassembler) get16BitRegisterSize(reg uint32) Size {
 	// 16-bit registers (ax, bx, cx, dx, si, di, bp, sp, r8w-r15w)
 	if (reg >= capstone.RegAX && reg <= capstone.RegSP) ||
@@ -281,7 +281,7 @@ func (d *Disassembler) get16BitRegisterSize(reg uint32) Size {
 	return 0
 }
 
-// get32BitRegisterSize checks if register is 32-bit
+// get32BitRegisterSize checks if register is 32-bit.
 func (d *Disassembler) get32BitRegisterSize(reg uint32) Size {
 	// 32-bit registers (eax, ebx, ecx, edx, esi, edi, ebp, esp, r8d-r15d)
 	if (reg >= capstone.RegEAX && reg <= capstone.RegESP) ||
@@ -291,7 +291,7 @@ func (d *Disassembler) get32BitRegisterSize(reg uint32) Size {
 	return 0
 }
 
-// get64BitRegisterSize checks if register is 64-bit
+// get64BitRegisterSize checks if register is 64-bit.
 func (d *Disassembler) get64BitRegisterSize(reg uint32) Size {
 	// 64-bit general purpose registers (rax, rbx, rcx, rdx, rsi, rdi, rbp, rsp, r8-r15)
 	if reg >= capstone.RegRAX && reg <= capstone.RegR15 {
@@ -311,7 +311,7 @@ func (d *Disassembler) get64BitRegisterSize(reg uint32) Size {
 	return 0
 }
 
-// getVectorRegisterSize checks if register is vector register (xmm, ymm, zmm)
+// getVectorRegisterSize checks if register is vector register (xmm, ymm, zmm).
 func (d *Disassembler) getVectorRegisterSize(reg uint32) Size {
 	// xmm registers (128-bit) - sse
 	if reg >= 224 && reg <= 255 { // xmm0-xmm31

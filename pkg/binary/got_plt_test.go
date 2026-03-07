@@ -1,15 +1,11 @@
 package binfmt
 
 import (
-	"bytes"
-	"debug/elf"
-	"encoding/binary"
 	"testing"
 )
 
 // TestResolveGOTEntries_ELF tests GOT resolution for ELF binaries
 func TestResolveGOTEntries_ELF(t *testing.T) {
-	//nolint:govet // fieldalignment: test struct, performance not critical
 	tests := []struct {
 		name          string
 		setupBinary   func() *BinaryInfo
@@ -55,13 +51,14 @@ func TestResolveGOTEntries_ELF(t *testing.T) {
 			},
 			expectedCount: 2,
 			validateEntry: func(t *testing.T, entries map[Address]*GOTEntry) {
+				t.Helper()
 				// validate printf entry
 				printfEntry, exists := entries[0x601018]
 				if !exists {
 					t.Fatal("printf got entry not found")
 				}
-				if printfEntry.TargetSymbol != "printf" {
-					t.Errorf("expected symbol 'printf', got '%s'", printfEntry.TargetSymbol)
+				if printfEntry.TargetSymbol != testSymbolPrintf {
+					t.Errorf("expected symbol '%s', got '%s'", testSymbolPrintf, printfEntry.TargetSymbol)
 				}
 				if printfEntry.TargetAddress != 0x400500 {
 					t.Errorf("expected target address 0x400500, got 0x%x", printfEntry.TargetAddress)
@@ -72,8 +69,8 @@ func TestResolveGOTEntries_ELF(t *testing.T) {
 				if !exists {
 					t.Fatal("malloc got entry not found")
 				}
-				if mallocEntry.TargetSymbol != "malloc" {
-					t.Errorf("expected symbol 'malloc', got '%s'", mallocEntry.TargetSymbol)
+				if mallocEntry.TargetSymbol != testSymbolMalloc {
+					t.Errorf("expected symbol '%s', got '%s'", testSymbolMalloc, mallocEntry.TargetSymbol)
 				}
 				if mallocEntry.TargetAddress != 0x400600 {
 					t.Errorf("expected target address 0x400600, got 0x%x", mallocEntry.TargetAddress)
@@ -107,6 +104,7 @@ func TestResolveGOTEntries_ELF(t *testing.T) {
 			},
 			expectedCount: 1,
 			validateEntry: func(t *testing.T, entries map[Address]*GOTEntry) {
+				t.Helper()
 				entry, exists := entries[0x601000]
 				if !exists {
 					t.Fatal("relative relocation entry not found")
@@ -161,7 +159,6 @@ func TestResolveGOTEntries_ELF(t *testing.T) {
 
 // TestResolvePLTStubs_ELF tests PLT resolution for ELF binaries
 func TestResolvePLTStubs_ELF(t *testing.T) {
-	//nolint:govet // fieldalignment: test struct, performance not critical
 	tests := []struct {
 		name          string
 		setupBinary   func() *BinaryInfo
@@ -213,7 +210,6 @@ func TestResolvePLTStubs_ELF(t *testing.T) {
 
 // TestCalculateBaseAddress tests base address calculation for PIE/PIC binaries
 func TestCalculateBaseAddress(t *testing.T) {
-	//nolint:govet // fieldalignment: test struct, performance not critical
 	tests := []struct {
 		name         string
 		setupBinary  func() *BinaryInfo
@@ -452,123 +448,7 @@ func TestResolveGOTEntries_PE(t *testing.T) {
 	if !exists {
 		t.Fatal("printf iat entry not found")
 	}
-	if printfEntry.TargetSymbol != "printf" {
-		t.Errorf("expected symbol 'printf', got '%s'", printfEntry.TargetSymbol)
+	if printfEntry.TargetSymbol != testSymbolPrintf {
+		t.Errorf("expected symbol '%s', got '%s'", testSymbolPrintf, printfEntry.TargetSymbol)
 	}
-}
-
-// Helper functions for creating test ELF files
-
-func createMinimalELFFile(t *testing.T) *elf.File {
-	t.Helper()
-
-	// create minimal valid elf header
-	buf := new(bytes.Buffer)
-
-	// elf header
-	buf.Write([]byte{0x7f, 'E', 'L', 'F'}) // magic
-	buf.WriteByte(2)                       // 64-bit
-	buf.WriteByte(1)                       // little endian
-	buf.WriteByte(1)                       // elf version
-	buf.Write(make([]byte, 9))             // padding
-
-	// write minimal elf64 header
-	binary.Write(buf, binary.LittleEndian, uint16(elf.ET_DYN))    // type
-	binary.Write(buf, binary.LittleEndian, uint16(elf.EM_X86_64)) // machine
-	binary.Write(buf, binary.LittleEndian, uint32(1))             // version
-	binary.Write(buf, binary.LittleEndian, uint64(0x400000))      // entry
-	binary.Write(buf, binary.LittleEndian, uint64(64))            // phoff
-	binary.Write(buf, binary.LittleEndian, uint64(0))             // shoff
-	binary.Write(buf, binary.LittleEndian, uint32(0))             // flags
-	binary.Write(buf, binary.LittleEndian, uint16(64))            // ehsize
-	binary.Write(buf, binary.LittleEndian, uint16(56))            // phentsize
-	binary.Write(buf, binary.LittleEndian, uint16(0))             // phnum
-	binary.Write(buf, binary.LittleEndian, uint16(64))            // shentsize
-	binary.Write(buf, binary.LittleEndian, uint16(0))             // shnum
-	binary.Write(buf, binary.LittleEndian, uint16(0))             // shstrndx
-
-	elfFile, err := elf.NewFile(bytes.NewReader(buf.Bytes()))
-	if err != nil {
-		t.Fatalf("failed to create minimal elf: %v", err)
-	}
-
-	return elfFile
-}
-
-func createELFWithPTLoad(t *testing.T, vaddr uint64) *elf.File {
-	t.Helper()
-
-	buf := new(bytes.Buffer)
-
-	// elf header
-	buf.Write([]byte{0x7f, 'E', 'L', 'F'})
-	buf.WriteByte(2)
-	buf.WriteByte(1)
-	buf.WriteByte(1)
-	buf.Write(make([]byte, 9))
-
-	binary.Write(buf, binary.LittleEndian, uint16(elf.ET_DYN))
-	binary.Write(buf, binary.LittleEndian, uint16(elf.EM_X86_64))
-	binary.Write(buf, binary.LittleEndian, uint32(1))
-	binary.Write(buf, binary.LittleEndian, vaddr)
-	binary.Write(buf, binary.LittleEndian, uint64(64)) // phoff
-	binary.Write(buf, binary.LittleEndian, uint64(0))  // shoff
-	binary.Write(buf, binary.LittleEndian, uint32(0))
-	binary.Write(buf, binary.LittleEndian, uint16(64))
-	binary.Write(buf, binary.LittleEndian, uint16(56))
-	binary.Write(buf, binary.LittleEndian, uint16(1)) // phnum
-	binary.Write(buf, binary.LittleEndian, uint16(64))
-	binary.Write(buf, binary.LittleEndian, uint16(0))
-	binary.Write(buf, binary.LittleEndian, uint16(0))
-
-	// program header (pt_load)
-	binary.Write(buf, binary.LittleEndian, uint32(elf.PT_LOAD)) // type
-	binary.Write(buf, binary.LittleEndian, uint32(5))           // flags (r-x)
-	binary.Write(buf, binary.LittleEndian, uint64(0))           // offset
-	binary.Write(buf, binary.LittleEndian, vaddr)               // vaddr
-	binary.Write(buf, binary.LittleEndian, vaddr)               // paddr
-	binary.Write(buf, binary.LittleEndian, uint64(0x1000))      // filesz
-	binary.Write(buf, binary.LittleEndian, uint64(0x1000))      // memsz
-	binary.Write(buf, binary.LittleEndian, uint64(0x1000))      // align
-
-	elfFile, err := elf.NewFile(bytes.NewReader(buf.Bytes()))
-	if err != nil {
-		t.Fatalf("failed to create elf with pt_load: %v", err)
-	}
-
-	return elfFile
-}
-
-func createNonPIEELF(t *testing.T) *elf.File {
-	t.Helper()
-
-	buf := new(bytes.Buffer)
-
-	// elf header with et_exec type
-	buf.Write([]byte{0x7f, 'E', 'L', 'F'})
-	buf.WriteByte(2)
-	buf.WriteByte(1)
-	buf.WriteByte(1)
-	buf.Write(make([]byte, 9))
-
-	binary.Write(buf, binary.LittleEndian, uint16(elf.ET_EXEC)) // et_exec (not pie)
-	binary.Write(buf, binary.LittleEndian, uint16(elf.EM_X86_64))
-	binary.Write(buf, binary.LittleEndian, uint32(1))
-	binary.Write(buf, binary.LittleEndian, uint64(0x400000))
-	binary.Write(buf, binary.LittleEndian, uint64(64))
-	binary.Write(buf, binary.LittleEndian, uint64(0))
-	binary.Write(buf, binary.LittleEndian, uint32(0))
-	binary.Write(buf, binary.LittleEndian, uint16(64))
-	binary.Write(buf, binary.LittleEndian, uint16(56))
-	binary.Write(buf, binary.LittleEndian, uint16(0))
-	binary.Write(buf, binary.LittleEndian, uint16(64))
-	binary.Write(buf, binary.LittleEndian, uint16(0))
-	binary.Write(buf, binary.LittleEndian, uint16(0))
-
-	elfFile, err := elf.NewFile(bytes.NewReader(buf.Bytes()))
-	if err != nil {
-		t.Fatalf("failed to create non-pie elf: %v", err)
-	}
-
-	return elfFile
 }

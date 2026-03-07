@@ -17,7 +17,11 @@ func TestWithRealPEBinary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() {
+		if closeErr := info.Close(); closeErr != nil {
+			t.Logf("failed to close info: %v", closeErr)
+		}
+	}()
 
 	// verify format detection
 	if info.Format != BinaryFormatPE {
@@ -105,7 +109,11 @@ func TestPESectionProperties(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() {
+		if closeErr := info.Close(); closeErr != nil {
+			t.Logf("failed to close info: %v", closeErr)
+		}
+	}()
 
 	// build section map
 	sectionMap := make(map[string]*Section)
@@ -165,7 +173,11 @@ func TestPESymbolExtraction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() {
+		if closeErr := info.Close(); closeErr != nil {
+			t.Logf("failed to close info: %v", closeErr)
+		}
+	}()
 
 	// pe binaries may have limited symbols in coff table
 	// but we should still test the extraction logic
@@ -199,7 +211,11 @@ func TestPEImportExtraction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() {
+		if closeErr := info.Close(); closeErr != nil {
+			t.Logf("failed to close info: %v", closeErr)
+		}
+	}()
 
 	// pe binaries typically have imports
 	if len(info.Imports) == 0 {
@@ -236,7 +252,11 @@ func TestPEExportExtraction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() {
+		if closeErr := info.Close(); closeErr != nil {
+			t.Logf("failed to close info: %v", closeErr)
+		}
+	}()
 
 	// exe files typically don't have exports (dlls do)
 	t.Logf("Exports: %d", len(info.Exports))
@@ -274,7 +294,11 @@ func TestPERelocationExtraction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() {
+		if closeErr := info.Close(); closeErr != nil {
+			t.Logf("failed to close info: %v", closeErr)
+		}
+	}()
 
 	// pe binaries may have relocations in .reloc section
 	t.Logf("Relocations: %d", len(info.Relocations))
@@ -313,7 +337,11 @@ func TestPEGroundTruthDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() {
+		if closeErr := info.Close(); closeErr != nil {
+			t.Logf("failed to close info: %v", closeErr)
+		}
+	}()
 
 	db := info.GroundTruthDB
 
@@ -358,7 +386,11 @@ func TestPEOptionalHeader32(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() {
+		if closeErr := info.Close(); closeErr != nil {
+			t.Logf("failed to close info: %v", closeErr)
+		}
+	}()
 
 	// verify format
 	if info.Format != BinaryFormatPE {
@@ -391,7 +423,11 @@ func TestPEWithSections(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() {
+		if closeErr := info.Close(); closeErr != nil {
+			t.Logf("failed to close info: %v", closeErr)
+		}
+	}()
 
 	// verify we have sections
 	if len(info.Sections) == 0 {

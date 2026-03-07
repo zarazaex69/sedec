@@ -1,10 +1,24 @@
 package cfg
 
 import (
+	"errors"
 	"fmt"
 
 	"gonum.org/v1/gonum/graph/simple"
 	"gonum.org/v1/gonum/graph/topo"
+)
+
+var (
+	// errLoopInvalidHeader indicates loop has invalid header block
+	errLoopInvalidHeader = errors.New("loop has invalid header block")
+	// errLoopHeaderNotDominate indicates loop header does not dominate body block
+	errLoopHeaderNotDominate = errors.New("loop header does not dominate body block")
+	// errLoopBackEdgeNotToHeader indicates loop has back-edge not targeting header
+	errLoopBackEdgeNotToHeader = errors.New("loop has back-edge not targeting header")
+	// errLoopInconsistentDepth indicates loop has inconsistent depth
+	errLoopInconsistentDepth = errors.New("loop has inconsistent depth")
+	// errLoopTopLevelWrongDepth indicates loop is top-level but has wrong depth
+	errLoopTopLevelWrongDepth = errors.New("loop is top-level but has wrong depth")
 )
 
 // Loop represents a natural loop in the control flow graph
@@ -22,8 +36,6 @@ type Loop struct {
 }
 
 // LoopInfo contains all detected loops and their relationships
-//
-//nolint:govet // fieldalignment: minor memory optimization, readability prioritized
 type LoopInfo struct {
 	BlockToLoops map[BlockID][]*Loop // maps each block to loops it belongs to (innermost first)
 	Loops        []*Loop             // all detected loops
@@ -45,7 +57,7 @@ func NewLoopInfo(cfg *CFG, dt *DominatorTree) *LoopInfo {
 // this is the main entry point for loop detection
 func (b *Builder) DetectLoops() (*LoopInfo, error) {
 	if b.cfg == nil {
-		return nil, fmt.Errorf("cfg not built yet")
+		return nil, errCFGNotBuilt
 	}
 
 	if b.dominatorTree == nil {
@@ -491,7 +503,7 @@ func (li *LoopInfo) VerifyLoopInfo() error {
 	// verify each loop has valid header
 	for i, loop := range li.Loops {
 		if _, exists := li.cfg.Blocks[loop.Header]; !exists {
-			return fmt.Errorf("loop %d has invalid header block %d", i, loop.Header)
+			return fmt.Errorf("%w: loop %d, header %d", errLoopInvalidHeader, i, loop.Header)
 		}
 
 		// verify header dominates all blocks in loop body
@@ -501,25 +513,25 @@ func (li *LoopInfo) VerifyLoopInfo() error {
 			}
 
 			if !li.dt.Dominates(loop.Header, bodyBlock) {
-				return fmt.Errorf("loop %d header %d does not dominate body block %d", i, loop.Header, bodyBlock)
+				return fmt.Errorf("%w: loop %d, header %d, body %d", errLoopHeaderNotDominate, i, loop.Header, bodyBlock)
 			}
 		}
 
 		// verify all back-edges target the header
 		for _, backEdge := range loop.BackEdges {
 			if backEdge.To != loop.Header {
-				return fmt.Errorf("loop %d has back-edge not targeting header: %d -> %d", i, backEdge.From, backEdge.To)
+				return fmt.Errorf("%w: loop %d, edge %d -> %d", errLoopBackEdgeNotToHeader, i, backEdge.From, backEdge.To)
 			}
 		}
 
 		// verify nesting depth consistency
 		if loop.ParentLoop != nil {
 			if loop.Depth != loop.ParentLoop.Depth+1 {
-				return fmt.Errorf("loop %d has inconsistent depth: %d (parent depth: %d)", i, loop.Depth, loop.ParentLoop.Depth)
+				return fmt.Errorf("%w: loop %d, depth %d, parent depth %d", errLoopInconsistentDepth, i, loop.Depth, loop.ParentLoop.Depth)
 			}
 		} else {
 			if loop.Depth != 0 {
-				return fmt.Errorf("loop %d is top-level but has depth %d", i, loop.Depth)
+				return fmt.Errorf("%w: loop %d, depth %d", errLoopTopLevelWrongDepth, i, loop.Depth)
 			}
 		}
 	}

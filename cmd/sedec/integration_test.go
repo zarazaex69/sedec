@@ -23,12 +23,14 @@ func TestIntegration_DisasmRealBinary(t *testing.T) {
 
 	// create simple c program
 	cFile := filepath.Join(tmpDir, "test.c")
+	//nolint:gosec // G306: test code creates temporary files
 	if err := os.WriteFile(cFile, []byte("int main() { return 42; }"), 0o644); err != nil {
 		t.Fatalf("failed to create test.c: %v", err)
 	}
 
 	// compile it
 	binaryFile := filepath.Join(tmpDir, "test")
+	//nolint:gosec,noctx // test code runs gcc with controlled arguments
 	cmd := exec.Command("gcc", "-o", binaryFile, cFile)
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to compile test binary: %v", err)
@@ -65,11 +67,13 @@ func TestIntegration_DisasmMainFunction(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	cFile := filepath.Join(tmpDir, "test.c")
+	//nolint:gosec // G306: test code creates temporary files
 	if err := os.WriteFile(cFile, []byte("int main() { return 42; }"), 0o644); err != nil {
 		t.Fatalf("failed to create test.c: %v", err)
 	}
 
 	binaryFile := filepath.Join(tmpDir, "test")
+	//nolint:gosec,noctx // test code runs gcc with controlled arguments
 	cmd := exec.Command("gcc", "-o", binaryFile, cFile)
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to compile: %v", err)
@@ -110,11 +114,13 @@ func TestIntegration_DisasmByAddress(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	cFile := filepath.Join(tmpDir, "test.c")
+	//nolint:gosec // G306: test code creates temporary files
 	if err := os.WriteFile(cFile, []byte("int main() { return 42; }"), 0o644); err != nil {
 		t.Fatalf("failed to create test.c: %v", err)
 	}
 
 	binaryFile := filepath.Join(tmpDir, "test")
+	//nolint:gosec,noctx // test code runs gcc with controlled arguments
 	cmd := exec.Command("gcc", "-o", binaryFile, cFile)
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to compile: %v", err)
@@ -170,11 +176,13 @@ func TestIntegration_DisasmToFile(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	cFile := filepath.Join(tmpDir, "test.c")
+	//nolint:gosec // G306: test code creates temporary files
 	if err := os.WriteFile(cFile, []byte("int main() { return 42; }"), 0o644); err != nil {
 		t.Fatalf("failed to create test.c: %v", err)
 	}
 
 	binaryFile := filepath.Join(tmpDir, "test")
+	//nolint:gosec,noctx // test code runs gcc with controlled arguments
 	cmd := exec.Command("gcc", "-o", binaryFile, cFile)
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to compile: %v", err)
@@ -195,6 +203,7 @@ func TestIntegration_DisasmToFile(t *testing.T) {
 	}
 
 	// verify output file exists and has content
+	//nolint:gosec // G304: test code reads test files
 	content, err := os.ReadFile(outputFile)
 	if err != nil {
 		t.Fatalf("failed to read output file: %v", err)
@@ -216,17 +225,20 @@ func TestIntegration_DisasmFromStdin(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	cFile := filepath.Join(tmpDir, "test.c")
+	//nolint:gosec // G306: test code creates temporary files
 	if err := os.WriteFile(cFile, []byte("int main() { return 42; }"), 0o644); err != nil {
 		t.Fatalf("failed to create test.c: %v", err)
 	}
 
 	binaryFile := filepath.Join(tmpDir, "test")
+	//nolint:gosec,noctx // test code runs gcc with controlled arguments
 	cmd := exec.Command("gcc", "-o", binaryFile, cFile)
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to compile: %v", err)
 	}
 
 	// read binary into memory
+	//nolint:gosec // G304: test code reads test files
 	binaryData, err := os.ReadFile(binaryFile)
 	if err != nil {
 		t.Fatalf("failed to read binary: %v", err)
@@ -256,11 +268,13 @@ func TestIntegration_DisasmIntelSyntax(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	cFile := filepath.Join(tmpDir, "test.c")
+	//nolint:gosec // G306: test code creates temporary files
 	if err := os.WriteFile(cFile, []byte("int main() { return 42; }"), 0o644); err != nil {
 		t.Fatalf("failed to create test.c: %v", err)
 	}
 
 	binaryFile := filepath.Join(tmpDir, "test")
+	//nolint:gosec,noctx // test code runs gcc with controlled arguments
 	cmd := exec.Command("gcc", "-o", binaryFile, cFile)
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to compile: %v", err)
@@ -299,11 +313,13 @@ int main() {
     return add(x, y);
 }
 `
+	//nolint:gosec // G306: test code creates temporary files
 	if err := os.WriteFile(cFile, []byte(code), 0o644); err != nil {
 		t.Fatalf("failed to create test.c: %v", err)
 	}
 
 	binaryFile := filepath.Join(tmpDir, "test")
+	//nolint:gosec,noctx // test code runs gcc with controlled arguments
 	cmd := exec.Command("gcc", "-o", binaryFile, cFile)
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("failed to compile: %v", err)

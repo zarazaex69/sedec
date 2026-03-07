@@ -4,16 +4,40 @@ import (
 	"debug/elf"
 	"debug/macho"
 	"encoding/binary"
+	"errors"
 	"fmt"
 )
 
 const (
-	// mach-o segment names
+	// mach-o segment names.
 	segmentNameText = "__TEXT"
 )
 
-// GOTEntry represents a Global Offset Table entry
-// fields ordered for optimal memory alignment
+var (
+	// errBinaryInfoNil indicates binary info is nil.
+	errBinaryInfoNil = errors.New("binary info is nil")
+	// errUnsupportedBinaryFormat indicates unsupported binary format.
+	errUnsupportedBinaryFormat = errors.New("unsupported binary format")
+	// errELFFileNil indicates elf file is nil.
+	errELFFileNil = errors.New("elf file is nil")
+	// errUnknownELFClass indicates unknown elf class.
+	errUnknownELFClass = errors.New("unknown elf class")
+	// errUnsupportedArchitecture indicates unsupported architecture.
+	errUnsupportedArchitecture = errors.New("unsupported architecture for plt resolution")
+	// errPLTEntryTooShort indicates plt entry too short.
+	errPLTEntryTooShort = errors.New("plt entry too short")
+	// errInvalidPLTEntry indicates invalid plt entry.
+	errInvalidPLTEntry = errors.New("invalid plt entry: expected jmp instruction")
+	// errMachOFileNil indicates mach-o file is nil.
+	errMachOFileNil = errors.New("mach-o file is nil")
+	// errStubTooShort indicates stub too short.
+	errStubTooShort = errors.New("stub too short")
+	// errInvalidStub indicates invalid stub.
+	errInvalidStub = errors.New("invalid stub: expected jmp instruction")
+)
+
+// GOTEntry represents a Global Offset Table entry.
+// fields ordered for optimal memory alignment.
 type GOTEntry struct {
 	TargetSymbol  string         // 16 bytes (pointer + length)
 	Address       Address        // 8 bytes
@@ -22,8 +46,8 @@ type GOTEntry struct {
 	// total: 36 bytes (with padding: 40 bytes)
 }
 
-// PLTEntry represents a Procedure Linkage Table stub
-// fields ordered for optimal memory alignment
+// PLTEntry represents a Procedure Linkage Table stub.
+// fields ordered for optimal memory alignment.
 type PLTEntry struct {
 	TargetSymbol  string  // 16 bytes (pointer + length)
 	Address       Address // 8 bytes
@@ -40,7 +64,7 @@ type PLTEntry struct {
 // The function returns a map for constant-time address resolution during analysis.
 func (p *StandardLibParser) ResolveGOTEntries(info *BinaryInfo) (map[Address]*GOTEntry, error) {
 	if info == nil {
-		return nil, fmt.Errorf("binary info is nil")
+		return nil, errBinaryInfoNil
 	}
 
 	gotEntries := make(map[Address]*GOTEntry)
@@ -52,8 +76,10 @@ func (p *StandardLibParser) ResolveGOTEntries(info *BinaryInfo) (map[Address]*GO
 		return p.resolvePEGOT(info, gotEntries)
 	case BinaryFormatMachO:
 		return p.resolveMachOGOT(info, gotEntries)
+	case BinaryFormatUnknown:
+		return nil, fmt.Errorf("%w: %v", errUnsupportedBinaryFormat, info.Format)
 	default:
-		return nil, fmt.Errorf("unsupported binary format: %v", info.Format)
+		return nil, fmt.Errorf("%w: %v", errUnsupportedBinaryFormat, info.Format)
 	}
 }
 
@@ -71,7 +97,7 @@ func (p *StandardLibParser) ResolveGOTEntries(info *BinaryInfo) (map[Address]*GO
 // The function returns a map for O(1) lookup during control flow analysis.
 func (p *StandardLibParser) ResolvePLTStubs(info *BinaryInfo) (map[Address]*PLTEntry, error) {
 	if info == nil {
-		return nil, fmt.Errorf("binary info is nil")
+		return nil, errBinaryInfoNil
 	}
 
 	pltEntries := make(map[Address]*PLTEntry)
@@ -84,8 +110,10 @@ func (p *StandardLibParser) ResolvePLTStubs(info *BinaryInfo) (map[Address]*PLTE
 		return p.resolvePEIAT(info, pltEntries)
 	case BinaryFormatMachO:
 		return p.resolveMachOPLT(info, pltEntries)
+	case BinaryFormatUnknown:
+		return nil, fmt.Errorf("%w: %v", errUnsupportedBinaryFormat, info.Format)
 	default:
-		return nil, fmt.Errorf("unsupported binary format: %v", info.Format)
+		return nil, fmt.Errorf("%w: %v", errUnsupportedBinaryFormat, info.Format)
 	}
 }
 
@@ -94,12 +122,12 @@ func (p *StandardLibParser) ResolvePLTStubs(info *BinaryInfo) (map[Address]*PLTE
 // from the link-time base address. This function determines the correct base
 // by analyzing PT_LOAD segments and their virtual addresses.
 //
-// For ELF: finds the lowest PT_LOAD segment virtual address
-// For PE: uses ImageBase from optional header
-// For Mach-O: uses __TEXT segment virtual address
+// For ELF: finds the lowest PT_LOAD segment virtual address.
+// For PE: uses ImageBase from optional header.
+// For Mach-O: uses __TEXT segment virtual address.
 func (p *StandardLibParser) CalculateBaseAddress(info *BinaryInfo) (Address, error) {
 	if info == nil {
-		return 0, fmt.Errorf("binary info is nil")
+		return 0, errBinaryInfoNil
 	}
 
 	switch info.Format {
@@ -110,15 +138,17 @@ func (p *StandardLibParser) CalculateBaseAddress(info *BinaryInfo) (Address, err
 		return info.BaseAddress, nil
 	case BinaryFormatMachO:
 		return p.calculateMachOBaseAddress(info)
+	case BinaryFormatUnknown:
+		return 0, fmt.Errorf("%w: %v", errUnsupportedBinaryFormat, info.Format)
 	default:
-		return 0, fmt.Errorf("unsupported binary format: %v", info.Format)
+		return 0, fmt.Errorf("%w: %v", errUnsupportedBinaryFormat, info.Format)
 	}
 }
 
-// resolveELFGOT resolves GOT entries for ELF binaries
+// resolveELFGOT resolves GOT entries for ELF binaries.
 func (p *StandardLibParser) resolveELFGOT(info *BinaryInfo, gotEntries map[Address]*GOTEntry) (map[Address]*GOTEntry, error) {
 	if info.elfFile == nil {
-		return nil, fmt.Errorf("elf file is nil")
+		return nil, errELFFileNil
 	}
 
 	// find .got and .got.plt sections
@@ -143,7 +173,7 @@ func (p *StandardLibParser) resolveELFGOT(info *BinaryInfo, gotEntries map[Addre
 	return gotEntries, nil
 }
 
-// findELFGOTSections finds .got and .got.plt sections
+// findELFGOTSections finds .got and .got.plt sections.
 func (p *StandardLibParser) findELFGOTSections(elfFile *elf.File) (gotSection, gotPltSection *elf.Section) {
 	for _, section := range elfFile.Sections {
 		switch section.Name {
@@ -156,7 +186,7 @@ func (p *StandardLibParser) findELFGOTSections(elfFile *elf.File) (gotSection, g
 	return gotSection, gotPltSection
 }
 
-// processELFRelocations processes relocations and creates GOT entries
+// processELFRelocations processes relocations and creates GOT entries.
 func (p *StandardLibParser) processELFRelocations(info *BinaryInfo, gotEntries map[Address]*GOTEntry) {
 	for _, reloc := range info.Relocations {
 		entry := p.createGOTEntryFromRelocation(info, reloc)
@@ -170,7 +200,7 @@ func (p *StandardLibParser) processELFRelocations(info *BinaryInfo, gotEntries m
 	}
 }
 
-// createGOTEntryFromRelocation creates a GOT entry from a relocation
+// createGOTEntryFromRelocation creates a GOT entry from a relocation.
 func (p *StandardLibParser) createGOTEntryFromRelocation(info *BinaryInfo, reloc *Relocation) *GOTEntry {
 	switch reloc.Type {
 	case RelocationTypeGOT, RelocationTypeGlobDat:
@@ -179,12 +209,14 @@ func (p *StandardLibParser) createGOTEntryFromRelocation(info *BinaryInfo, reloc
 		return p.createJumpSlotGOTEntry(info, reloc)
 	case RelocationTypeRelative:
 		return p.createRelativeGOTEntry(info, reloc)
+	case RelocationTypeUnknown, RelocationTypeAbsolute, RelocationTypePLT, RelocationTypeCopy:
+		return nil
 	default:
 		return nil
 	}
 }
 
-// createGlobalDataGOTEntry creates GOT entry for global data
+// createGlobalDataGOTEntry creates GOT entry for global data.
 func (p *StandardLibParser) createGlobalDataGOTEntry(info *BinaryInfo, reloc *Relocation) *GOTEntry {
 	entry := &GOTEntry{
 		Address:      reloc.Address,
@@ -198,7 +230,7 @@ func (p *StandardLibParser) createGlobalDataGOTEntry(info *BinaryInfo, reloc *Re
 	return entry
 }
 
-// createJumpSlotGOTEntry creates GOT entry for PLT stub
+// createJumpSlotGOTEntry creates GOT entry for PLT stub.
 func (p *StandardLibParser) createJumpSlotGOTEntry(info *BinaryInfo, reloc *Relocation) *GOTEntry {
 	entry := &GOTEntry{
 		Address:      reloc.Address,
@@ -212,7 +244,7 @@ func (p *StandardLibParser) createJumpSlotGOTEntry(info *BinaryInfo, reloc *Relo
 	return entry
 }
 
-// createRelativeGOTEntry creates GOT entry for relative relocation
+// createRelativeGOTEntry creates GOT entry for relative relocation.
 func (p *StandardLibParser) createRelativeGOTEntry(info *BinaryInfo, reloc *Relocation) *GOTEntry {
 	// for pie/pic binaries, use info.BaseAddress if set, otherwise calculate
 	baseAddr := info.BaseAddress
@@ -241,7 +273,7 @@ func (p *StandardLibParser) createRelativeGOTEntry(info *BinaryInfo, reloc *Relo
 	}
 }
 
-// parseELFGOTSection parses a GOT section and extracts entries
+// parseELFGOTSection parses a GOT section and extracts entries.
 func (p *StandardLibParser) parseELFGOTSection(info *BinaryInfo, section *elf.Section, gotEntries map[Address]*GOTEntry) error {
 	data, err := section.Data()
 	if err != nil {
@@ -255,8 +287,10 @@ func (p *StandardLibParser) parseELFGOTSection(info *BinaryInfo, section *elf.Se
 		pointerSize = 8
 	case elf.ELFCLASS32:
 		pointerSize = 4
+	case elf.ELFCLASSNONE:
+		return fmt.Errorf("%w: %v", errUnknownELFClass, info.elfFile.Class)
 	default:
-		return fmt.Errorf("unknown elf class: %v", info.elfFile.Class)
+		return fmt.Errorf("%w: %v", errUnknownELFClass, info.elfFile.Class)
 	}
 
 	// iterate through got entries
@@ -301,10 +335,10 @@ func (p *StandardLibParser) parseELFGOTSection(info *BinaryInfo, section *elf.Se
 	return nil
 }
 
-// resolveELFPLT resolves PLT stubs for ELF binaries
+// resolveELFPLT resolves PLT stubs for ELF binaries.
 func (p *StandardLibParser) resolveELFPLT(info *BinaryInfo, pltEntries map[Address]*PLTEntry) (map[Address]*PLTEntry, error) {
 	if info.elfFile == nil {
-		return nil, fmt.Errorf("elf file is nil")
+		return nil, errELFFileNil
 	}
 
 	// find .plt and .plt.got sections
@@ -330,7 +364,7 @@ func (p *StandardLibParser) resolveELFPLT(info *BinaryInfo, pltEntries map[Addre
 	return pltEntries, nil
 }
 
-// findELFPLTSections finds .plt and .plt.got sections
+// findELFPLTSections finds .plt and .plt.got sections.
 func (p *StandardLibParser) findELFPLTSections(elfFile *elf.File) (pltSection, pltGotSection *elf.Section) {
 	for _, section := range elfFile.Sections {
 		switch section.Name {
@@ -343,7 +377,7 @@ func (p *StandardLibParser) findELFPLTSections(elfFile *elf.File) (pltSection, p
 	return pltSection, pltGotSection
 }
 
-// processELFPLTSection processes main PLT section
+// processELFPLTSection processes main PLT section.
 func (p *StandardLibParser) processELFPLTSection(info *BinaryInfo, pltSection *elf.Section, pltEntries map[Address]*PLTEntry) error {
 	// read plt section data
 	pltData, err := pltSection.Data()
@@ -379,19 +413,22 @@ func (p *StandardLibParser) processELFPLTSection(info *BinaryInfo, pltSection *e
 	return nil
 }
 
-// getPLTEntrySize returns PLT entry size for architecture
+// getPLTEntrySize returns PLT entry size for architecture.
 func (p *StandardLibParser) getPLTEntrySize(arch Architecture) (int, error) {
 	switch arch {
 	case ArchitectureX86_64, ArchitectureX86, ArchitectureARM64:
 		return 16, nil
 	case ArchitectureARM:
 		return 12, nil
+	case ArchitectureUnknown, ArchitectureMIPS, ArchitectureMIPS64,
+		ArchitecturePPC, ArchitecturePPC64, ArchitectureRISCV, ArchitectureRISCV64:
+		return 0, fmt.Errorf("%w: %v", errUnsupportedArchitecture, arch)
 	default:
-		return 0, fmt.Errorf("unsupported architecture for plt resolution: %v", arch)
+		return 0, fmt.Errorf("%w: %v", errUnsupportedArchitecture, arch)
 	}
 }
 
-// parseSinglePLTEntry parses a single PLT entry and creates PLTEntry
+// parseSinglePLTEntry parses a single PLT entry and creates PLTEntry.
 func (p *StandardLibParser) parseSinglePLTEntry(info *BinaryInfo, data []byte, pltAddr Address) *PLTEntry {
 	// parse plt entry to extract got address
 	gotAddress, parseErr := p.parseELFPLTEntry(info, data, pltAddr)
@@ -413,7 +450,7 @@ func (p *StandardLibParser) parseSinglePLTEntry(info *BinaryInfo, data []byte, p
 	}
 }
 
-// findSymbolForGOTAddress finds symbol name for GOT address
+// findSymbolForGOTAddress finds symbol name for GOT address.
 func (p *StandardLibParser) findSymbolForGOTAddress(info *BinaryInfo, gotAddress Address) string {
 	for _, reloc := range info.Relocations {
 		if reloc.Address == gotAddress && reloc.Type == RelocationTypeJumpSlot {
@@ -423,10 +460,10 @@ func (p *StandardLibParser) findSymbolForGOTAddress(info *BinaryInfo, gotAddress
 	return ""
 }
 
-// parseELFPLTEntry extracts the GOT address from a PLT entry
+// parseELFPLTEntry extracts the GOT address from a PLT entry.
 func (p *StandardLibParser) parseELFPLTEntry(info *BinaryInfo, data []byte, pltAddr Address) (Address, error) {
 	if len(data) < 6 {
-		return 0, fmt.Errorf("plt entry too short")
+		return 0, errPLTEntryTooShort
 	}
 
 	switch info.Architecture {
@@ -438,7 +475,7 @@ func (p *StandardLibParser) parseELFPLTEntry(info *BinaryInfo, data []byte, pltA
 
 		// check for jmp instruction (0xff 0x25)
 		if data[0] != 0xff || data[1] != 0x25 {
-			return 0, fmt.Errorf("invalid plt entry: expected jmp instruction")
+			return 0, errInvalidPLTEntry
 		}
 
 		// extract rip-relative offset (little endian)
@@ -472,7 +509,7 @@ func (p *StandardLibParser) parseELFPLTEntry(info *BinaryInfo, data []byte, pltA
 		// jmp PLT[0]   ; e9 xx xx xx xx
 
 		if data[0] != 0xff || data[1] != 0x25 {
-			return 0, fmt.Errorf("invalid plt entry: expected jmp instruction")
+			return 0, errInvalidPLTEntry
 		}
 
 		// extract absolute got address (little endian)
@@ -480,12 +517,16 @@ func (p *StandardLibParser) parseELFPLTEntry(info *BinaryInfo, data []byte, pltA
 
 		return gotAddr, nil
 
+	case ArchitectureUnknown, ArchitectureARM64, ArchitectureARM,
+		ArchitectureMIPS, ArchitectureMIPS64, ArchitecturePPC, ArchitecturePPC64,
+		ArchitectureRISCV, ArchitectureRISCV64:
+		return 0, fmt.Errorf("%w: %v", errUnsupportedArchitecture, info.Architecture)
 	default:
-		return 0, fmt.Errorf("unsupported architecture: %v", info.Architecture)
+		return 0, fmt.Errorf("%w: %v", errUnsupportedArchitecture, info.Architecture)
 	}
 }
 
-// parseELFPLTGotSection parses .plt.got section (used for non-lazy binding)
+// parseELFPLTGotSection parses .plt.got section (used for non-lazy binding).
 func (p *StandardLibParser) parseELFPLTGotSection(info *BinaryInfo, section *elf.Section, pltEntries map[Address]*PLTEntry) error {
 	data, err := section.Data()
 	if err != nil {
@@ -538,10 +579,10 @@ func (p *StandardLibParser) parseELFPLTGotSection(info *BinaryInfo, section *elf
 	return nil
 }
 
-// calculateELFBaseAddress computes base address for ELF PIE/PIC binaries
+// calculateELFBaseAddress computes base address for ELF PIE/PIC binaries.
 func (p *StandardLibParser) calculateELFBaseAddress(info *BinaryInfo) (Address, error) {
 	if info.elfFile == nil {
-		return 0, fmt.Errorf("elf file is nil")
+		return 0, errELFFileNil
 	}
 
 	// check if this is a pie/pic binary
@@ -571,7 +612,7 @@ func (p *StandardLibParser) calculateELFBaseAddress(info *BinaryInfo) (Address, 
 	return Address(minVAddr), nil
 }
 
-// resolvePEGOT resolves GOT-equivalent entries for PE binaries (IAT)
+// resolvePEGOT resolves GOT-equivalent entries for PE binaries (IAT).
 func (p *StandardLibParser) resolvePEGOT(info *BinaryInfo, gotEntries map[Address]*GOTEntry) (map[Address]*GOTEntry, error) {
 	// pe uses import address table (iat) instead of got
 	// iat entries are resolved during import parsing
@@ -591,7 +632,7 @@ func (p *StandardLibParser) resolvePEGOT(info *BinaryInfo, gotEntries map[Addres
 	return gotEntries, nil
 }
 
-// resolvePEIAT resolves Import Address Table for PE binaries
+// resolvePEIAT resolves Import Address Table for PE binaries.
 func (p *StandardLibParser) resolvePEIAT(info *BinaryInfo, pltEntries map[Address]*PLTEntry) (map[Address]*PLTEntry, error) {
 	// pe doesn't have plt stubs like elf
 	// instead, calls go directly through iat
@@ -610,7 +651,7 @@ func (p *StandardLibParser) resolvePEIAT(info *BinaryInfo, pltEntries map[Addres
 	return pltEntries, nil
 }
 
-// resolveMachOGOT resolves GOT entries for Mach-O binaries
+// resolveMachOGOT resolves GOT entries for Mach-O binaries.
 func (p *StandardLibParser) resolveMachOGOT(info *BinaryInfo, gotEntries map[Address]*GOTEntry) (map[Address]*GOTEntry, error) {
 	// mach-o uses __DATA.__got and __DATA.__la_symbol_ptr sections
 	// resolve from relocations
@@ -634,7 +675,7 @@ func (p *StandardLibParser) resolveMachOGOT(info *BinaryInfo, gotEntries map[Add
 	return gotEntries, nil
 }
 
-// resolveMachOPLT resolves PLT-equivalent stubs for Mach-O binaries
+// resolveMachOPLT resolves PLT-equivalent stubs for Mach-O binaries.
 func (p *StandardLibParser) resolveMachOPLT(info *BinaryInfo, pltEntries map[Address]*PLTEntry) (map[Address]*PLTEntry, error) {
 	// mach-o uses __TEXT.__stubs section for lazy binding
 	if info.machoFile == nil {
@@ -661,6 +702,10 @@ func (p *StandardLibParser) resolveMachOPLT(info *BinaryInfo, pltEntries map[Add
 		stubSize = 6 // jmp *addr(%rip)
 	case ArchitectureARM64:
 		stubSize = 12 // 3 instructions
+	case ArchitectureUnknown, ArchitectureX86, ArchitectureARM,
+		ArchitectureMIPS, ArchitectureMIPS64, ArchitecturePPC, ArchitecturePPC64,
+		ArchitectureRISCV, ArchitectureRISCV64:
+		return pltEntries, nil
 	default:
 		return pltEntries, nil
 	}
@@ -704,17 +749,17 @@ func (p *StandardLibParser) resolveMachOPLT(info *BinaryInfo, pltEntries map[Add
 	return pltEntries, nil
 }
 
-// parseMachOStub extracts GOT address from Mach-O stub
+// parseMachOStub extracts GOT address from Mach-O stub.
 func (p *StandardLibParser) parseMachOStub(info *BinaryInfo, data []byte, stubAddr Address) (Address, error) {
 	if len(data) < 6 {
-		return 0, fmt.Errorf("stub too short")
+		return 0, errStubTooShort
 	}
 
 	switch info.Architecture {
 	case ArchitectureX86_64:
 		// x86_64 stub: jmp *addr(%rip)  ; ff 25 xx xx xx xx
 		if data[0] != 0xff || data[1] != 0x25 {
-			return 0, fmt.Errorf("invalid stub: expected jmp instruction")
+			return 0, errInvalidStub
 		}
 
 		// extract rip-relative offset with safe sign extension
@@ -739,15 +784,19 @@ func (p *StandardLibParser) parseMachOStub(info *BinaryInfo, data []byte, stubAd
 
 		return gotAddr, nil
 
+	case ArchitectureUnknown, ArchitectureX86, ArchitectureARM64, ArchitectureARM,
+		ArchitectureMIPS, ArchitectureMIPS64, ArchitecturePPC, ArchitecturePPC64,
+		ArchitectureRISCV, ArchitectureRISCV64:
+		return 0, fmt.Errorf("%w: %v", errUnsupportedArchitecture, info.Architecture)
 	default:
-		return 0, fmt.Errorf("unsupported architecture: %v", info.Architecture)
+		return 0, fmt.Errorf("%w: %v", errUnsupportedArchitecture, info.Architecture)
 	}
 }
 
-// calculateMachOBaseAddress computes base address for Mach-O binaries
+// calculateMachOBaseAddress computes base address for Mach-O binaries.
 func (p *StandardLibParser) calculateMachOBaseAddress(info *BinaryInfo) (Address, error) {
 	if info.machoFile == nil {
-		return 0, fmt.Errorf("mach-o file is nil")
+		return 0, errMachOFileNil
 	}
 
 	// find __TEXT segment

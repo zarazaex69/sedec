@@ -7,6 +7,10 @@ import (
 	"testing"
 )
 
+const (
+	testSymbolNameMain = "main"
+)
+
 // TestStandardLibParser_DetectFormat tests format detection for ELF, PE, and Mach-O
 func TestStandardLibParser_DetectFormat(t *testing.T) {
 	parser := NewStandardLibParser()
@@ -59,27 +63,30 @@ func TestStandardLibParser_DetectFormat(t *testing.T) {
 
 			// test full parse
 			info, err := parser.Parse(tt.data)
-			if !tt.shouldError {
-				if err != nil {
-					t.Errorf("Parse() unexpected error: %v", err)
+			if tt.shouldError {
+				if err == nil {
+					t.Error("Parse() expected error, got nil")
 				}
-				if info == nil {
-					t.Error("Parse() returned nil info")
-					return
-				}
-				if info.Format != tt.expectedFormat {
-					t.Errorf("Parse() format = %v, want %v", info.Format, tt.expectedFormat)
-				}
-				// verify ground truth database is initialized
-				if info.GroundTruthDB == nil {
-					t.Error("Parse() GroundTruthDB is nil")
-				}
-				// cleanup
-				info.Close()
 				return
 			}
-			if err == nil {
-				t.Error("Parse() expected error, got nil")
+
+			if err != nil {
+				t.Errorf("Parse() unexpected error: %v", err)
+			}
+			if info == nil {
+				t.Error("Parse() returned nil info")
+				return
+			}
+			if info.Format != tt.expectedFormat {
+				t.Errorf("Parse() format = %v, want %v", info.Format, tt.expectedFormat)
+			}
+			// verify ground truth database is initialized
+			if info.GroundTruthDB == nil {
+				t.Error("Parse() GroundTruthDB is nil")
+			}
+			// cleanup
+			if err := info.Close(); err != nil {
+				t.Logf("failed to close info: %v", err)
 			}
 		})
 	}
@@ -135,7 +142,7 @@ func TestStandardLibParser_ErrorHandling(t *testing.T) {
 			}
 
 			if info != nil {
-				info.Close()
+				_ = info.Close()
 			}
 		})
 	}
@@ -207,29 +214,7 @@ func TestBinaryInfo_Close(t *testing.T) {
 // createMinimalELF64 creates a minimal valid ELF64 binary for testing
 func createMinimalELF64() []byte {
 	buf := new(bytes.Buffer)
-
-	// elf header (64 bytes)
-	buf.Write([]byte{0x7F, 'E', 'L', 'F'}) // magic
-	buf.WriteByte(2)                       // 64-bit
-	buf.WriteByte(1)                       // little endian
-	buf.WriteByte(1)                       // elf version
-	buf.WriteByte(0)                       // system v abi
-	buf.Write(make([]byte, 8))             // padding
-
-	binary.Write(buf, binary.LittleEndian, uint16(2))        // e_type: ET_EXEC
-	binary.Write(buf, binary.LittleEndian, uint16(0x3E))     // e_machine: EM_X86_64
-	binary.Write(buf, binary.LittleEndian, uint32(1))        // e_version
-	binary.Write(buf, binary.LittleEndian, uint64(0x400000)) // e_entry
-	binary.Write(buf, binary.LittleEndian, uint64(64))       // e_phoff
-	binary.Write(buf, binary.LittleEndian, uint64(0))        // e_shoff
-	binary.Write(buf, binary.LittleEndian, uint32(0))        // e_flags
-	binary.Write(buf, binary.LittleEndian, uint16(64))       // e_ehsize
-	binary.Write(buf, binary.LittleEndian, uint16(56))       // e_phentsize
-	binary.Write(buf, binary.LittleEndian, uint16(0))        // e_phnum
-	binary.Write(buf, binary.LittleEndian, uint16(64))       // e_shentsize
-	binary.Write(buf, binary.LittleEndian, uint16(0))        // e_shnum
-	binary.Write(buf, binary.LittleEndian, uint16(0))        // e_shstrndx
-
+	writeELF64Header(buf, binary.LittleEndian, 0x3E, 0x400000) // EM_X86_64
 	return buf.Bytes()
 }
 
@@ -238,57 +223,61 @@ func createMinimalPE64() []byte {
 	buf := new(bytes.Buffer)
 
 	// dos header (64 bytes)
-	buf.Write([]byte{'M', 'Z'})                        // magic
-	buf.Write(make([]byte, 58))                        // dos header padding
-	binary.Write(buf, binary.LittleEndian, uint32(64)) // e_lfanew (pe header offset)
+	buf.Write([]byte{'M', 'Z'})                            // magic
+	buf.Write(make([]byte, 58))                            // dos header padding
+	_ = binary.Write(buf, binary.LittleEndian, uint32(64)) // e_lfanew (pe header offset)
 
 	// pe signature (4 bytes)
 	buf.Write([]byte{'P', 'E', 0, 0})
 
 	// coff header (20 bytes)
-	binary.Write(buf, binary.LittleEndian, uint16(0x8664)) // machine: AMD64
-	binary.Write(buf, binary.LittleEndian, uint16(0))      // number of sections
-	binary.Write(buf, binary.LittleEndian, uint32(0))      // timestamp
-	binary.Write(buf, binary.LittleEndian, uint32(0))      // symbol table pointer
-	binary.Write(buf, binary.LittleEndian, uint32(0))      // number of symbols
-	binary.Write(buf, binary.LittleEndian, uint16(240))    // optional header size
-	binary.Write(buf, binary.LittleEndian, uint16(0x22))   // characteristics
+	_ = binary.Write(buf, binary.LittleEndian, uint16(0x8664)) // machine: AMD64
+	_ = binary.Write(buf, binary.LittleEndian, uint16(0))      // number of sections
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))      // timestamp
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))      // symbol table pointer
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))      // number of symbols
+	_ = binary.Write(buf, binary.LittleEndian, uint16(240))    // optional header size (must be 240 for pe64)
+	_ = binary.Write(buf, binary.LittleEndian, uint16(0x22))   // characteristics
 
-	// optional header (pe64) - 240 bytes
-	binary.Write(buf, binary.LittleEndian, uint16(0x20B))       // magic: PE32+
-	binary.Write(buf, binary.LittleEndian, uint8(14))           // major linker version
-	binary.Write(buf, binary.LittleEndian, uint8(0))            // minor linker version
-	binary.Write(buf, binary.LittleEndian, uint32(0))           // size of code
-	binary.Write(buf, binary.LittleEndian, uint32(0))           // size of initialized data
-	binary.Write(buf, binary.LittleEndian, uint32(0))           // size of uninitialized data
-	binary.Write(buf, binary.LittleEndian, uint32(0x1000))      // address of entry point
-	binary.Write(buf, binary.LittleEndian, uint32(0x1000))      // base of code
-	binary.Write(buf, binary.LittleEndian, uint64(0x140000000)) // image base
-	binary.Write(buf, binary.LittleEndian, uint32(0x1000))      // section alignment
-	binary.Write(buf, binary.LittleEndian, uint32(0x200))       // file alignment
-	binary.Write(buf, binary.LittleEndian, uint16(6))           // major os version
-	binary.Write(buf, binary.LittleEndian, uint16(0))           // minor os version
-	binary.Write(buf, binary.LittleEndian, uint16(0))           // major image version
-	binary.Write(buf, binary.LittleEndian, uint16(0))           // minor image version
-	binary.Write(buf, binary.LittleEndian, uint16(6))           // major subsystem version
-	binary.Write(buf, binary.LittleEndian, uint16(0))           // minor subsystem version
-	binary.Write(buf, binary.LittleEndian, uint32(0))           // win32 version value
-	binary.Write(buf, binary.LittleEndian, uint32(0x2000))      // size of image
-	binary.Write(buf, binary.LittleEndian, uint32(0x200))       // size of headers
-	binary.Write(buf, binary.LittleEndian, uint32(0))           // checksum
-	binary.Write(buf, binary.LittleEndian, uint16(3))           // subsystem: console
-	binary.Write(buf, binary.LittleEndian, uint16(0))           // dll characteristics
-	binary.Write(buf, binary.LittleEndian, uint64(0x100000))    // size of stack reserve
-	binary.Write(buf, binary.LittleEndian, uint64(0x1000))      // size of stack commit
-	binary.Write(buf, binary.LittleEndian, uint64(0x100000))    // size of heap reserve
-	binary.Write(buf, binary.LittleEndian, uint64(0x1000))      // size of heap commit
-	binary.Write(buf, binary.LittleEndian, uint32(0))           // loader flags
-	binary.Write(buf, binary.LittleEndian, uint32(16))          // number of rva and sizes
+	// optional header (pe64) - 240 bytes total
+	// standard fields (24 bytes)
+	_ = binary.Write(buf, binary.LittleEndian, uint16(0x20B))  // magic: PE32+
+	_ = binary.Write(buf, binary.LittleEndian, uint8(14))      // major linker version
+	_ = binary.Write(buf, binary.LittleEndian, uint8(0))       // minor linker version
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))      // size of code
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))      // size of initialized data
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))      // size of uninitialized data
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x1000)) // address of entry point
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x1000)) // base of code
+
+	// windows-specific fields (88 bytes)
+	_ = binary.Write(buf, binary.LittleEndian, uint64(0x140000000)) // image base
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x1000))      // section alignment
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x200))       // file alignment
+	_ = binary.Write(buf, binary.LittleEndian, uint16(6))           // major os version
+	_ = binary.Write(buf, binary.LittleEndian, uint16(0))           // minor os version
+	_ = binary.Write(buf, binary.LittleEndian, uint16(0))           // major image version
+	_ = binary.Write(buf, binary.LittleEndian, uint16(0))           // minor image version
+	_ = binary.Write(buf, binary.LittleEndian, uint16(6))           // major subsystem version
+	_ = binary.Write(buf, binary.LittleEndian, uint16(0))           // minor subsystem version
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))           // win32 version value
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x2000))      // size of image
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x200))       // size of headers
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))           // checksum
+	_ = binary.Write(buf, binary.LittleEndian, uint16(3))           // subsystem: console
+	_ = binary.Write(buf, binary.LittleEndian, uint16(0))           // dll characteristics
+	_ = binary.Write(buf, binary.LittleEndian, uint64(0x100000))    // size of stack reserve
+	_ = binary.Write(buf, binary.LittleEndian, uint64(0x1000))      // size of stack commit
+	_ = binary.Write(buf, binary.LittleEndian, uint64(0x100000))    // size of heap reserve
+	_ = binary.Write(buf, binary.LittleEndian, uint64(0x1000))      // size of heap commit
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))           // loader flags (reserved, must be 0)
+	_ = binary.Write(buf, binary.LittleEndian, uint32(16))          // number of rva and sizes
 
 	// data directories (16 * 8 = 128 bytes)
+	// each data directory is 8 bytes: 4 bytes rva + 4 bytes size
 	for i := 0; i < 16; i++ {
-		binary.Write(buf, binary.LittleEndian, uint32(0)) // virtual address
-		binary.Write(buf, binary.LittleEndian, uint32(0)) // size
+		_ = binary.Write(buf, binary.LittleEndian, uint32(0)) // virtual address
+		_ = binary.Write(buf, binary.LittleEndian, uint32(0)) // size
 	}
 
 	return buf.Bytes()
@@ -299,14 +288,14 @@ func createMinimalMachO64() []byte {
 	buf := new(bytes.Buffer)
 
 	// mach header 64
-	binary.Write(buf, binary.LittleEndian, uint32(0xFEEDFACF)) // magic
-	binary.Write(buf, binary.LittleEndian, uint32(0x01000007)) // cpu type: x86_64
-	binary.Write(buf, binary.LittleEndian, uint32(3))          // cpu subtype
-	binary.Write(buf, binary.LittleEndian, uint32(2))          // file type: MH_EXECUTE
-	binary.Write(buf, binary.LittleEndian, uint32(0))          // number of load commands
-	binary.Write(buf, binary.LittleEndian, uint32(0))          // size of load commands
-	binary.Write(buf, binary.LittleEndian, uint32(0))          // flags
-	binary.Write(buf, binary.LittleEndian, uint32(0))          // reserved
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0xFEEDFACF)) // magic
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x01000007)) // cpu type: x86_64
+	_ = binary.Write(buf, binary.LittleEndian, uint32(3))          // cpu subtype
+	_ = binary.Write(buf, binary.LittleEndian, uint32(2))          // file type: MH_EXECUTE
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))          // number of load commands
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))          // size of load commands
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))          // flags
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))          // reserved
 
 	return buf.Bytes()
 }
@@ -316,58 +305,62 @@ func createMinimalPE32() []byte {
 	buf := new(bytes.Buffer)
 
 	// dos header (64 bytes)
-	buf.Write([]byte{'M', 'Z'})                        // magic
-	buf.Write(make([]byte, 58))                        // dos header padding
-	binary.Write(buf, binary.LittleEndian, uint32(64)) // e_lfanew (pe header offset)
+	buf.Write([]byte{'M', 'Z'})                            // magic
+	buf.Write(make([]byte, 58))                            // dos header padding
+	_ = binary.Write(buf, binary.LittleEndian, uint32(64)) // e_lfanew (pe header offset)
 
 	// pe signature (4 bytes)
 	buf.Write([]byte{'P', 'E', 0, 0})
 
 	// coff header (20 bytes)
-	binary.Write(buf, binary.LittleEndian, uint16(0x14c)) // machine: I386
-	binary.Write(buf, binary.LittleEndian, uint16(0))     // number of sections
-	binary.Write(buf, binary.LittleEndian, uint32(0))     // timestamp
-	binary.Write(buf, binary.LittleEndian, uint32(0))     // symbol table pointer
-	binary.Write(buf, binary.LittleEndian, uint32(0))     // number of symbols
-	binary.Write(buf, binary.LittleEndian, uint16(224))   // optional header size
-	binary.Write(buf, binary.LittleEndian, uint16(0x102)) // characteristics
+	_ = binary.Write(buf, binary.LittleEndian, uint16(0x14c)) // machine: I386
+	_ = binary.Write(buf, binary.LittleEndian, uint16(0))     // number of sections
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))     // timestamp
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))     // symbol table pointer
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))     // number of symbols
+	_ = binary.Write(buf, binary.LittleEndian, uint16(224))   // optional header size (must be 224 for pe32)
+	_ = binary.Write(buf, binary.LittleEndian, uint16(0x102)) // characteristics
 
-	// optional header (pe32) - 224 bytes
-	binary.Write(buf, binary.LittleEndian, uint16(0x10B))    // magic: PE32
-	binary.Write(buf, binary.LittleEndian, uint8(14))        // major linker version
-	binary.Write(buf, binary.LittleEndian, uint8(0))         // minor linker version
-	binary.Write(buf, binary.LittleEndian, uint32(0))        // size of code
-	binary.Write(buf, binary.LittleEndian, uint32(0))        // size of initialized data
-	binary.Write(buf, binary.LittleEndian, uint32(0))        // size of uninitialized data
-	binary.Write(buf, binary.LittleEndian, uint32(0x1000))   // address of entry point
-	binary.Write(buf, binary.LittleEndian, uint32(0x1000))   // base of code
-	binary.Write(buf, binary.LittleEndian, uint32(0x2000))   // base of data
-	binary.Write(buf, binary.LittleEndian, uint32(0x400000)) // image base
-	binary.Write(buf, binary.LittleEndian, uint32(0x1000))   // section alignment
-	binary.Write(buf, binary.LittleEndian, uint32(0x200))    // file alignment
-	binary.Write(buf, binary.LittleEndian, uint16(6))        // major os version
-	binary.Write(buf, binary.LittleEndian, uint16(0))        // minor os version
-	binary.Write(buf, binary.LittleEndian, uint16(0))        // major image version
-	binary.Write(buf, binary.LittleEndian, uint16(0))        // minor image version
-	binary.Write(buf, binary.LittleEndian, uint16(6))        // major subsystem version
-	binary.Write(buf, binary.LittleEndian, uint16(0))        // minor subsystem version
-	binary.Write(buf, binary.LittleEndian, uint32(0))        // win32 version value
-	binary.Write(buf, binary.LittleEndian, uint32(0x2000))   // size of image
-	binary.Write(buf, binary.LittleEndian, uint32(0x200))    // size of headers
-	binary.Write(buf, binary.LittleEndian, uint32(0))        // checksum
-	binary.Write(buf, binary.LittleEndian, uint16(3))        // subsystem: console
-	binary.Write(buf, binary.LittleEndian, uint16(0))        // dll characteristics
-	binary.Write(buf, binary.LittleEndian, uint32(0x100000)) // size of stack reserve
-	binary.Write(buf, binary.LittleEndian, uint32(0x1000))   // size of stack commit
-	binary.Write(buf, binary.LittleEndian, uint32(0x100000)) // size of heap reserve
-	binary.Write(buf, binary.LittleEndian, uint32(0x1000))   // size of heap commit
-	binary.Write(buf, binary.LittleEndian, uint32(0))        // loader flags
-	binary.Write(buf, binary.LittleEndian, uint32(16))       // number of rva and sizes
+	// optional header (pe32) - 224 bytes total
+	// standard fields (28 bytes)
+	_ = binary.Write(buf, binary.LittleEndian, uint16(0x10B))  // magic: PE32
+	_ = binary.Write(buf, binary.LittleEndian, uint8(14))      // major linker version
+	_ = binary.Write(buf, binary.LittleEndian, uint8(0))       // minor linker version
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))      // size of code
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))      // size of initialized data
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))      // size of uninitialized data
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x1000)) // address of entry point
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x1000)) // base of code
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x2000)) // base of data
+
+	// windows-specific fields (68 bytes)
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x400000)) // image base
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x1000))   // section alignment
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x200))    // file alignment
+	_ = binary.Write(buf, binary.LittleEndian, uint16(6))        // major os version
+	_ = binary.Write(buf, binary.LittleEndian, uint16(0))        // minor os version
+	_ = binary.Write(buf, binary.LittleEndian, uint16(0))        // major image version
+	_ = binary.Write(buf, binary.LittleEndian, uint16(0))        // minor image version
+	_ = binary.Write(buf, binary.LittleEndian, uint16(6))        // major subsystem version
+	_ = binary.Write(buf, binary.LittleEndian, uint16(0))        // minor subsystem version
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))        // win32 version value
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x2000))   // size of image
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x200))    // size of headers
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))        // checksum
+	_ = binary.Write(buf, binary.LittleEndian, uint16(3))        // subsystem: console
+	_ = binary.Write(buf, binary.LittleEndian, uint16(0))        // dll characteristics
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x100000)) // size of stack reserve
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x1000))   // size of stack commit
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x100000)) // size of heap reserve
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x1000))   // size of heap commit
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))        // loader flags (reserved, must be 0)
+	_ = binary.Write(buf, binary.LittleEndian, uint32(16))       // number of rva and sizes
 
 	// data directories (16 * 8 = 128 bytes)
-	for i := 0; i < 16; i++ {
-		binary.Write(buf, binary.LittleEndian, uint32(0)) // virtual address
-		binary.Write(buf, binary.LittleEndian, uint32(0)) // size
+	// each data directory is 8 bytes: 4 bytes rva + 4 bytes size
+	for range 16 {
+		_ = binary.Write(buf, binary.LittleEndian, uint32(0)) // virtual address
+		_ = binary.Write(buf, binary.LittleEndian, uint32(0)) // size
 	}
 
 	return buf.Bytes()
@@ -405,7 +398,7 @@ func TestArchitectureDetection(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Parse() error: %v", err)
 			}
-			defer info.Close()
+			defer func() { _ = info.Close() }()
 
 			if info.Architecture != tt.expectedArch {
 				t.Errorf("Architecture = %v, want %v", info.Architecture, tt.expectedArch)
@@ -423,7 +416,7 @@ func TestBinaryInfoFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error: %v", err)
 	}
-	defer info.Close()
+	defer func() { _ = info.Close() }()
 
 	// verify all required fields
 	if info.Format == BinaryFormatUnknown {
@@ -455,7 +448,7 @@ func TestELFParsing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error: %v", err)
 	}
-	defer info.Close()
+	defer func() { _ = info.Close() }()
 
 	// verify format
 	if info.Format != BinaryFormatELF {
@@ -497,7 +490,7 @@ func TestPEParsing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error: %v", err)
 	}
-	defer info.Close()
+	defer func() { _ = info.Close() }()
 
 	// verify format
 	if info.Format != BinaryFormatPE {
@@ -544,7 +537,7 @@ func TestMachOParsing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error: %v", err)
 	}
-	defer info.Close()
+	defer func() { _ = info.Close() }()
 
 	// verify format
 	if info.Format != BinaryFormatMachO {
@@ -757,12 +750,12 @@ func TestGroundTruthDatabasePopulation(t *testing.T) {
 	parser.buildGroundTruthDB(info)
 
 	// verify symbols by address
-	if name, exists := info.GroundTruthDB.SymbolsByAddress[0x1000]; !exists || name != "main" {
+	if name, exists := info.GroundTruthDB.SymbolsByAddress[0x1000]; !exists || name != testSymbolNameMain {
 		t.Error("Symbol 'main' not found in SymbolsByAddress")
 	}
 
 	// verify symbols by name
-	if addr, exists := info.GroundTruthDB.SymbolsByName["main"]; !exists || addr != 0x1000 {
+	if addr, exists := info.GroundTruthDB.SymbolsByName[testSymbolNameMain]; !exists || addr != 0x1000 {
 		t.Error("Symbol 'main' not found in SymbolsByName")
 	}
 
@@ -883,7 +876,7 @@ func TestMachORelocationParsing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create Mach-O file: %v", err)
 	}
-	defer machoFile.Close()
+	defer func() { _ = machoFile.Close() }()
 
 	// create fake relocation data (8 bytes)
 	relocData := make([]byte, 8)

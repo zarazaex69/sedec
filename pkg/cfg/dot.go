@@ -36,7 +36,27 @@ func (cfg *CFG) ExportToDOT(w io.Writer, opts *DotExportOptions) error {
 		opts = DefaultDotExportOptions()
 	}
 
-	// write dot header
+	if err := cfg.writeDOTHeader(w); err != nil {
+		return err
+	}
+
+	if err := cfg.writeDOTBlocks(w, opts); err != nil {
+		return err
+	}
+
+	if err := cfg.writeDOTEdges(w, opts); err != nil {
+		return err
+	}
+
+	if err := cfg.writeDOTUnresolvedJumps(w); err != nil {
+		return err
+	}
+
+	return cfg.writeDOTFooter(w)
+}
+
+// writeDOTHeader writes the dot file header
+func (cfg *CFG) writeDOTHeader(w io.Writer) error {
 	if _, err := fmt.Fprintf(w, "digraph CFG {\n"); err != nil {
 		return fmt.Errorf("failed to write dot header: %w", err)
 	}
@@ -55,7 +75,11 @@ func (cfg *CFG) ExportToDOT(w io.Writer, opts *DotExportOptions) error {
 		return err
 	}
 
-	// write nodes (basic blocks)
+	return nil
+}
+
+// writeDOTBlocks writes all basic blocks
+func (cfg *CFG) writeDOTBlocks(w io.Writer, opts *DotExportOptions) error {
 	if _, err := fmt.Fprintf(w, "  // basic blocks\n"); err != nil {
 		return err
 	}
@@ -66,7 +90,11 @@ func (cfg *CFG) ExportToDOT(w io.Writer, opts *DotExportOptions) error {
 		}
 	}
 
-	// write edges
+	return nil
+}
+
+// writeDOTEdges writes all control flow edges
+func (cfg *CFG) writeDOTEdges(w io.Writer, opts *DotExportOptions) error {
 	if _, err := fmt.Fprintf(w, "\n  // control flow edges\n"); err != nil {
 		return err
 	}
@@ -77,50 +105,73 @@ func (cfg *CFG) ExportToDOT(w io.Writer, opts *DotExportOptions) error {
 		}
 	}
 
-	// write unresolved indirect jumps as special nodes
-	if len(cfg.UnresolvedIndirectJumps) > 0 {
-		if _, err := fmt.Fprintf(w, "\n  // unresolved indirect jumps\n"); err != nil {
+	return nil
+}
+
+// writeDOTUnresolvedJumps writes unresolved indirect jumps as special nodes
+func (cfg *CFG) writeDOTUnresolvedJumps(w io.Writer) error {
+	if len(cfg.UnresolvedIndirectJumps) == 0 {
+		return nil
+	}
+
+	if _, err := fmt.Fprintf(w, "\n  // unresolved indirect jumps\n"); err != nil {
+		return err
+	}
+
+	for i := range cfg.UnresolvedIndirectJumps {
+		if err := cfg.writeUnresolvedJumpNode(w, i, cfg.UnresolvedIndirectJumps[i]); err != nil {
 			return err
-		}
-
-		for i, jump := range cfg.UnresolvedIndirectJumps {
-			unresolvedID := fmt.Sprintf("unresolved_%d", i)
-			label := fmt.Sprintf("Unresolved\\n%s\\n@0x%x",
-				jump.JumpKind.String(),
-				jump.JumpSite)
-
-			if _, err := fmt.Fprintf(w, "  %s [label=%q, shape=diamond, fillcolor=orange];\n",
-				unresolvedID, label); err != nil {
-				return err
-			}
-
-			// connect from source block
-			if _, err := fmt.Fprintf(w, "  block_%d -> %s [style=dashed, color=orange];\n",
-				jump.BlockID, unresolvedID); err != nil {
-				return err
-			}
-
-			// show possible targets if known
-			for _, target := range jump.PossibleTargets {
-				// find target block
-				for _, block := range cfg.Blocks {
-					if block.StartAddress == target {
-						if _, err := fmt.Fprintf(w, "  %s -> block_%d [style=dotted, color=gray];\n",
-							unresolvedID, block.ID); err != nil {
-							return err
-						}
-						break
-					}
-				}
-			}
 		}
 	}
 
-	// write dot footer
+	return nil
+}
+
+// writeUnresolvedJumpNode writes a single unresolved jump node
+func (cfg *CFG) writeUnresolvedJumpNode(w io.Writer, index int, jump *UnresolvedIndirectJump) error {
+	unresolvedID := fmt.Sprintf("unresolved_%d", index)
+	label := fmt.Sprintf("Unresolved\\n%s\\n@0x%x", jump.JumpKind.String(), jump.JumpSite)
+
+	if _, err := fmt.Fprintf(w, "  %s [label=%q, shape=diamond, fillcolor=orange];\n",
+		unresolvedID, label); err != nil {
+		return err
+	}
+
+	// connect from source block
+	if _, err := fmt.Fprintf(w, "  block_%d -> %s [style=dashed, color=orange];\n",
+		jump.BlockID, unresolvedID); err != nil {
+		return err
+	}
+
+	// show possible targets if known
+	for _, target := range jump.PossibleTargets {
+		if err := cfg.writeUnresolvedJumpTarget(w, unresolvedID, target); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// writeUnresolvedJumpTarget writes connection to possible target
+func (cfg *CFG) writeUnresolvedJumpTarget(w io.Writer, unresolvedID string, target disasm.Address) error {
+	for _, block := range cfg.Blocks {
+		if block.StartAddress == target {
+			if _, err := fmt.Fprintf(w, "  %s -> block_%d [style=dotted, color=gray];\n",
+				unresolvedID, block.ID); err != nil {
+				return err
+			}
+			break
+		}
+	}
+	return nil
+}
+
+// writeDOTFooter writes the dot file footer
+func (cfg *CFG) writeDOTFooter(w io.Writer) error {
 	if _, err := fmt.Fprintf(w, "}\n"); err != nil {
 		return fmt.Errorf("failed to write dot footer: %w", err)
 	}
-
 	return nil
 }
 
@@ -246,6 +297,8 @@ func (cfg *CFG) exportEdgeToDOT(w io.Writer, edge *Edge, opts *DotExportOptions)
 		attrs = append(attrs, "style=dashed", "color=red")
 	case EdgeTypeIndirect:
 		attrs = append(attrs, "style=dotted", "color=orange")
+	case EdgeTypeUnknown:
+		attrs = append(attrs, "style=solid", "color=gray")
 	default:
 		attrs = append(attrs, "style=solid", "color=gray")
 	}
@@ -274,7 +327,7 @@ func (cfg *CFG) formatInstructionForDOT(instr *disasm.Instruction, includeAddres
 	var sb strings.Builder
 
 	if includeAddress {
-		sb.WriteString(fmt.Sprintf("0x%x: ", instr.Address))
+		fmt.Fprintf(&sb, "0x%x: ", instr.Address)
 	}
 
 	// escape special characters for dot format

@@ -1,6 +1,10 @@
+// Package main implements the sedec command-line tool for binary analysis and decompilation.
+//
+//nolint:godot // CLI tool with many error messages
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,7 +14,41 @@ import (
 	"github.com/zarazaex69/sedec/pkg/disasm"
 )
 
-// cfgFlags holds command-line flags for cfg command
+const (
+	// helpFlagLong is the long form help flag.
+	helpFlagLong = "--help"
+	// helpFlagShort is the short form help flag.
+	helpFlagShort = "-help"
+	// helpFlagShortest is the shortest form help flag.
+	helpFlagShortest = "-h"
+)
+
+var (
+	// errUnknownStringFlag indicates an unknown string flag was provided.
+	errUnknownStringFlag = errors.New("unknown string flag")
+	// errFlagRequiresArgument indicates a flag requires an argument.
+	errFlagRequiresArgument = errors.New("flag requires an argument")
+	// errUnknownFlag indicates an unknown flag was provided.
+	errUnknownFlag = errors.New("unknown flag")
+	// errMultipleBinaryPaths indicates multiple binary paths were specified.
+	errMultipleBinaryPaths = errors.New("multiple binary paths specified")
+	// errNoInput indicates no input was provided.
+	errNoInput = errors.New("no input provided (use binary path or pipe to stdin)")
+	// errNoInstructions indicates no instructions were disassembled.
+	errNoInstructions = errors.New("no instructions disassembled")
+	// errInvalidAddressFormat indicates invalid address format.
+	errInvalidAddressFormat = errors.New("invalid address format (use 0x1234 or decimal)")
+	// errAddressNotFound indicates address not found in executable section.
+	errAddressNotFound = errors.New("address not found in any executable section")
+	// errFunctionNotFound indicates function not found.
+	errFunctionNotFound = errors.New("function not found")
+	// errFunctionAddressNotFound indicates function address not found in executable section.
+	errFunctionAddressNotFound = errors.New("function address not found in any executable section")
+	// errNoExecutableSection indicates no executable section found.
+	errNoExecutableSection = errors.New("no executable section found in binary")
+)
+
+// cfgFlags holds command-line flags for cfg command.
 type cfgFlags struct {
 	output              string
 	function            string
@@ -26,7 +64,55 @@ type cfgFlags struct {
 
 // runCFG executes the cfg subcommand
 func runCFG(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	flags := cfgFlags{
+	flags, binaryPath, err := parseCFGFlags(args, stdout)
+	if err != nil {
+		return err
+	}
+
+	// check if help was printed (only when explicitly requested with --help flag)
+	// this is detected by checking if args contained help flag
+	for _, arg := range args {
+		if arg == helpFlagLong || arg == helpFlagShort || arg == helpFlagShortest {
+			return nil
+		}
+	}
+
+	binaryData, err := readBinaryInput(binaryPath, stdin)
+	if err != nil {
+		return err
+	}
+
+	binaryInfo, err := parseBinary(binaryData)
+	if err != nil {
+		return err
+	}
+
+	disassembler, err := createDisassembler()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := disassembler.Close(); closeErr != nil {
+			_, _ = fmt.Fprintf(stderr, "warning: failed to close disassembler: %v\n", closeErr)
+		}
+	}()
+
+	instructions, startAddr, endAddr, err := disassembleCode(disassembler, binaryInfo, flags)
+	if err != nil {
+		return err
+	}
+
+	controlFlowGraph, err := buildCFG(instructions)
+	if err != nil {
+		return err
+	}
+
+	return exportCFG(controlFlowGraph, flags, startAddr, endAddr, stdout, stderr)
+}
+
+// parseCFGFlags parses command-line flags for cfg command
+func parseCFGFlags(args []string, stdout io.Writer) (flags cfgFlags, binaryPath string, err error) {
+	flags = cfgFlags{
 		output:              "",
 		function:            "",
 		address:             "",
@@ -39,257 +125,313 @@ func runCFG(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		maxInstructions:     10,
 	}
 
-	// parse flags
+	binaryPath, err = parseArguments(args, &flags, stdout)
+	return flags, binaryPath, err
+}
+
+// parseArguments processes command-line arguments and updates flags
+func parseArguments(args []string, flags *cfgFlags, stdout io.Writer) (string, error) {
 	var binaryPath string
+
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 
 		switch arg {
-		case "--help", "-help", "-h":
+		case helpFlagLong, helpFlagShort, helpFlagShortest:
 			printCFGUsage(stdout)
-			return nil
+			return "", nil
 
-		case "--output", "-o":
-			if i+1 >= len(args) {
-				return fmt.Errorf("--output requires an argument")
+		case "--output", "-o", "--function", "-f", "--address", "-a":
+			nextArg, err := getNextArgument(args, i, arg)
+			if err != nil {
+				return "", err
 			}
 			i++
-			flags.output = args[i]
-
-		case "--function", "-f":
-			if i+1 >= len(args) {
-				return fmt.Errorf("--function requires an argument")
+			if setErr := setStringFlag(flags, arg, nextArg); setErr != nil {
+				return "", setErr
 			}
-			i++
-			flags.function = args[i]
-
-		case "--address", "-a":
-			if i+1 >= len(args) {
-				return fmt.Errorf("--address requires an argument")
-			}
-			i++
-			flags.address = args[i]
 
 		case "--size", "-s":
-			if i+1 >= len(args) {
-				return fmt.Errorf("--size requires an argument")
+			nextArg, err := getNextArgument(args, i, "--size")
+			if err != nil {
+				return "", err
 			}
 			i++
-			if _, err := fmt.Sscanf(args[i], "%d", &flags.size); err != nil {
-				return fmt.Errorf("invalid --size value: %v", err)
+			if _, scanErr := fmt.Sscanf(nextArg, "%d", &flags.size); scanErr != nil {
+				return "", fmt.Errorf("invalid --size value: %w", scanErr)
 			}
 
-		case "--no-instructions":
-			flags.includeInstructions = false
-
-		case "--no-addresses":
-			flags.includeAddresses = false
-
-		case "--no-metadata":
-			flags.includeMetadata = false
-
-		case "--no-edge-labels":
-			flags.showEdgeLabels = false
-
-		case "--show-provenance":
-			flags.showProvenance = true
-
 		case "--max-instructions":
-			if i+1 >= len(args) {
-				return fmt.Errorf("--max-instructions requires an argument")
+			nextArg, err := getNextArgument(args, i, "--max-instructions")
+			if err != nil {
+				return "", err
 			}
 			i++
 			var maxInstr int
-			if _, err := fmt.Sscanf(args[i], "%d", &maxInstr); err != nil {
-				return fmt.Errorf("invalid --max-instructions value: %v", err)
+			if _, scanErr := fmt.Sscanf(nextArg, "%d", &maxInstr); scanErr != nil {
+				return "", fmt.Errorf("invalid --max-instructions value: %w", scanErr)
 			}
 			flags.maxInstructions = maxInstr
 
+		case "--no-instructions", "--no-addresses", "--no-metadata", "--no-edge-labels", "--show-provenance":
+			setBooleanFlag(flags, arg)
+
 		default:
-			if arg[0] == '-' {
-				return fmt.Errorf("unknown flag: %s", arg)
+			path, err := handlePositionalArgument(arg, binaryPath)
+			if err != nil {
+				return "", err
 			}
-			if binaryPath != "" {
-				return fmt.Errorf("multiple binary paths specified")
-			}
-			binaryPath = arg
+			binaryPath = path
 		}
 	}
 
-	// read binary data
-	var binaryData []byte
-	var err error
+	return binaryPath, nil
+}
 
+// setStringFlag sets string flag values based on flag name
+func setStringFlag(flags *cfgFlags, flagName, value string) error {
+	switch flagName {
+	case "--output", "-o":
+		flags.output = value
+	case "--function", "-f":
+		flags.function = value
+	case "--address", "-a":
+		flags.address = value
+	default:
+		return fmt.Errorf("%w: %s", errUnknownStringFlag, flagName)
+	}
+	return nil
+}
+
+// setBooleanFlag sets boolean flag values based on flag name
+func setBooleanFlag(flags *cfgFlags, flagName string) {
+	switch flagName {
+	case "--no-instructions":
+		flags.includeInstructions = false
+	case "--no-addresses":
+		flags.includeAddresses = false
+	case "--no-metadata":
+		flags.includeMetadata = false
+	case "--no-edge-labels":
+		flags.showEdgeLabels = false
+	case "--show-provenance":
+		flags.showProvenance = true
+	}
+}
+
+// getNextArgument retrieves the next argument for a flag
+func getNextArgument(args []string, currentIndex int, flagName string) (string, error) {
+	if currentIndex+1 >= len(args) {
+		return "", fmt.Errorf("%w: %s", errFlagRequiresArgument, flagName)
+	}
+	return args[currentIndex+1], nil
+}
+
+// handlePositionalArgument processes non-flag arguments
+func handlePositionalArgument(arg, currentPath string) (string, error) {
+	if arg[0] == '-' {
+		return "", fmt.Errorf("%w: %s", errUnknownFlag, arg)
+	}
+	if currentPath != "" {
+		return "", errMultipleBinaryPaths
+	}
+	return arg, nil
+}
+
+// readBinaryInput reads binary data from file or stdin
+func readBinaryInput(binaryPath string, stdin io.Reader) ([]byte, error) {
 	if binaryPath == "" {
 		// read from stdin
-		binaryData, err = io.ReadAll(stdin)
+		binaryData, err := io.ReadAll(stdin)
 		if err != nil {
-			return fmt.Errorf("failed to read from stdin: %w", err)
+			return nil, fmt.Errorf("failed to read from stdin: %w", err)
 		}
 		if len(binaryData) == 0 {
-			return fmt.Errorf("no input provided (use binary path or pipe to stdin)")
+			return nil, errNoInput
 		}
-	} else {
-		// read from file
-		binaryData, err = os.ReadFile(binaryPath)
-		if err != nil {
-			return fmt.Errorf("failed to read binary file: %w", err)
-		}
+		return binaryData, nil
 	}
 
-	// parse binary
+	// read from file
+	//nolint:gosec // G703: file path from user input is expected
+	binaryData, err := os.ReadFile(binaryPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read binary file: %w", err)
+	}
+	return binaryData, nil
+}
+
+// parseBinary parses binary data into binary info structure
+func parseBinary(binaryData []byte) (*binfmt.BinaryInfo, error) {
 	parser := binfmt.NewStandardLibParser()
 	binaryInfo, err := parser.Parse(binaryData)
 	if err != nil {
-		return fmt.Errorf("failed to parse binary: %w", err)
+		return nil, fmt.Errorf("failed to parse binary: %w", err)
 	}
+	return binaryInfo, nil
+}
 
-	// disassemble
+// createDisassembler creates and initializes disassembler
+func createDisassembler() (*disasm.Disassembler, error) {
 	disassembler, err := disasm.NewDisassembler()
 	if err != nil {
-		return fmt.Errorf("failed to create disassembler: %w", err)
+		return nil, fmt.Errorf("failed to create disassembler: %w", err)
 	}
-	defer disassembler.Close()
+	return disassembler, nil
+}
 
-	// determine disassembly range
-	var startAddr, endAddr disasm.Address
+// disassembleCode disassembles code based on flags
+func disassembleCode(disassembler *disasm.Disassembler, binaryInfo *binfmt.BinaryInfo, flags cfgFlags) (instructions []*disasm.Instruction, startAddr, endAddr disasm.Address, err error) {
 	var codeBytes []byte
 
-	if flags.address != "" {
-		// parse address (hex format: 0x1234 or 1234)
-		var addr uint64
-		if _, err := fmt.Sscanf(flags.address, "0x%x", &addr); err != nil {
-			if _, err := fmt.Sscanf(flags.address, "%d", &addr); err != nil {
-				return fmt.Errorf("invalid address format: %s (use 0x1234 or decimal)", flags.address)
-			}
-		}
-		startAddr = disasm.Address(addr)
+	switch {
+	case flags.address != "":
+		startAddr, endAddr, codeBytes, err = extractCodeByAddress(binaryInfo, flags)
+	case flags.function != "":
+		startAddr, endAddr, codeBytes, err = extractCodeByFunction(binaryInfo, flags)
+	default:
+		startAddr, endAddr, codeBytes, err = extractCodeFromFirstSection(binaryInfo)
+	}
 
-		// determine size
-		if flags.size > 0 {
-			endAddr = startAddr + disasm.Address(flags.size)
-		} else {
-			// default: analyze 1KB
-			endAddr = startAddr + 1024
-		}
-
-		// find section containing this address
-		var containingSection *binfmt.Section
-		for i := range binaryInfo.Sections {
-			sec := binaryInfo.Sections[i]
-			if !sec.IsExecutable {
-				continue
-			}
-			secStart := disasm.Address(sec.Address)
-			secEnd := disasm.Address(sec.Address) + disasm.Address(len(sec.Data))
-			if startAddr >= secStart && startAddr < secEnd {
-				containingSection = sec
-				break
-			}
-		}
-
-		if containingSection == nil {
-			return fmt.Errorf("address 0x%x not found in any executable section", startAddr)
-		}
-
-		// calculate offset within section
-		offset := startAddr - disasm.Address(containingSection.Address)
-		length := endAddr - startAddr
-
-		if offset < 0 || offset >= disasm.Address(len(containingSection.Data)) {
-			return fmt.Errorf("invalid address offset: 0x%x", offset)
-		}
-
-		if offset+length > disasm.Address(len(containingSection.Data)) {
-			length = disasm.Address(len(containingSection.Data)) - offset
-			endAddr = startAddr + length
-		}
-
-		codeBytes = containingSection.Data[offset : offset+length]
-
-	} else if flags.function != "" {
-		// find function by name
-		found := false
-		for _, sym := range binaryInfo.Symbols {
-			if sym.Name == flags.function {
-				startAddr = disasm.Address(sym.Address)
-				endAddr = disasm.Address(sym.Address) + disasm.Address(sym.Size)
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("function not found: %s", flags.function)
-		}
-
-		// find section containing this function
-		var containingSection *binfmt.Section
-		for i := range binaryInfo.Sections {
-			sec := binaryInfo.Sections[i]
-			if !sec.IsExecutable {
-				continue
-			}
-			secStart := disasm.Address(sec.Address)
-			secEnd := disasm.Address(sec.Address) + disasm.Address(len(sec.Data))
-			if startAddr >= secStart && startAddr < secEnd {
-				containingSection = sec
-				break
-			}
-		}
-
-		if containingSection == nil {
-			return fmt.Errorf("function address 0x%x not found in any executable section", startAddr)
-		}
-
-		// calculate offset within section
-		offset := startAddr - disasm.Address(containingSection.Address)
-		length := endAddr - startAddr
-
-		if offset < 0 || offset >= disasm.Address(len(containingSection.Data)) {
-			return fmt.Errorf("invalid function offset: 0x%x", offset)
-		}
-
-		if offset+length > disasm.Address(len(containingSection.Data)) {
-			length = disasm.Address(len(containingSection.Data)) - offset
-		}
-
-		codeBytes = containingSection.Data[offset : offset+length]
-	} else {
-		// no function specified - use first executable section
-		var execSection *binfmt.Section
-		for i := range binaryInfo.Sections {
-			if binaryInfo.Sections[i].IsExecutable {
-				execSection = binaryInfo.Sections[i]
-				break
-			}
-		}
-
-		if execSection == nil {
-			return fmt.Errorf("no executable section found in binary")
-		}
-
-		startAddr = disasm.Address(execSection.Address)
-		endAddr = disasm.Address(execSection.Address) + disasm.Address(len(execSection.Data))
-		codeBytes = execSection.Data
+	if err != nil {
+		return nil, 0, 0, err
 	}
 
 	// disassemble instructions
-	instructions, err := disassembler.DisassembleBytes(codeBytes, startAddr)
+	instructions, err = disassembler.DisassembleBytes(codeBytes, startAddr)
 	if err != nil {
-		return fmt.Errorf("failed to disassemble: %w", err)
+		return nil, 0, 0, fmt.Errorf("failed to disassemble: %w", err)
 	}
 
 	if len(instructions) == 0 {
-		return fmt.Errorf("no instructions disassembled")
+		return nil, 0, 0, errNoInstructions
 	}
 
-	// build cfg
+	return instructions, startAddr, endAddr, nil
+}
+
+// extractCodeByAddress extracts code bytes at specified address
+func extractCodeByAddress(binaryInfo *binfmt.BinaryInfo, flags cfgFlags) (startAddr, endAddr disasm.Address, codeBytes []byte, err error) {
+	// parse address (hex format: 0x1234 or 1234)
+	var addr uint64
+	if _, scanErr := fmt.Sscanf(flags.address, "0x%x", &addr); scanErr != nil {
+		if _, decScanErr := fmt.Sscanf(flags.address, "%d", &addr); decScanErr != nil {
+			return 0, 0, nil, fmt.Errorf("%w: %s", errInvalidAddressFormat, flags.address)
+		}
+	}
+	startAddr = disasm.Address(addr)
+
+	// determine size
+	if flags.size > 0 {
+		endAddr = startAddr + disasm.Address(flags.size)
+	} else {
+		// default: analyze 1KB
+		endAddr = startAddr + 1024
+	}
+
+	// find section containing this address
+	containingSection := findExecutableSection(binaryInfo, startAddr)
+	if containingSection == nil {
+		return 0, 0, nil, fmt.Errorf("%w: 0x%x", errAddressNotFound, startAddr)
+	}
+
+	codeBytes, actualEndAddr := extractBytesFromSection(containingSection, startAddr, endAddr)
+	return startAddr, actualEndAddr, codeBytes, nil
+}
+
+// extractCodeByFunction extracts code bytes for specified function
+func extractCodeByFunction(binaryInfo *binfmt.BinaryInfo, flags cfgFlags) (startAddr, endAddr disasm.Address, codeBytes []byte, err error) {
+	// find function by name
+	found := false
+	for _, sym := range binaryInfo.Symbols {
+		if sym.Name == flags.function {
+			startAddr = disasm.Address(sym.Address)
+			endAddr = disasm.Address(sym.Address) + disasm.Address(sym.Size)
+			found = true
+			break
+		}
+	}
+	if !found {
+		return 0, 0, nil, fmt.Errorf("%w: %s", errFunctionNotFound, flags.function)
+	}
+
+	// find section containing this function
+	containingSection := findExecutableSection(binaryInfo, startAddr)
+	if containingSection == nil {
+		return 0, 0, nil, fmt.Errorf("%w: 0x%x", errFunctionAddressNotFound, startAddr)
+	}
+
+	codeBytes, actualEndAddr := extractBytesFromSection(containingSection, startAddr, endAddr)
+	return startAddr, actualEndAddr, codeBytes, nil
+}
+
+// extractCodeFromFirstSection extracts code from first executable section
+func extractCodeFromFirstSection(binaryInfo *binfmt.BinaryInfo) (startAddr, endAddr disasm.Address, codeBytes []byte, err error) {
+	// no function specified - use first executable section
+	var execSection *binfmt.Section
+	for i := range binaryInfo.Sections {
+		if binaryInfo.Sections[i].IsExecutable {
+			execSection = binaryInfo.Sections[i]
+			break
+		}
+	}
+
+	if execSection == nil {
+		return 0, 0, nil, errNoExecutableSection
+	}
+
+	startAddr = disasm.Address(execSection.Address)
+	endAddr = disasm.Address(execSection.Address) + disasm.Address(len(execSection.Data))
+	codeBytes = execSection.Data
+	return startAddr, endAddr, codeBytes, nil
+}
+
+// findExecutableSection finds executable section containing given address
+func findExecutableSection(binaryInfo *binfmt.BinaryInfo, addr disasm.Address) *binfmt.Section {
+	for i := range binaryInfo.Sections {
+		sec := binaryInfo.Sections[i]
+		if !sec.IsExecutable {
+			continue
+		}
+		secStart := disasm.Address(sec.Address)
+		secEnd := disasm.Address(sec.Address) + disasm.Address(len(sec.Data))
+		if addr >= secStart && addr < secEnd {
+			return sec
+		}
+	}
+	return nil
+}
+
+// extractBytesFromSection extracts bytes from section within address range
+func extractBytesFromSection(section *binfmt.Section, startAddr, endAddr disasm.Address) ([]byte, disasm.Address) {
+	// calculate offset within section
+	offset := startAddr - disasm.Address(section.Address)
+	length := endAddr - startAddr
+
+	if offset >= disasm.Address(len(section.Data)) {
+		return nil, startAddr
+	}
+
+	if offset+length > disasm.Address(len(section.Data)) {
+		length = disasm.Address(len(section.Data)) - offset
+		endAddr = startAddr + length
+	}
+
+	return section.Data[offset : offset+length], endAddr
+}
+
+// buildCFG builds control flow graph from instructions
+func buildCFG(instructions []*disasm.Instruction) (*cfg.CFG, error) {
 	builder := cfg.NewCFGBuilder()
 	controlFlowGraph, err := builder.Build(instructions)
 	if err != nil {
-		return fmt.Errorf("failed to build cfg: %w", err)
+		return nil, fmt.Errorf("failed to build cfg: %w", err)
 	}
+	return controlFlowGraph, nil
+}
 
+// exportCFG exports control flow graph to dot format
+func exportCFG(controlFlowGraph *cfg.CFG, flags cfgFlags, startAddr, endAddr disasm.Address, stdout, stderr io.Writer) error {
 	// prepare dot export options
 	dotOpts := &cfg.DotExportOptions{
 		IncludeInstructions: flags.includeInstructions,
@@ -305,37 +447,48 @@ func runCFG(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if flags.output == "" {
 		output = stdout
 	} else {
-		file, err := os.Create(flags.output)
-		if err != nil {
-			return fmt.Errorf("failed to create output file: %w", err)
+		//nolint:gosec // G703: file path from user input is expected
+		file, createErr := os.Create(flags.output)
+		if createErr != nil {
+			return fmt.Errorf("failed to create output file: %w", createErr)
 		}
-		defer file.Close()
+		defer func() {
+			if closeErr := file.Close(); closeErr != nil {
+				_, _ = fmt.Fprintf(stderr, "warning: failed to close output file: %v\n", closeErr)
+			}
+		}()
 		output = file
 	}
 
 	// export to dot format
-	if err := controlFlowGraph.ExportToDOT(output, dotOpts); err != nil {
-		return fmt.Errorf("failed to export cfg to dot: %w", err)
+	if exportErr := controlFlowGraph.ExportToDOT(output, dotOpts); exportErr != nil {
+		return fmt.Errorf("failed to export cfg to dot: %w", exportErr)
 	}
 
 	// print statistics to stderr if output is file
 	if flags.output != "" {
-		fmt.Fprintf(stderr, "cfg exported to %s\n", flags.output)
-		fmt.Fprintf(stderr, "address range: 0x%x - 0x%x (%d bytes)\n",
-			startAddr, endAddr, endAddr-startAddr)
-		fmt.Fprintf(stderr, "blocks: %d, edges: %d, unresolved jumps: %d\n",
-			controlFlowGraph.BlockCount(),
-			controlFlowGraph.EdgeCount(),
-			controlFlowGraph.UnresolvedIndirectJumpCount())
+		printStatistics(stderr, flags.output, startAddr, endAddr, controlFlowGraph)
 	}
 
 	return nil
 }
 
+// printStatistics prints cfg statistics to stderr
+//
+//nolint:gosec // G705: stderr output is safe, not web context
+func printStatistics(stderr io.Writer, outputFile string, startAddr, endAddr disasm.Address, controlFlowGraph *cfg.CFG) {
+	_, _ = fmt.Fprintf(stderr, "cfg exported to %s\n", outputFile)
+	_, _ = fmt.Fprintf(stderr, "address range: 0x%x - 0x%x (%d bytes)\n",
+		startAddr, endAddr, endAddr-startAddr)
+	_, _ = fmt.Fprintf(stderr, "blocks: %d, edges: %d, unresolved jumps: %d\n",
+		controlFlowGraph.BlockCount(),
+		controlFlowGraph.EdgeCount(),
+		controlFlowGraph.UnresolvedIndirectJumpCount())
+}
+
 // printCFGUsage displays help information for cfg command
 func printCFGUsage(w io.Writer) {
-	//nolint:errcheck // usage output is informational
-	fmt.Fprintf(w, `sedec cfg - export control flow graph in dot format
+	_, _ = fmt.Fprintf(w, `sedec cfg - export control flow graph in dot format
 
 usage:
   sedec cfg [options] [binary]

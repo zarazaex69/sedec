@@ -1,33 +1,45 @@
 package cfg
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 
 	"github.com/zarazaex69/sedec/pkg/disasm"
 )
 
-// Builder constructs control flow graphs from disassembled instructions
+var (
+	// errEmptyInstructionList indicates empty instruction list.
+	errEmptyInstructionList = errors.New("cannot build cfg from empty instruction list")
+	// errJumpSiteNotFound indicates jump site address not found.
+	errJumpSiteNotFound = errors.New("jump site address not found in any block")
+	// errTargetNotFound indicates target address not found.
+	errTargetNotFound = errors.New("target address not found in any block")
+	// errIndirectJumpNotFound indicates indirect jump not found in unresolved list.
+	errIndirectJumpNotFound = errors.New("indirect jump not found in unresolved list")
+)
+
+// Builder constructs control flow graphs from disassembled instructions.
 type Builder struct {
 	cfg           *CFG
 	dominatorTree *DominatorTree // cached dominator tree for loop detection
 
-	// maps instruction address to block id for quick lookup
+	// maps instruction address to block id for quick lookup.
 	addressToBlock map[disasm.Address]BlockID
 
-	// tracks which addresses are block leaders (start of basic blocks)
+	// tracks which addresses are block leaders (start of basic blocks).
 	blockLeaders map[disasm.Address]bool
 
-	// tracks unresolved indirect jumps for later resolution (deprecated - use cfg.UnresolvedIndirectJumps)
+	// tracks unresolved indirect jumps for later resolution (deprecated - use cfg.UnresolvedIndirectJumps).
 	unresolvedIndirectJumps map[disasm.Address]bool
 	instructions            []*disasm.Instruction
 	nextBlockID             BlockID
 
-	// incremental update tracking
+	// incremental update tracking.
 	incrementalMode bool // whether builder is in incremental update mode
 }
 
-// NewCFGBuilder creates a new CFG builder
+// NewCFGBuilder creates a new CFG builder.
 func NewCFGBuilder() *Builder {
 	return &Builder{
 		cfg:                     NewCFG(),
@@ -39,11 +51,11 @@ func NewCFGBuilder() *Builder {
 	}
 }
 
-// Build constructs a control flow graph from disassembled instructions
-// This is the main entry point for CFG construction
+// Build constructs a control flow graph from disassembled instructions.
+// This is the main entry point for CFG construction.
 func (b *Builder) Build(instructions []*disasm.Instruction) (*CFG, error) {
 	if len(instructions) == 0 {
-		return nil, fmt.Errorf("cannot build cfg from empty instruction list")
+		return nil, errEmptyInstructionList
 	}
 
 	b.instructions = instructions
@@ -70,7 +82,7 @@ func (b *Builder) Build(instructions []*disasm.Instruction) (*CFG, error) {
 // A basic block leader is:
 // 1. The first instruction in the function
 // 2. Any instruction that is the target of a jump or branch
-// 3. Any instruction immediately following a branch or jump
+// 3. Any instruction immediately following a branch or jump.
 func (b *Builder) identifyBlockLeaders() {
 	if len(b.instructions) == 0 {
 		return
@@ -122,7 +134,7 @@ func (b *Builder) identifyBlockLeaders() {
 	}
 }
 
-// createBasicBlocks creates basic block structures from identified leaders
+// createBasicBlocks creates basic block structures from identified leaders.
 func (b *Builder) createBasicBlocks() {
 	if len(b.instructions) == 0 {
 		return
@@ -180,7 +192,7 @@ func (b *Builder) createBasicBlocks() {
 	}
 }
 
-// collectInstructionsInRange collects instructions within address range [start, end)
+// collectInstructionsInRange collects instructions within address range [start, end).
 func (b *Builder) collectInstructionsInRange(start, end disasm.Address) []*disasm.Instruction {
 	result := make([]*disasm.Instruction, 0)
 
@@ -193,7 +205,7 @@ func (b *Builder) collectInstructionsInRange(start, end disasm.Address) []*disas
 	return result
 }
 
-// buildControlFlowEdges creates edges between basic blocks based on control flow
+// buildControlFlowEdges creates edges between basic blocks based on control flow.
 func (b *Builder) buildControlFlowEdges() {
 	for _, block := range b.cfg.Blocks {
 		if len(block.Instructions) == 0 {
@@ -243,7 +255,7 @@ func (b *Builder) buildControlFlowEdges() {
 	}
 }
 
-// identifyEntryAndExits determines entry block and exit blocks
+// identifyEntryAndExits determines entry block and exit blocks.
 func (b *Builder) identifyEntryAndExits() {
 	if len(b.instructions) == 0 {
 		return
@@ -259,12 +271,12 @@ func (b *Builder) identifyEntryAndExits() {
 	// no additional work needed here
 }
 
-// isUnconditionalJump checks if mnemonic is an unconditional jump
+// isUnconditionalJump checks if mnemonic is an unconditional jump.
 func isUnconditionalJump(mnemonic string) bool {
 	return mnemonic == "jmp"
 }
 
-// isConditionalBranch checks if mnemonic is a conditional branch
+// isConditionalBranch checks if mnemonic is a conditional branch.
 func isConditionalBranch(mnemonic string) bool {
 	// x86_64 conditional jump instructions
 	switch mnemonic {
@@ -291,7 +303,7 @@ func isConditionalBranch(mnemonic string) bool {
 	}
 }
 
-// isReturn checks if mnemonic is a return instruction
+// isReturn checks if mnemonic is a return instruction.
 func isReturn(mnemonic string) bool {
 	switch mnemonic {
 	case "ret", "retf", "retn":
@@ -301,7 +313,7 @@ func isReturn(mnemonic string) bool {
 	}
 }
 
-// isCall checks if mnemonic is a call instruction
+// isCall checks if mnemonic is a call instruction.
 func isCall(mnemonic string) bool {
 	switch mnemonic {
 	case "call", "callf":
@@ -311,8 +323,8 @@ func isCall(mnemonic string) bool {
 	}
 }
 
-// extractJumpTarget extracts the target address from a jump or branch instruction
-// Returns 0 if target cannot be determined (indirect jump)
+// extractJumpTarget extracts the target address from a jump or branch instruction.
+// Returns 0 if target cannot be determined (indirect jump).
 func extractJumpTarget(instr *disasm.Instruction) disasm.Address {
 	if len(instr.Operands) == 0 {
 		return 0
@@ -337,7 +349,7 @@ func extractJumpTarget(instr *disasm.Instruction) disasm.Address {
 	}
 }
 
-// GetUnresolvedIndirectJumps returns addresses of indirect jumps that need resolution
+// GetUnresolvedIndirectJumps returns addresses of indirect jumps that need resolution.
 func (b *Builder) GetUnresolvedIndirectJumps() []disasm.Address {
 	result := make([]disasm.Address, 0, len(b.unresolvedIndirectJumps))
 	for addr := range b.unresolvedIndirectJumps {
@@ -349,8 +361,8 @@ func (b *Builder) GetUnresolvedIndirectJumps() []disasm.Address {
 	return result
 }
 
-// AddIndirectTarget adds a resolved indirect jump target to the CFG
-// This is used during cyclic feedback from type inference
+// AddIndirectTarget adds a resolved indirect jump target to the CFG.
+// This is used during cyclic feedback from type inference.
 func (b *Builder) AddIndirectTarget(jumpSite, target disasm.Address) error {
 	return b.AddIndirectTargetWithProvenance(jumpSite, target, &EdgeProvenance{
 		AnalysisPass: "type_inference",
@@ -359,18 +371,18 @@ func (b *Builder) AddIndirectTarget(jumpSite, target disasm.Address) error {
 	})
 }
 
-// AddIndirectTargetWithProvenance adds a resolved indirect jump target with provenance tracking
+// AddIndirectTargetWithProvenance adds a resolved indirect jump target with provenance tracking.
 func (b *Builder) AddIndirectTargetWithProvenance(jumpSite, target disasm.Address, provenance *EdgeProvenance) error {
 	// find block containing jump site
 	jumpBlockID, exists := b.addressToBlock[jumpSite]
 	if !exists {
-		return fmt.Errorf("jump site address 0x%x not found in any block", jumpSite)
+		return fmt.Errorf("%w: 0x%x", errJumpSiteNotFound, jumpSite)
 	}
 
 	// find or create block for target address
 	targetBlockID, exists := b.addressToBlock[target]
 	if !exists {
-		return fmt.Errorf("target address 0x%x not found in any block", target)
+		return fmt.Errorf("%w: 0x%x", errTargetNotFound, target)
 	}
 
 	// add indirect edge with provenance
@@ -397,7 +409,7 @@ func (b *Builder) AddIndirectTargetWithProvenance(jumpSite, target disasm.Addres
 	return nil
 }
 
-// AddIndirectTargets adds multiple resolved targets for an indirect jump (e.g., switch table)
+// AddIndirectTargets adds multiple resolved targets for an indirect jump (e.g., switch table).
 func (b *Builder) AddIndirectTargets(jumpSite disasm.Address, targets []disasm.Address, provenance *EdgeProvenance) error {
 	for _, target := range targets {
 		if err := b.AddIndirectTargetWithProvenance(jumpSite, target, provenance); err != nil {
@@ -407,22 +419,22 @@ func (b *Builder) AddIndirectTargets(jumpSite disasm.Address, targets []disasm.A
 	return nil
 }
 
-// MarkIndirectJumpResolved marks an indirect jump as fully resolved and removes from unresolved list
+// MarkIndirectJumpResolved marks an indirect jump as fully resolved and removes from unresolved list.
 func (b *Builder) MarkIndirectJumpResolved(jumpSite disasm.Address) bool {
 	return b.cfg.RemoveUnresolvedIndirectJump(jumpSite)
 }
 
-// ClassifyIndirectJump updates the classification of an indirect jump
+// ClassifyIndirectJump updates the classification of an indirect jump.
 func (b *Builder) ClassifyIndirectJump(jumpSite disasm.Address, kind IndirectJumpKind) error {
 	jump, found := b.cfg.GetUnresolvedIndirectJump(jumpSite)
 	if !found {
-		return fmt.Errorf("indirect jump at 0x%x not found in unresolved list", jumpSite)
+		return fmt.Errorf("%w: 0x%x", errIndirectJumpNotFound, jumpSite)
 	}
 	jump.JumpKind = kind
 	return nil
 }
 
-// registerUnresolvedIndirectJump creates tracking structure for unresolved indirect jump
+// registerUnresolvedIndirectJump creates tracking structure for unresolved indirect jump.
 func (b *Builder) registerUnresolvedIndirectJump(instr *disasm.Instruction, kind IndirectJumpKind) {
 	// find block containing this instruction (may not exist yet during initial scan)
 	blockID, exists := b.addressToBlock[instr.Address]

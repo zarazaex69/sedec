@@ -1,23 +1,23 @@
 package disasm
 
-// Address represents a virtual address in the binary
+// Address represents a virtual address in the binary.
 type Address uint64
 
-// Size represents operand size in bytes
+// Size represents operand size in bytes.
 type Size uint8
 
 const (
-	// Size8 represents 8-bit (1 byte) operand size
+	// Size8 represents 8-bit (1 byte) operand size.
 	Size8 Size = 1
-	// Size16 represents 16-bit (2 bytes) operand size
+	// Size16 represents 16-bit (2 bytes) operand size.
 	Size16 Size = 2
-	// Size32 represents 32-bit (4 bytes) operand size
+	// Size32 represents 32-bit (4 bytes) operand size.
 	Size32 Size = 4
-	// Size64 represents 64-bit (8 bytes) operand size
+	// Size64 represents 64-bit (8 bytes) operand size.
 	Size64 Size = 8
 )
 
-// Instruction represents a single disassembled instruction
+// Instruction represents a single disassembled instruction.
 type Instruction struct {
 	Bytes    []byte    // raw instruction bytes
 	Mnemonic string    // instruction mnemonic (e.g., "mov", "add")
@@ -26,13 +26,13 @@ type Instruction struct {
 	Length   int       // instruction length in bytes
 }
 
-// Operand represents an instruction operand
+// Operand represents an instruction operand.
 type Operand interface {
 	isOperand()
 	String() string
 }
 
-// RegisterOperand represents a register operand
+// RegisterOperand represents a register operand.
 type RegisterOperand struct {
 	Name string // register name (e.g., "rax", "xmm0")
 	Size Size   // register size
@@ -44,7 +44,7 @@ func (r RegisterOperand) String() string {
 	return r.Name
 }
 
-// ImmediateOperand represents an immediate value operand
+// ImmediateOperand represents an immediate value operand.
 type ImmediateOperand struct {
 	Value int64 // immediate value
 	Size  Size  // operand size
@@ -56,7 +56,7 @@ func (i ImmediateOperand) String() string {
 	return formatImmediate(i.Value)
 }
 
-// MemoryOperand represents a memory reference operand
+// MemoryOperand represents a memory reference operand.
 type MemoryOperand struct {
 	Segment string // segment register (optional, e.g., "gs")
 	Base    string // base register (e.g., "rsp")
@@ -72,7 +72,7 @@ func (m MemoryOperand) String() string {
 	return formatMemory(m)
 }
 
-// formatImmediate formats immediate value as hex string
+// formatImmediate formats immediate value as hex string.
 func formatImmediate(value int64) string {
 	if value >= 0 {
 		return "0x" + formatHex(uint64(value))
@@ -80,7 +80,7 @@ func formatImmediate(value int64) string {
 	return "-0x" + formatHex(uint64(-value))
 }
 
-// formatHex formats unsigned value as hex without leading zeros
+// formatHex formats unsigned value as hex without leading zeros.
 func formatHex(value uint64) string {
 	if value == 0 {
 		return "0"
@@ -99,7 +99,7 @@ func formatHex(value uint64) string {
 	return string(buf[i:])
 }
 
-// formatMemory formats memory operand as string
+// formatMemory formats memory operand as string.
 func formatMemory(m MemoryOperand) string {
 	result := ""
 
@@ -134,7 +134,7 @@ func formatMemory(m MemoryOperand) string {
 	return result
 }
 
-// formatDisplacement formats displacement part of memory operand
+// formatDisplacement formats displacement part of memory operand.
 func formatDisplacement(result string, hasBase, hasIndex, hasDisp bool, disp int64) string {
 	if !hasDisp {
 		return result

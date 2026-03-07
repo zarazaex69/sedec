@@ -33,6 +33,8 @@ func (f BinaryFormat) String() string {
 		return "PE"
 	case BinaryFormatMachO:
 		return "Mach-O"
+	case BinaryFormatUnknown:
+		return unknownStr
 	default:
 		return unknownStr
 	}
@@ -88,6 +90,8 @@ func (a Architecture) String() string {
 		return "RISC-V"
 	case ArchitectureRISCV64:
 		return "RISC-V64"
+	case ArchitectureUnknown:
+		return unknownStr
 	default:
 		return unknownStr
 	}
@@ -147,6 +151,8 @@ func (t SymbolType) String() string {
 		return "File"
 	case SymbolTypeTLS:
 		return "TLS"
+	case SymbolTypeUnknown:
+		return unknownStr
 	default:
 		return unknownStr
 	}
@@ -174,6 +180,8 @@ func (b SymbolBinding) String() string {
 		return "Global"
 	case SymbolBindingWeak:
 		return "Weak"
+	case SymbolBindingUnknown:
+		return unknownStr
 	default:
 		return unknownStr
 	}
@@ -226,6 +234,8 @@ func (t RelocationType) String() string {
 		return "JumpSlot"
 	case RelocationTypeGlobDat:
 		return "GlobDat"
+	case RelocationTypeUnknown:
+		return unknownStr
 	default:
 		return unknownStr
 	}

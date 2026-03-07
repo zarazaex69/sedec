@@ -6,6 +6,10 @@ import (
 	"testing"
 )
 
+const (
+	testSectionText = ".text"
+)
+
 // TestDetectPEArchitecture verifies architecture detection from PE machine type
 func TestDetectPEArchitecture(t *testing.T) {
 	tests := []struct {
@@ -103,8 +107,8 @@ func TestExtractPESections(t *testing.T) {
 	}
 
 	// verify .text section
-	if sections[0].Name != ".text" {
-		t.Errorf("section[0].Name = %s, want .text", sections[0].Name)
+	if sections[0].Name != testSectionText {
+		t.Errorf("section[0].Name = %s, want %s", sections[0].Name, testSectionText)
 	}
 	if sections[0].Address != 0x1000 {
 		t.Errorf("section[0].Address = %#x, want 0x1000", sections[0].Address)
@@ -174,8 +178,8 @@ func TestExtractPESymbols(t *testing.T) {
 	}
 
 	// verify main symbol
-	if symbols[0].Name != "main" {
-		t.Errorf("symbols[0].Name = %s, want main", symbols[0].Name)
+	if symbols[0].Name != testSymbolNameMain {
+		t.Errorf("symbols[0].Name = %s, want %s", symbols[0].Name, testSymbolNameMain)
 	}
 	if symbols[0].Address != 0x1000 {
 		t.Errorf("symbols[0].Address = %#x, want 0x1000", symbols[0].Address)
@@ -183,8 +187,8 @@ func TestExtractPESymbols(t *testing.T) {
 	if symbols[0].Type != SymbolTypeFunction {
 		t.Errorf("symbols[0].Type = %v, want SymbolTypeFunction", symbols[0].Type)
 	}
-	if symbols[0].Section != ".text" {
-		t.Errorf("symbols[0].Section = %s, want .text", symbols[0].Section)
+	if symbols[0].Section != testSectionText {
+		t.Errorf("symbols[0].Section = %s, want %s", symbols[0].Section, testSectionText)
 	}
 
 	// verify data_var symbol
@@ -401,20 +405,31 @@ func createMinimalPEBinary(t *testing.T) []byte {
 	coffHeader := make([]byte, 20)
 	binary.LittleEndian.PutUint16(coffHeader[0:2], pe.IMAGE_FILE_MACHINE_AMD64) // machine
 	binary.LittleEndian.PutUint16(coffHeader[2:4], 1)                           // number of sections
-	binary.LittleEndian.PutUint16(coffHeader[16:18], 240)                       // size of optional header
+	binary.LittleEndian.PutUint16(coffHeader[16:18], 240)                       // size of optional header (must be 240 for pe64)
+	binary.LittleEndian.PutUint16(coffHeader[18:20], 0x22)                      // characteristics
 	result = append(result, coffHeader...)
 
 	// optional header (240 bytes for pe64)
 	optHeader := make([]byte, 240)
-	binary.LittleEndian.PutUint16(optHeader[0:2], 0x20b)      // magic (pe32+)
-	binary.LittleEndian.PutUint32(optHeader[16:20], 0x1000)   // address of entry point
+	// standard fields
+	binary.LittleEndian.PutUint16(optHeader[0:2], 0x20b)    // magic (pe32+)
+	binary.LittleEndian.PutUint32(optHeader[16:20], 0x1000) // address of entry point
+	binary.LittleEndian.PutUint32(optHeader[20:24], 0x1000) // base of code
+	// windows-specific fields
 	binary.LittleEndian.PutUint64(optHeader[24:32], 0x400000) // image base
 	binary.LittleEndian.PutUint32(optHeader[32:36], 0x1000)   // section alignment
 	binary.LittleEndian.PutUint32(optHeader[36:40], 0x200)    // file alignment
+	binary.LittleEndian.PutUint16(optHeader[40:42], 6)        // major os version
+	binary.LittleEndian.PutUint16(optHeader[48:50], 6)        // major subsystem version
 	binary.LittleEndian.PutUint32(optHeader[56:60], 0x2000)   // size of image
 	binary.LittleEndian.PutUint32(optHeader[60:64], 0x400)    // size of headers
 	binary.LittleEndian.PutUint16(optHeader[68:70], 3)        // subsystem (console)
+	binary.LittleEndian.PutUint64(optHeader[72:80], 0x100000) // size of stack reserve
+	binary.LittleEndian.PutUint64(optHeader[80:88], 0x1000)   // size of stack commit
+	binary.LittleEndian.PutUint64(optHeader[88:96], 0x100000) // size of heap reserve
+	binary.LittleEndian.PutUint64(optHeader[96:104], 0x1000)  // size of heap commit
 	binary.LittleEndian.PutUint32(optHeader[108:112], 16)     // number of rva and sizes
+	// data directories (16 * 8 = 128 bytes) - all zeros is valid
 	result = append(result, optHeader...)
 
 	// section header (40 bytes)

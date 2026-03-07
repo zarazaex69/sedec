@@ -18,7 +18,11 @@ func TestReadPEDataAtRVA_Comprehensive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create pe file: %v", err)
 	}
-	defer peFile.Close()
+	defer func() {
+		if err := peFile.Close(); err != nil {
+			t.Logf("failed to close pe file: %v", err)
+		}
+	}()
 
 	tests := []struct {
 		name      string
@@ -81,7 +85,11 @@ func TestReadPEFunctionAddresses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create pe file: %v", err)
 	}
-	defer peFile.Close()
+	defer func() {
+		if err := peFile.Close(); err != nil {
+			t.Logf("failed to close pe file: %v", err)
+		}
+	}()
 
 	exportDir := peExportDirectory{
 		numberOfFunctions:     3,
@@ -114,7 +122,11 @@ func TestProcessPEExportNames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create pe file: %v", err)
 	}
-	defer peFile.Close()
+	defer func() {
+		if err := peFile.Close(); err != nil {
+			t.Logf("failed to close pe file: %v", err)
+		}
+	}()
 
 	exportDir := peExportDirectory{
 		numberOfFunctions:     3,
@@ -149,7 +161,11 @@ func TestReadPEExportEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create pe file: %v", err)
 	}
-	defer peFile.Close()
+	defer func() {
+		if err := peFile.Close(); err != nil {
+			t.Logf("failed to close pe file: %v", err)
+		}
+	}()
 
 	exportDir := peExportDirectory{
 		numberOfFunctions:     3,
@@ -186,7 +202,11 @@ func TestReadPEExportName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create pe file: %v", err)
 	}
-	defer peFile.Close()
+	defer func() {
+		if err := peFile.Close(); err != nil {
+			t.Logf("failed to close pe file: %v", err)
+		}
+	}()
 
 	// try to read name at various rvas
 	tests := []struct {
@@ -296,7 +316,11 @@ func TestExtractELFImportsExports_Comprehensive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create elf file: %v", err)
 	}
-	defer elfFile.Close()
+	defer func() {
+		if err := elfFile.Close(); err != nil {
+			t.Logf("failed to close elf file: %v", err)
+		}
+	}()
 
 	imports, exports := parser.extractELFImportsExports(elfFile)
 

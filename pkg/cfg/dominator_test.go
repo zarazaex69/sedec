@@ -35,8 +35,8 @@ func TestComputeDominators_LinearCode(t *testing.T) {
 	}
 
 	// verify dominator tree structure
-	if err := dt.VerifyDominatorTree(); err != nil {
-		t.Errorf("dominator tree verification failed: %v", err)
+	if verifyErr := dt.VerifyDominatorTree(); verifyErr != nil {
+		t.Errorf("dominator tree verification failed: %v", verifyErr)
 	}
 
 	// in linear code, each block's idom is its predecessor
@@ -114,8 +114,8 @@ func TestComputeDominators_IfThenElse(t *testing.T) {
 	}
 
 	// verify dominator tree correctness
-	if err := dt.VerifyDominatorTree(); err != nil {
-		t.Errorf("dominator tree verification failed: %v", err)
+	if verifyErr := dt.VerifyDominatorTree(); verifyErr != nil {
+		t.Errorf("dominator tree verification failed: %v", verifyErr)
 	}
 
 	// find merge block (has 2 predecessors)
@@ -193,8 +193,8 @@ func TestComputeDominators_Loop(t *testing.T) {
 	}
 
 	// verify dominator tree correctness
-	if err := dt.VerifyDominatorTree(); err != nil {
-		t.Errorf("dominator tree verification failed: %v", err)
+	if verifyErr := dt.VerifyDominatorTree(); verifyErr != nil {
+		t.Errorf("dominator tree verification failed: %v", verifyErr)
 	}
 
 	// find loop header (has back edge - predecessor with higher address)
@@ -568,8 +568,8 @@ func TestDominatorTree_DFSNumbering(t *testing.T) {
 	}
 
 	// entry should have dfs number 0
-	entryNum, exists := dt.GetDFSNumber(cfg.Entry)
-	if !exists {
+	entryNum, entryExists := dt.GetDFSNumber(cfg.Entry)
+	if !entryExists {
 		t.Error("entry block should have dfs number")
 	}
 	if entryNum != 0 {
@@ -579,8 +579,8 @@ func TestDominatorTree_DFSNumbering(t *testing.T) {
 	// all reachable blocks should have unique dfs numbers
 	seen := make(map[int]BlockID)
 	for id := range cfg.Blocks {
-		num, exists := dt.GetDFSNumber(id)
-		if !exists {
+		num, numExists := dt.GetDFSNumber(id)
+		if !numExists {
 			t.Errorf("block %d should have dfs number", id)
 			continue
 		}
@@ -663,51 +663,7 @@ func TestDominatorTree_EmptyCFG(t *testing.T) {
 // TestDominatorTree_NestedLoops tests dominator tree for nested loops
 func TestDominatorTree_NestedLoops(t *testing.T) {
 	// create nested loop structure
-	instructions := []*disasm.Instruction{
-		// outer loop header
-		{Address: 0x1000, Mnemonic: "mov", Length: 3},
-		{Address: 0x1003, Mnemonic: "cmp", Length: 3},
-		{
-			Address:  0x1006,
-			Mnemonic: "jge",
-			Length:   2,
-			Operands: []disasm.Operand{
-				disasm.ImmediateOperand{Value: 0x1016, Size: disasm.Size32},
-			},
-		},
-		// inner loop header
-		{Address: 0x1008, Mnemonic: "cmp", Length: 3},
-		{
-			Address:  0x100b,
-			Mnemonic: "jge",
-			Length:   2,
-			Operands: []disasm.Operand{
-				disasm.ImmediateOperand{Value: 0x1012, Size: disasm.Size32},
-			},
-		},
-		// inner loop body
-		{Address: 0x100d, Mnemonic: "add", Length: 3},
-		{
-			Address:  0x1010,
-			Mnemonic: "jmp",
-			Length:   2,
-			Operands: []disasm.Operand{
-				disasm.ImmediateOperand{Value: 0x1008, Size: disasm.Size32},
-			},
-		},
-		// outer loop body (after inner)
-		{Address: 0x1012, Mnemonic: "inc", Length: 2},
-		{
-			Address:  0x1014,
-			Mnemonic: "jmp",
-			Length:   2,
-			Operands: []disasm.Operand{
-				disasm.ImmediateOperand{Value: 0x1003, Size: disasm.Size32},
-			},
-		},
-		// exit
-		{Address: 0x1016, Mnemonic: "ret", Length: 1},
-	}
+	instructions := createNestedLoopInstructions()
 
 	builder := NewCFGBuilder()
 	cfg, err := builder.Build(instructions)
@@ -721,8 +677,8 @@ func TestDominatorTree_NestedLoops(t *testing.T) {
 	}
 
 	// verify dominator tree correctness
-	if err := dt.VerifyDominatorTree(); err != nil {
-		t.Errorf("dominator tree verification failed: %v", err)
+	if verifyErr := dt.VerifyDominatorTree(); verifyErr != nil {
+		t.Errorf("dominator tree verification failed: %v", verifyErr)
 	}
 
 	// verify entry dominates all

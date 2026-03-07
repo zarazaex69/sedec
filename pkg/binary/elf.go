@@ -5,7 +5,9 @@ import (
 	"encoding/binary"
 )
 
-// detectELFArchitecture determines the architecture from ELF file
+// detectELFArchitecture determines the architecture from ELF file.
+//
+//nolint:exhaustive // only common architectures are supported, default handles all others
 func (p *StandardLibParser) detectELFArchitecture(elfFile *elf.File) Architecture {
 	switch elfFile.Machine {
 	case elf.EM_X86_64:
@@ -29,11 +31,12 @@ func (p *StandardLibParser) detectELFArchitecture(elfFile *elf.File) Architectur
 		}
 		return ArchitectureRISCV
 	default:
+		// all other architectures are unsupported
 		return ArchitectureUnknown
 	}
 }
 
-// extractELFSections extracts all sections from ELF file
+// extractELFSections extracts all sections from ELF file.
 func (p *StandardLibParser) extractELFSections(elfFile *elf.File) []*Section {
 	sections := make([]*Section, 0, len(elfFile.Sections))
 
@@ -66,7 +69,7 @@ func (p *StandardLibParser) extractELFSections(elfFile *elf.File) []*Section {
 	return sections
 }
 
-// extractELFSymbols extracts both static and dynamic symbols
+// extractELFSymbols extracts both static and dynamic symbols.
 func (p *StandardLibParser) extractELFSymbols(elfFile *elf.File) []*Symbol {
 	symbols := make([]*Symbol, 0, 256)
 
@@ -89,7 +92,7 @@ func (p *StandardLibParser) extractELFSymbols(elfFile *elf.File) []*Symbol {
 	return symbols
 }
 
-// convertELFSymbol converts elf.Symbol to our Symbol type
+// convertELFSymbol converts elf.Symbol to our Symbol type.
 func (p *StandardLibParser) convertELFSymbol(sym *elf.Symbol, elfFile *elf.File) *Symbol {
 	symbol := &Symbol{
 		Name:    sym.Name,
@@ -107,7 +110,7 @@ func (p *StandardLibParser) convertELFSymbol(sym *elf.Symbol, elfFile *elf.File)
 	return symbol
 }
 
-// convertELFSymbolType converts ELF symbol type to our type
+// convertELFSymbolType converts ELF symbol type to our type.
 func (p *StandardLibParser) convertELFSymbolType(st elf.SymType) SymbolType {
 	switch st {
 	case elf.STT_FUNC:
@@ -120,12 +123,15 @@ func (p *StandardLibParser) convertELFSymbolType(st elf.SymType) SymbolType {
 		return SymbolTypeFile
 	case elf.STT_TLS:
 		return SymbolTypeTLS
+	case elf.STT_NOTYPE, elf.STT_COMMON, elf.STT_GNU_IFUNC, elf.STT_HIOS,
+		elf.STT_LOPROC, elf.STT_HIPROC, elf.STT_RELC, elf.STT_SRELC:
+		return SymbolTypeUnknown
 	default:
 		return SymbolTypeUnknown
 	}
 }
 
-// convertELFSymbolBinding converts ELF symbol binding to our type
+// convertELFSymbolBinding converts ELF symbol binding to our type.
 func (p *StandardLibParser) convertELFSymbolBinding(sb elf.SymBind) SymbolBinding {
 	switch sb {
 	case elf.STB_LOCAL:
@@ -134,6 +140,8 @@ func (p *StandardLibParser) convertELFSymbolBinding(sb elf.SymBind) SymbolBindin
 		return SymbolBindingGlobal
 	case elf.STB_WEAK:
 		return SymbolBindingWeak
+	case elf.STB_LOOS, elf.STB_HIOS, elf.STB_LOPROC, elf.STB_HIPROC:
+		return SymbolBindingUnknown
 	default:
 		return SymbolBindingUnknown
 	}
@@ -190,7 +198,7 @@ func (p *StandardLibParser) extractELFRelocations(elfFile *elf.File) []*Relocati
 	return relocations
 }
 
-// parseELFRelocation parses a single relocation entry
+// parseELFRelocation parses a single relocation entry.
 func (p *StandardLibParser) parseELFRelocation(data []byte, elfFile *elf.File,
 	secType elf.SectionType, dynSyms []elf.Symbol) *Relocation {
 	var offset, info uint64
@@ -244,7 +252,7 @@ func (p *StandardLibParser) parseELFRelocation(data []byte, elfFile *elf.File,
 	return reloc
 }
 
-// convertELFRelocationType converts ELF relocation type to our type
+// convertELFRelocationType converts ELF relocation type to our type.
 func (p *StandardLibParser) convertELFRelocationType(machine elf.Machine, relocType uint32) RelocationType {
 	// x86_64 relocation types (using raw constants as some may not be in older go versions)
 	if machine == elf.EM_X86_64 {
@@ -283,7 +291,7 @@ func (p *StandardLibParser) convertELFRelocationType(machine elf.Machine, relocT
 	return RelocationTypeUnknown
 }
 
-// extractELFImportsExports extracts imported and exported symbols
+// extractELFImportsExports extracts imported and exported symbols.
 func (p *StandardLibParser) extractELFImportsExports(elfFile *elf.File) ([]*Import, []*Export) {
 	imports := make([]*Import, 0, 64)
 	exports := make([]*Export, 0, 64)

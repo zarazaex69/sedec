@@ -364,46 +364,7 @@ func TestCFGBuilder_LoopWithBreakContinue(t *testing.T) {
 	//   if (y) break;
 	//   body;
 	// }
-	instructions := []*disasm.Instruction{
-		{Address: 0x1000, Mnemonic: "mov", Length: 3}, // init
-		{Address: 0x1003, Mnemonic: "cmp", Length: 3}, // loop condition
-		{
-			Address:  0x1006,
-			Mnemonic: "je",
-			Length:   2,
-			Operands: []disasm.Operand{
-				disasm.ImmediateOperand{Value: 0x1025, Size: disasm.Size32}, // exit loop
-			},
-		},
-		{Address: 0x1008, Mnemonic: "test", Length: 3}, // check continue condition
-		{
-			Address:  0x100b,
-			Mnemonic: "jne",
-			Length:   2,
-			Operands: []disasm.Operand{
-				disasm.ImmediateOperand{Value: 0x1003, Size: disasm.Size32}, // continue (back to header)
-			},
-		},
-		{Address: 0x100d, Mnemonic: "test", Length: 3}, // check break condition
-		{
-			Address:  0x1010,
-			Mnemonic: "jne",
-			Length:   2,
-			Operands: []disasm.Operand{
-				disasm.ImmediateOperand{Value: 0x1025, Size: disasm.Size32}, // break (exit loop)
-			},
-		},
-		{Address: 0x1012, Mnemonic: "add", Length: 3}, // loop body
-		{
-			Address:  0x1015,
-			Mnemonic: "jmp",
-			Length:   2,
-			Operands: []disasm.Operand{
-				disasm.ImmediateOperand{Value: 0x1003, Size: disasm.Size32}, // back to header
-			},
-		},
-		{Address: 0x1025, Mnemonic: "ret", Length: 1}, // exit
-	}
+	instructions := createLoopWithBreakContinueInstructions()
 
 	builder := NewCFGBuilder()
 	cfg, err := builder.Build(instructions)
@@ -446,46 +407,7 @@ func TestCFGBuilder_LoopWithBreakContinue(t *testing.T) {
 // TestCFGBuilder_LoopWithMultipleExits tests loop with multiple exit points
 func TestCFGBuilder_LoopWithMultipleExits(t *testing.T) {
 	// create loop with multiple exit conditions
-	instructions := []*disasm.Instruction{
-		{Address: 0x1000, Mnemonic: "xor", Length: 3}, // init
-		{Address: 0x1003, Mnemonic: "cmp", Length: 3}, // condition 1
-		{
-			Address:  0x1006,
-			Mnemonic: "je",
-			Length:   2,
-			Operands: []disasm.Operand{
-				disasm.ImmediateOperand{Value: 0x1020, Size: disasm.Size32}, // exit 1
-			},
-		},
-		{Address: 0x1008, Mnemonic: "test", Length: 3}, // condition 2
-		{
-			Address:  0x100b,
-			Mnemonic: "js",
-			Length:   2,
-			Operands: []disasm.Operand{
-				disasm.ImmediateOperand{Value: 0x1020, Size: disasm.Size32}, // exit 2
-			},
-		},
-		{Address: 0x100d, Mnemonic: "cmp", Length: 3}, // condition 3
-		{
-			Address:  0x1010,
-			Mnemonic: "jg",
-			Length:   2,
-			Operands: []disasm.Operand{
-				disasm.ImmediateOperand{Value: 0x1020, Size: disasm.Size32}, // exit 3
-			},
-		},
-		{Address: 0x1012, Mnemonic: "inc", Length: 3}, // body
-		{
-			Address:  0x1015,
-			Mnemonic: "jmp",
-			Length:   2,
-			Operands: []disasm.Operand{
-				disasm.ImmediateOperand{Value: 0x1003, Size: disasm.Size32}, // back edge
-			},
-		},
-		{Address: 0x1020, Mnemonic: "ret", Length: 1}, // common exit
-	}
+	instructions := createLoopWithMultipleExitsInstructions()
 
 	builder := NewCFGBuilder()
 	cfg, err := builder.Build(instructions)

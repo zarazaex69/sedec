@@ -5,12 +5,18 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 )
 
 const version = "0.1.0-dev"
+
+var (
+	// errUnknownCommand indicates unknown command.
+	errUnknownCommand = errors.New("unknown command")
+)
 
 func main() {
 	if err := run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
@@ -19,7 +25,7 @@ func main() {
 	}
 }
 
-// run executes the cli with dependency injection for testability
+// run executes the cli with dependency injection for testability.
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		printUsage(stderr)
@@ -51,11 +57,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		//nolint:errcheck,gosec // error message output is informational, subcommand is from args
 		fmt.Fprintf(stderr, "unknown command: %s\n\n", subcommand)
 		printUsage(stderr)
-		return fmt.Errorf("unknown command: %s", subcommand)
+		return fmt.Errorf("%w: %s", errUnknownCommand, subcommand)
 	}
 }
 
-// printUsage displays comprehensive help information
+// printUsage displays comprehensive help information.
 func printUsage(w io.Writer) {
 	//nolint:errcheck // usage output is informational, errors are non-critical
 	fmt.Fprintf(w, `sedec - static executable decompiler

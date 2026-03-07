@@ -1,9 +1,31 @@
 package cfg
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/zarazaex69/sedec/pkg/disasm"
+)
+
+var (
+	// errUnknownUpdateType indicates unknown update type
+	errUnknownUpdateType = errors.New("unknown update type")
+	// errNoTargetsProvided indicates no targets provided
+	errNoTargetsProvided = errors.New("no targets provided for indirect jump resolution")
+	// errAddEdgeRequiresOneTarget indicates AddEdge requires exactly one target
+	errAddEdgeRequiresOneTarget = errors.New("AddEdge requires exactly one target")
+	// errSourceAddressNotFound indicates source address not found
+	errSourceAddressNotFound = errors.New("source address not found in any block")
+	// errTargetAddressNotFound indicates target address not found
+	errTargetAddressNotFound = errors.New("target address not found in any block")
+	// errAddBlockNotImplemented indicates AddBlock not yet implemented
+	errAddBlockNotImplemented = errors.New("AddBlock update type not yet implemented")
+	// errSplitAddressNotFound indicates split address not found
+	errSplitAddressNotFound = errors.New("split address not found in any block")
+	// errBlockNotFound indicates block not found in cfg
+	errBlockNotFound = errors.New("block not found in cfg")
+	// errSplitAddressNotInBlock indicates split address not found in block instructions
+	errSplitAddressNotInBlock = errors.New("split address not found in block instructions")
 )
 
 // IncrementalUpdate represents a pending CFG update operation
@@ -93,14 +115,14 @@ func (b *Builder) ApplyIncrementalUpdate(update *IncrementalUpdate) error {
 	case UpdateTypeSplitBlock:
 		return b.applySplitBlock(update)
 	default:
-		return fmt.Errorf("unknown update type: %v", update.UpdateType)
+		return fmt.Errorf("%w: %v", errUnknownUpdateType, update.UpdateType)
 	}
 }
 
 // applyResolveIndirect resolves indirect jump with discovered targets
 func (b *Builder) applyResolveIndirect(update *IncrementalUpdate) error {
 	if len(update.Targets) == 0 {
-		return fmt.Errorf("no targets provided for indirect jump resolution")
+		return errNoTargetsProvided
 	}
 
 	// add all targets
@@ -116,17 +138,17 @@ func (b *Builder) applyResolveIndirect(update *IncrementalUpdate) error {
 // applyAddEdge adds a new edge between existing blocks
 func (b *Builder) applyAddEdge(update *IncrementalUpdate) error {
 	if len(update.Targets) != 1 {
-		return fmt.Errorf("AddEdge requires exactly one target, got %d", len(update.Targets))
+		return fmt.Errorf("%w, got %d", errAddEdgeRequiresOneTarget, len(update.Targets))
 	}
 
 	jumpBlockID, exists := b.addressToBlock[update.JumpSite]
 	if !exists {
-		return fmt.Errorf("source address 0x%x not found in any block", update.JumpSite)
+		return fmt.Errorf("%w: 0x%x", errSourceAddressNotFound, update.JumpSite)
 	}
 
 	targetBlockID, exists := b.addressToBlock[update.Targets[0]]
 	if !exists {
-		return fmt.Errorf("target address 0x%x not found in any block", update.Targets[0])
+		return fmt.Errorf("%w: 0x%x", errTargetAddressNotFound, update.Targets[0])
 	}
 
 	b.cfg.AddEdgeWithProvenance(jumpBlockID, targetBlockID, EdgeTypeIndirect, update.Provenance)
@@ -137,7 +159,7 @@ func (b *Builder) applyAddEdge(update *IncrementalUpdate) error {
 func (b *Builder) applyAddBlock(_ *IncrementalUpdate) error {
 	// this would require new instructions to be provided
 	// placeholder for future implementation when discovering new code
-	return fmt.Errorf("AddBlock update type not yet implemented")
+	return errAddBlockNotImplemented
 }
 
 // applySplitBlock splits an existing block when new branch target is discovered mid-block
@@ -177,12 +199,12 @@ func (b *Builder) applySplitBlock(update *IncrementalUpdate) error {
 func (b *Builder) findBlockForSplit(splitAddr disasm.Address) (*BasicBlock, BlockID, error) {
 	blockID, exists := b.addressToBlock[splitAddr]
 	if !exists {
-		return nil, 0, fmt.Errorf("split address 0x%x not found in any block", splitAddr)
+		return nil, 0, fmt.Errorf("%w: 0x%x", errSplitAddressNotFound, splitAddr)
 	}
 
 	block, exists := b.cfg.GetBlock(blockID)
 	if !exists {
-		return nil, 0, fmt.Errorf("block %d not found in cfg", blockID)
+		return nil, 0, fmt.Errorf("%w: %d", errBlockNotFound, blockID)
 	}
 
 	return block, blockID, nil
@@ -195,7 +217,7 @@ func (b *Builder) findSplitIndex(block *BasicBlock, splitAddr disasm.Address) (i
 			return i, nil
 		}
 	}
-	return -1, fmt.Errorf("split address 0x%x not found in block instructions", splitAddr)
+	return -1, fmt.Errorf("%w: 0x%x", errSplitAddressNotInBlock, splitAddr)
 }
 
 // createSplitBlock creates a new block from the split point onwards

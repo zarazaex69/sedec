@@ -54,6 +54,8 @@ func (e EdgeType) String() string {
 		return "Return"
 	case EdgeTypeIndirect:
 		return "Indirect"
+	case EdgeTypeUnknown:
+		return unknownEdgeTypeString
 	default:
 		return unknownEdgeTypeString
 	}
@@ -114,6 +116,8 @@ func (k IndirectJumpKind) String() string {
 		return "FunctionPointer"
 	case IndirectJumpComputedGoto:
 		return "ComputedGoto"
+	case IndirectJumpUnknown:
+		return unknownEdgeTypeString
 	default:
 		return unknownEdgeTypeString
 	}

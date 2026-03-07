@@ -1,10 +1,26 @@
 package cfg
 
 import (
+	"errors"
 	"fmt"
 
 	"gonum.org/v1/gonum/graph/flow"
 	"gonum.org/v1/gonum/graph/simple"
+)
+
+var (
+	// errCFGNotBuilt indicates cfg not built yet
+	errCFGNotBuilt = errors.New("cfg not built yet")
+	// errCFGHasNoBlocks indicates cfg has no blocks
+	errCFGHasNoBlocks = errors.New("cfg has no blocks")
+	// errEntryDoesNotDominate indicates entry block does not dominate reachable block
+	errEntryDoesNotDominate = errors.New("entry block does not dominate reachable block")
+	// errCycleInDominatorTree indicates cycle detected in dominator tree
+	errCycleInDominatorTree = errors.New("cycle detected in dominator tree")
+	// errChildBlockNoIdom indicates child block has no idom
+	errChildBlockNoIdom = errors.New("child block has no idom but listed as child")
+	// errChildBlockWrongIdom indicates child block has wrong idom
+	errChildBlockWrongIdom = errors.New("child block has wrong idom")
 )
 
 // DominatorTree represents the dominator tree structure for a CFG
@@ -89,11 +105,11 @@ func (dt *DominatorTree) GetDFSNumber(block BlockID) (int, bool) {
 // this is the main entry point for dominator tree construction
 func (b *Builder) ComputeDominators() (*DominatorTree, error) {
 	if b.cfg == nil {
-		return nil, fmt.Errorf("cfg not built yet")
+		return nil, errCFGNotBuilt
 	}
 
 	if len(b.cfg.Blocks) == 0 {
-		return nil, fmt.Errorf("cfg has no blocks")
+		return nil, errCFGHasNoBlocks
 	}
 
 	// create dominator tree structure
@@ -104,7 +120,8 @@ func (b *Builder) ComputeDominators() (*DominatorTree, error) {
 
 	// add all nodes
 	for id := range b.cfg.Blocks {
-		//nolint:gosec // blockid is controlled, overflow impossible in practice
+		// blockid is controlled, overflow impossible in practice
+		//nolint:gosec // G115: safe conversion - blockid range is limited by cfg size
 		g.AddNode(simple.Node(int64(id)))
 	}
 
@@ -115,10 +132,10 @@ func (b *Builder) ComputeDominators() (*DominatorTree, error) {
 			continue
 		}
 
+		// blockid is controlled, overflow impossible in practice
+		//nolint:gosec // G115: safe conversion - blockid range is limited by cfg size
 		g.SetEdge(simple.Edge{
-			//nolint:gosec // blockid is controlled, overflow impossible in practice
 			F: simple.Node(int64(edge.From)),
-			//nolint:gosec // blockid is controlled, overflow impossible in practice
 			T: simple.Node(int64(edge.To)),
 		})
 	}
@@ -127,6 +144,7 @@ func (b *Builder) ComputeDominators() (*DominatorTree, error) {
 	dt.performDFSNumbering(b.cfg.Entry)
 
 	// compute dominators using gonum's lengauer-tarjan implementation
+	//nolint:gosec // G115: safe conversion - blockid range is limited by cfg size
 	entryNode := simple.Node(int64(b.cfg.Entry))
 	dominatorTree := flow.Dominators(entryNode, g)
 
@@ -138,6 +156,7 @@ func (b *Builder) ComputeDominators() (*DominatorTree, error) {
 			continue
 		}
 
+		//nolint:gosec // G115: safe conversion - blockid range is limited by cfg size
 		node := simple.Node(int64(id))
 		idomNode := dominatorTree.DominatorOf(node.ID())
 
@@ -146,7 +165,8 @@ func (b *Builder) ComputeDominators() (*DominatorTree, error) {
 			continue
 		}
 
-		//nolint:gosec // node id from gonum graph, controlled value
+		// node id from gonum graph, controlled value
+		//nolint:gosec // G115: safe conversion - node id comes from our controlled graph
 		idomID := BlockID(idomNode.ID())
 		dt.Idom[id] = idomID
 	}
@@ -277,7 +297,7 @@ func (dt *DominatorTree) VerifyDominatorTree() error {
 		}
 
 		if !dt.Dominates(dt.cfg.Entry, id) {
-			return fmt.Errorf("entry block %d does not dominate reachable block %d", dt.cfg.Entry, id)
+			return fmt.Errorf("%w: entry %d, block %d", errEntryDoesNotDominate, dt.cfg.Entry, id)
 		}
 	}
 
@@ -288,7 +308,7 @@ func (dt *DominatorTree) VerifyDominatorTree() error {
 
 		for {
 			if visited[current] {
-				return fmt.Errorf("cycle detected in dominator tree at block %d", current)
+				return fmt.Errorf("%w: block %d", errCycleInDominatorTree, current)
 			}
 
 			visited[current] = true
@@ -312,11 +332,11 @@ func (dt *DominatorTree) VerifyDominatorTree() error {
 		for _, child := range children {
 			idom, exists := dt.Idom[child]
 			if !exists {
-				return fmt.Errorf("child block %d has no idom but listed as child of %d", child, parent)
+				return fmt.Errorf("%w: child %d, parent %d", errChildBlockNoIdom, child, parent)
 			}
 
 			if idom != parent {
-				return fmt.Errorf("child block %d has idom %d but listed as child of %d", child, idom, parent)
+				return fmt.Errorf("%w: child %d, idom %d, parent %d", errChildBlockWrongIdom, child, idom, parent)
 			}
 		}
 	}

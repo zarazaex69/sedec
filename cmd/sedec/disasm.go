@@ -1,3 +1,4 @@
+//nolint:godot // CLI tool with many error messages
 package main
 
 import (
@@ -9,6 +10,25 @@ import (
 
 	binfmt "github.com/zarazaex69/sedec/pkg/binary"
 	"github.com/zarazaex69/sedec/pkg/disasm"
+)
+
+var (
+	// errInvalidFormat indicates invalid assembly format
+	errInvalidFormat = errors.New("invalid format (supported: att, intel)")
+	// errNoInputProvided indicates no input was provided
+	errNoInputProvided = errors.New("no input provided (stdin is empty and no file specified)")
+	// errFileNotFound indicates file not found
+	errFileNotFound = errors.New("file not found")
+	// errTooManyArguments indicates too many arguments
+	errTooManyArguments = errors.New("too many arguments (expected 0 or 1)")
+	// errDisasmFunctionNotFound indicates function not found
+	errDisasmFunctionNotFound = errors.New("function not found (not a valid name or hex address)")
+	// errAddressNotInSection indicates address not found in any section
+	errAddressNotInSection = errors.New("address not found in any section")
+	// errAddressExceedsBounds indicates address exceeds section bounds
+	errAddressExceedsBounds = errors.New("address exceeds section bounds")
+	// errNoExecutableSections indicates no executable sections found
+	errNoExecutableSections = errors.New("no executable sections found in binary")
 )
 
 // disasmConfig holds configuration for disasm subcommand
@@ -84,7 +104,7 @@ examples:
 
 	// validate format flag
 	if cfg.format != "att" && cfg.format != "intel" {
-		return fmt.Errorf("invalid format: %s (supported: att, intel)", cfg.format)
+		return fmt.Errorf("%w: %s", errInvalidFormat, cfg.format)
 	}
 
 	// determine input source: file or stdin
@@ -101,20 +121,21 @@ examples:
 			return fmt.Errorf("failed to read from stdin: %w", err)
 		}
 		if len(inputData) == 0 {
-			return fmt.Errorf("no input provided (stdin is empty and no file specified)")
+			return errNoInputProvided
 		}
 	case len(remainingArgs) == 1:
 		// read from file
 		binaryPath := remainingArgs[0]
+		//nolint:gosec // G304: file path is user-provided CLI argument, expected behavior for disassembler tool
 		inputData, err = os.ReadFile(binaryPath)
 		if err != nil {
 			if os.IsNotExist(err) {
-				return fmt.Errorf("file not found: %s", binaryPath)
+				return fmt.Errorf("%w: %s", errFileNotFound, binaryPath)
 			}
 			return fmt.Errorf("failed to read file %s: %w", binaryPath, err)
 		}
 	default:
-		return fmt.Errorf("too many arguments (expected 0 or 1, got %d)", len(remainingArgs))
+		return fmt.Errorf("%w, got %d", errTooManyArguments, len(remainingArgs))
 	}
 
 	// determine output destination
@@ -230,7 +251,7 @@ func parseFunctionAddress(spec string) (*functionTarget, error) {
 		// try without 0x prefix
 		_, err = fmt.Sscanf(spec, "%x", &addr)
 		if err != nil {
-			return nil, fmt.Errorf("function not found: %s (not a valid name or hex address)", spec)
+			return nil, fmt.Errorf("%w: %s", errDisasmFunctionNotFound, spec)
 		}
 	}
 	return &functionTarget{
@@ -247,14 +268,14 @@ func findSectionForAddress(binaryInfo *binfmt.BinaryInfo, address disasm.Address
 			return section, nil
 		}
 	}
-	return nil, fmt.Errorf("address 0x%x not found in any section", address)
+	return nil, fmt.Errorf("%w: 0x%x", errAddressNotInSection, address)
 }
 
 // calculateSectionOffset calculates offset within section and validates bounds
 func calculateSectionOffset(section *binfmt.Section, address disasm.Address) (uint64, error) {
 	offset := uint64(address) - uint64(section.Address)
 	if offset >= uint64(len(section.Data)) {
-		return 0, fmt.Errorf("address 0x%x exceeds section bounds", address)
+		return 0, fmt.Errorf("%w: 0x%x", errAddressExceedsBounds, address)
 	}
 	return offset, nil
 }
@@ -360,7 +381,7 @@ func disassembleAllSections(binaryInfo *binfmt.BinaryInfo, disassembler *disasm.
 	}
 
 	if executableSections == 0 {
-		return fmt.Errorf("no executable sections found in binary")
+		return errNoExecutableSections
 	}
 
 	return nil

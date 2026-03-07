@@ -17,7 +17,7 @@ func TestWithRealELFBinary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() { _ = info.Close() }()
 
 	// verify format detection
 	if info.Format != BinaryFormatELF {
@@ -138,7 +138,7 @@ func TestELFSectionProperties(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() { _ = info.Close() }()
 
 	sectionTests := []struct {
 		name       string
@@ -189,7 +189,7 @@ func TestELFSymbolTypes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() { _ = info.Close() }()
 
 	// collect symbols by type
 	functionSymbols := 0
@@ -207,6 +207,8 @@ func TestELFSymbolTypes(t *testing.T) {
 			sectionSymbols++
 		case SymbolTypeFile:
 			fileSymbols++
+		case SymbolTypeTLS, SymbolTypeUnknown:
+			// skip tls and unknown types
 		}
 	}
 
@@ -231,7 +233,7 @@ func TestELFSymbolBindings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() { _ = info.Close() }()
 
 	// collect symbols by binding
 	globalSymbols := 0
@@ -246,6 +248,8 @@ func TestELFSymbolBindings(t *testing.T) {
 			localSymbols++
 		case SymbolBindingWeak:
 			weakSymbols++
+		case SymbolBindingUnknown:
+			// skip unknown bindings
 		}
 	}
 
@@ -270,7 +274,7 @@ func TestELFImportsExports(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() { _ = info.Close() }()
 
 	// for dynamically linked binary, we should have imports
 	// for statically linked, imports may be empty

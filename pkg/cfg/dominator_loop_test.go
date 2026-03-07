@@ -186,52 +186,7 @@ func TestDominatorTree_LoopHeaderDominatesBody(t *testing.T) {
 // requirement 4.5: immediate dominator computation
 func TestDominatorTree_LoopImmediateDominator(t *testing.T) {
 	// construct nested loops to test idom relationships
-	instructions := []*disasm.Instruction{
-		// entry
-		{Address: 0x1000, Mnemonic: "mov", Length: 3},
-		// outer loop header
-		{Address: 0x1003, Mnemonic: "cmp", Length: 3},
-		{
-			Address:  0x1006,
-			Mnemonic: "jge",
-			Length:   2,
-			Operands: []disasm.Operand{
-				disasm.ImmediateOperand{Value: 0x1016, Size: disasm.Size32},
-			},
-		},
-		// inner loop header
-		{Address: 0x1008, Mnemonic: "cmp", Length: 3},
-		{
-			Address:  0x100b,
-			Mnemonic: "jge",
-			Length:   2,
-			Operands: []disasm.Operand{
-				disasm.ImmediateOperand{Value: 0x1012, Size: disasm.Size32},
-			},
-		},
-		// inner loop body
-		{Address: 0x100d, Mnemonic: "add", Length: 3},
-		{
-			Address:  0x1010,
-			Mnemonic: "jmp",
-			Length:   2,
-			Operands: []disasm.Operand{
-				disasm.ImmediateOperand{Value: 0x1008, Size: disasm.Size32},
-			},
-		},
-		// outer loop body (after inner)
-		{Address: 0x1012, Mnemonic: "inc", Length: 2},
-		{
-			Address:  0x1014,
-			Mnemonic: "jmp",
-			Length:   2,
-			Operands: []disasm.Operand{
-				disasm.ImmediateOperand{Value: 0x1003, Size: disasm.Size32},
-			},
-		},
-		// exit
-		{Address: 0x1016, Mnemonic: "ret", Length: 1},
-	}
+	instructions := createNestedLoopInstructions()
 
 	builder := NewCFGBuilder()
 	cfg, err := builder.Build(instructions)
@@ -275,8 +230,8 @@ func TestDominatorTree_LoopImmediateDominator(t *testing.T) {
 	}
 
 	// verify inner header's idom is outer header
-	innerIdom, exists := dt.GetImmediateDominator(innerHeader)
-	if !exists {
+	innerIdom, innerExists := dt.GetImmediateDominator(innerHeader)
+	if !innerExists {
 		t.Fatal("inner header should have immediate dominator")
 	}
 	if innerIdom != outerHeader {
@@ -285,8 +240,8 @@ func TestDominatorTree_LoopImmediateDominator(t *testing.T) {
 
 	// verify idom transitivity: if a idom b and b idom c, then a dominates c
 	for id := range cfg.Blocks {
-		idom, exists := dt.GetImmediateDominator(id)
-		if !exists || idom == id {
+		idom, idomExists := dt.GetImmediateDominator(id)
+		if !idomExists || idom == id {
 			continue
 		}
 
@@ -437,32 +392,7 @@ func TestDominatorTree_LoopDominanceFrontiers(t *testing.T) {
 func TestDominatorTree_MultipleBackEdges(t *testing.T) {
 	// construct simple loop with single back-edge for testing
 	// (multiple back-edges to same header can cause issues in loop nesting algorithm)
-	instructions := []*disasm.Instruction{
-		// entry
-		{Address: 0x1000, Mnemonic: "mov", Length: 3},
-		// loop header
-		{Address: 0x1003, Mnemonic: "cmp", Length: 3},
-		{
-			Address:  0x1006,
-			Mnemonic: "jge",
-			Length:   2,
-			Operands: []disasm.Operand{
-				disasm.ImmediateOperand{Value: 0x1010, Size: disasm.Size32},
-			},
-		},
-		// loop body
-		{Address: 0x1008, Mnemonic: "add", Length: 3},
-		{
-			Address:  0x100b,
-			Mnemonic: "jmp",
-			Length:   2,
-			Operands: []disasm.Operand{
-				disasm.ImmediateOperand{Value: 0x1003, Size: disasm.Size32},
-			},
-		},
-		// exit
-		{Address: 0x1010, Mnemonic: "ret", Length: 1},
-	}
+	instructions := createNestedLoopInstructions()
 
 	builder := NewCFGBuilder()
 	cfg, err := builder.Build(instructions)
@@ -845,35 +775,44 @@ func TestDominatorTree_ComplexNestedLoops(t *testing.T) {
 	}
 
 	// verify nesting relationships
-	if outerLoop, outerExists := loopsByDepth[0]; outerExists {
-		if middleLoop, middleExists := loopsByDepth[1]; middleExists {
-			// middle loop should be nested in outer
-			if middleLoop.ParentLoop != outerLoop {
-				t.Error("middle loop should be nested in outer loop")
-			}
+	outerLoop, outerExists := loopsByDepth[0]
+	if !outerExists {
+		t.Fatal("outer loop not found")
+	}
 
-			// outer should dominate middle header
-			if !dt.Dominates(outerLoop.Header, middleLoop.Header) {
-				t.Error("outer loop header should dominate middle loop header")
-			}
+	middleLoop, middleExists := loopsByDepth[1]
+	if !middleExists {
+		t.Fatal("middle loop not found")
+	}
 
-			if innerLoop, innerExists := loopsByDepth[2]; innerExists {
-				// inner loop should be nested in middle
-				if innerLoop.ParentLoop != middleLoop {
-					t.Error("inner loop should be nested in middle loop")
-				}
+	// middle loop should be nested in outer
+	if middleLoop.ParentLoop != outerLoop {
+		t.Error("middle loop should be nested in outer loop")
+	}
 
-				// middle should dominate inner header
-				if !dt.Dominates(middleLoop.Header, innerLoop.Header) {
-					t.Error("middle loop header should dominate inner loop header")
-				}
+	// outer should dominate middle header
+	if !dt.Dominates(outerLoop.Header, middleLoop.Header) {
+		t.Error("outer loop header should dominate middle loop header")
+	}
 
-				// outer should dominate inner header (transitivity)
-				if !dt.Dominates(outerLoop.Header, innerLoop.Header) {
-					t.Error("outer loop header should dominate inner loop header (transitivity)")
-				}
-			}
-		}
+	innerLoop, innerExists := loopsByDepth[2]
+	if !innerExists {
+		t.Fatal("inner loop not found")
+	}
+
+	// inner loop should be nested in middle
+	if innerLoop.ParentLoop != middleLoop {
+		t.Error("inner loop should be nested in middle loop")
+	}
+
+	// middle should dominate inner header
+	if !dt.Dominates(middleLoop.Header, innerLoop.Header) {
+		t.Error("middle loop header should dominate inner loop header")
+	}
+
+	// outer should dominate inner header (transitivity)
+	if !dt.Dominates(outerLoop.Header, innerLoop.Header) {
+		t.Error("outer loop header should dominate inner loop header (transitivity)")
 	}
 
 	// verify dominator tree correctness

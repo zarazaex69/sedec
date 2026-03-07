@@ -20,6 +20,7 @@ func TestWithRealMachOBinary(t *testing.T) {
 	var foundPath string
 
 	for _, path := range testPaths {
+		//nolint:gosec // G304: test code reads test files
 		data, err = os.ReadFile(path)
 		if err == nil {
 			foundPath = path
@@ -38,7 +39,11 @@ func TestWithRealMachOBinary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() {
+		if closeErr := info.Close(); closeErr != nil {
+			t.Logf("failed to close info: %v", closeErr)
+		}
+	}()
 
 	// verify format detection
 	if info.Format != BinaryFormatMachO {
@@ -79,7 +84,11 @@ func TestMachOSectionExtraction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() {
+		if closeErr := info.Close(); closeErr != nil {
+			t.Logf("failed to close info: %v", closeErr)
+		}
+	}()
 
 	// verify sections extracted
 	if len(info.Sections) == 0 {
@@ -118,7 +127,11 @@ func TestMachOSymbolExtraction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() {
+		if closeErr := info.Close(); closeErr != nil {
+			t.Logf("failed to close info: %v", closeErr)
+		}
+	}()
 
 	// verify symbols extracted
 	t.Logf("Extracted %d symbols", len(info.Symbols))
@@ -154,7 +167,11 @@ func TestMachOEntryPointDetection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() {
+		if closeErr := info.Close(); closeErr != nil {
+			t.Logf("failed to close info: %v", closeErr)
+		}
+	}()
 
 	// entry point may be 0 if not found, but should not panic
 	t.Logf("Entry point: %#x", info.EntryPoint)
@@ -173,7 +190,11 @@ func TestMachORelocationExtraction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() {
+		if closeErr := info.Close(); closeErr != nil {
+			t.Logf("failed to close info: %v", closeErr)
+		}
+	}()
 
 	// verify relocations extracted
 	t.Logf("Extracted %d relocations", len(info.Relocations))
@@ -211,7 +232,11 @@ func TestMachOImportsExports(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() {
+		if closeErr := info.Close(); closeErr != nil {
+			t.Logf("failed to close info: %v", closeErr)
+		}
+	}()
 
 	// verify imports extracted
 	t.Logf("Extracted %d imports", len(info.Imports))
@@ -249,7 +274,11 @@ func TestMachOGroundTruthDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() failed: %v", err)
 	}
-	defer info.Close()
+	defer func() {
+		if closeErr := info.Close(); closeErr != nil {
+			t.Logf("failed to close info: %v", closeErr)
+		}
+	}()
 
 	db := info.GroundTruthDB
 
@@ -315,47 +344,9 @@ func TestMachOCloseHandling(t *testing.T) {
 // createMachOWithSections creates a mach-o binary with sections
 func createMachOWithSections() []byte {
 	buf := new(bytes.Buffer)
-
-	// mach header 64
-	binary.Write(buf, binary.LittleEndian, uint32(0xFEEDFACF)) // magic
-	binary.Write(buf, binary.LittleEndian, uint32(0x01000007)) // cpu type: x86_64
-	binary.Write(buf, binary.LittleEndian, uint32(3))          // cpu subtype
-	binary.Write(buf, binary.LittleEndian, uint32(2))          // file type: MH_EXECUTE
-	binary.Write(buf, binary.LittleEndian, uint32(1))          // number of load commands
-	binary.Write(buf, binary.LittleEndian, uint32(152))        // size of load commands
-	binary.Write(buf, binary.LittleEndian, uint32(0))          // flags
-	binary.Write(buf, binary.LittleEndian, uint32(0))          // reserved
-
-	// segment command 64 (LC_SEGMENT_64 = 0x19)
-	binary.Write(buf, binary.LittleEndian, uint32(0x19))        // cmd
-	binary.Write(buf, binary.LittleEndian, uint32(152))         // cmdsize
-	buf.WriteString("__TEXT")                                   // segname
-	buf.Write(make([]byte, 16-len("__TEXT")))                   // padding
-	binary.Write(buf, binary.LittleEndian, uint64(0x100000000)) // vmaddr
-	binary.Write(buf, binary.LittleEndian, uint64(0x1000))      // vmsize
-	binary.Write(buf, binary.LittleEndian, uint64(0))           // fileoff
-	binary.Write(buf, binary.LittleEndian, uint64(0x1000))      // filesize
-	binary.Write(buf, binary.LittleEndian, uint32(7))           // maxprot
-	binary.Write(buf, binary.LittleEndian, uint32(5))           // initprot
-	binary.Write(buf, binary.LittleEndian, uint32(1))           // nsects
-	binary.Write(buf, binary.LittleEndian, uint32(0))           // flags
-
-	// section 64
-	buf.WriteString("__text")                                   // sectname
-	buf.Write(make([]byte, 16-len("__text")))                   // padding
-	buf.WriteString("__TEXT")                                   // segname
-	buf.Write(make([]byte, 16-len("__TEXT")))                   // padding
-	binary.Write(buf, binary.LittleEndian, uint64(0x100000000)) // addr
-	binary.Write(buf, binary.LittleEndian, uint64(0x100))       // size
-	binary.Write(buf, binary.LittleEndian, uint32(0))           // offset
-	binary.Write(buf, binary.LittleEndian, uint32(4))           // align
-	binary.Write(buf, binary.LittleEndian, uint32(0))           // reloff
-	binary.Write(buf, binary.LittleEndian, uint32(0))           // nreloc
-	binary.Write(buf, binary.LittleEndian, uint32(0x80000400))  // flags (S_ATTR_PURE_INSTRUCTIONS)
-	binary.Write(buf, binary.LittleEndian, uint32(0))           // reserved1
-	binary.Write(buf, binary.LittleEndian, uint32(0))           // reserved2
-	binary.Write(buf, binary.LittleEndian, uint32(0))           // reserved3
-
+	writeMachO64HeaderWithSegment(buf, 1, 152)
+	writeSegmentCommand64(buf, "__TEXT", 0x100000000, 0x1000, 0, 0x1000, 1)
+	writeSection64(buf, "__text", "__TEXT", 0x100000000, 0x100, 0, 4)
 	return buf.Bytes()
 }
 
@@ -364,22 +355,22 @@ func createMachOWithSymbols() []byte {
 	buf := new(bytes.Buffer)
 
 	// mach header 64
-	binary.Write(buf, binary.LittleEndian, uint32(0xFEEDFACF)) // magic
-	binary.Write(buf, binary.LittleEndian, uint32(0x01000007)) // cpu type: x86_64
-	binary.Write(buf, binary.LittleEndian, uint32(3))          // cpu subtype
-	binary.Write(buf, binary.LittleEndian, uint32(2))          // file type: MH_EXECUTE
-	binary.Write(buf, binary.LittleEndian, uint32(1))          // number of load commands
-	binary.Write(buf, binary.LittleEndian, uint32(24))         // size of load commands
-	binary.Write(buf, binary.LittleEndian, uint32(0))          // flags
-	binary.Write(buf, binary.LittleEndian, uint32(0))          // reserved
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0xFEEDFACF)) // magic
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x01000007)) // cpu type: x86_64
+	_ = binary.Write(buf, binary.LittleEndian, uint32(3))          // cpu subtype
+	_ = binary.Write(buf, binary.LittleEndian, uint32(2))          // file type: MH_EXECUTE
+	_ = binary.Write(buf, binary.LittleEndian, uint32(1))          // number of load commands
+	_ = binary.Write(buf, binary.LittleEndian, uint32(24))         // size of load commands
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))          // flags
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))          // reserved
 
 	// symtab command (LC_SYMTAB = 0x2)
-	binary.Write(buf, binary.LittleEndian, uint32(0x2))  // cmd
-	binary.Write(buf, binary.LittleEndian, uint32(24))   // cmdsize
-	binary.Write(buf, binary.LittleEndian, uint32(1000)) // symoff
-	binary.Write(buf, binary.LittleEndian, uint32(0))    // nsyms
-	binary.Write(buf, binary.LittleEndian, uint32(2000)) // stroff
-	binary.Write(buf, binary.LittleEndian, uint32(0))    // strsize
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x2))  // cmd
+	_ = binary.Write(buf, binary.LittleEndian, uint32(24))   // cmdsize
+	_ = binary.Write(buf, binary.LittleEndian, uint32(1000)) // symoff
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))    // nsyms
+	_ = binary.Write(buf, binary.LittleEndian, uint32(2000)) // stroff
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))    // strsize
 
 	return buf.Bytes()
 }
@@ -394,44 +385,44 @@ func createMachOWithRelocations() []byte {
 	buf := new(bytes.Buffer)
 
 	// mach header 64
-	binary.Write(buf, binary.LittleEndian, uint32(0xFEEDFACF)) // magic
-	binary.Write(buf, binary.LittleEndian, uint32(0x01000007)) // cpu type: x86_64
-	binary.Write(buf, binary.LittleEndian, uint32(3))          // cpu subtype
-	binary.Write(buf, binary.LittleEndian, uint32(2))          // file type: MH_EXECUTE
-	binary.Write(buf, binary.LittleEndian, uint32(1))          // number of load commands
-	binary.Write(buf, binary.LittleEndian, uint32(152))        // size of load commands
-	binary.Write(buf, binary.LittleEndian, uint32(0))          // flags
-	binary.Write(buf, binary.LittleEndian, uint32(0))          // reserved
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0xFEEDFACF)) // magic
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x01000007)) // cpu type: x86_64
+	_ = binary.Write(buf, binary.LittleEndian, uint32(3))          // cpu subtype
+	_ = binary.Write(buf, binary.LittleEndian, uint32(2))          // file type: MH_EXECUTE
+	_ = binary.Write(buf, binary.LittleEndian, uint32(1))          // number of load commands
+	_ = binary.Write(buf, binary.LittleEndian, uint32(152))        // size of load commands
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))          // flags
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))          // reserved
 
 	// segment command 64 with section that has relocations
-	binary.Write(buf, binary.LittleEndian, uint32(0x19))        // cmd
-	binary.Write(buf, binary.LittleEndian, uint32(152))         // cmdsize
-	buf.WriteString("__TEXT")                                   // segname
-	buf.Write(make([]byte, 16-len("__TEXT")))                   // padding
-	binary.Write(buf, binary.LittleEndian, uint64(0x100000000)) // vmaddr
-	binary.Write(buf, binary.LittleEndian, uint64(0x1000))      // vmsize
-	binary.Write(buf, binary.LittleEndian, uint64(0))           // fileoff
-	binary.Write(buf, binary.LittleEndian, uint64(0x1000))      // filesize
-	binary.Write(buf, binary.LittleEndian, uint32(7))           // maxprot
-	binary.Write(buf, binary.LittleEndian, uint32(5))           // initprot
-	binary.Write(buf, binary.LittleEndian, uint32(1))           // nsects
-	binary.Write(buf, binary.LittleEndian, uint32(0))           // flags
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x19))        // cmd
+	_ = binary.Write(buf, binary.LittleEndian, uint32(152))         // cmdsize
+	buf.WriteString("__TEXT")                                       // segname
+	buf.Write(make([]byte, 16-len("__TEXT")))                       // padding
+	_ = binary.Write(buf, binary.LittleEndian, uint64(0x100000000)) // vmaddr
+	_ = binary.Write(buf, binary.LittleEndian, uint64(0x1000))      // vmsize
+	_ = binary.Write(buf, binary.LittleEndian, uint64(0))           // fileoff
+	_ = binary.Write(buf, binary.LittleEndian, uint64(0x1000))      // filesize
+	_ = binary.Write(buf, binary.LittleEndian, uint32(7))           // maxprot
+	_ = binary.Write(buf, binary.LittleEndian, uint32(5))           // initprot
+	_ = binary.Write(buf, binary.LittleEndian, uint32(1))           // nsects
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))           // flags
 
 	// section 64 with relocations
-	buf.WriteString("__text")                                   // sectname
-	buf.Write(make([]byte, 16-len("__text")))                   // padding
-	buf.WriteString("__TEXT")                                   // segname
-	buf.Write(make([]byte, 16-len("__TEXT")))                   // padding
-	binary.Write(buf, binary.LittleEndian, uint64(0x100000000)) // addr
-	binary.Write(buf, binary.LittleEndian, uint64(0x100))       // size
-	binary.Write(buf, binary.LittleEndian, uint32(1000))        // offset
-	binary.Write(buf, binary.LittleEndian, uint32(4))           // align
-	binary.Write(buf, binary.LittleEndian, uint32(2000))        // reloff
-	binary.Write(buf, binary.LittleEndian, uint32(0))           // nreloc (0 to avoid reading invalid data)
-	binary.Write(buf, binary.LittleEndian, uint32(0x80000400))  // flags
-	binary.Write(buf, binary.LittleEndian, uint32(0))           // reserved1
-	binary.Write(buf, binary.LittleEndian, uint32(0))           // reserved2
-	binary.Write(buf, binary.LittleEndian, uint32(0))           // reserved3
+	buf.WriteString("__text")                                       // sectname
+	buf.Write(make([]byte, 16-len("__text")))                       // padding
+	buf.WriteString("__TEXT")                                       // segname
+	buf.Write(make([]byte, 16-len("__TEXT")))                       // padding
+	_ = binary.Write(buf, binary.LittleEndian, uint64(0x100000000)) // addr
+	_ = binary.Write(buf, binary.LittleEndian, uint64(0x100))       // size
+	_ = binary.Write(buf, binary.LittleEndian, uint32(1000))        // offset
+	_ = binary.Write(buf, binary.LittleEndian, uint32(4))           // align
+	_ = binary.Write(buf, binary.LittleEndian, uint32(2000))        // reloff
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))           // nreloc (0 to avoid reading invalid data)
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x80000400))  // flags
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))           // reserved1
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))           // reserved2
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))           // reserved3
 
 	return buf.Bytes()
 }
@@ -441,27 +432,29 @@ func createMachOWithDylibs() []byte {
 	buf := new(bytes.Buffer)
 
 	// mach header 64
-	binary.Write(buf, binary.LittleEndian, uint32(0xFEEDFACF)) // magic
-	binary.Write(buf, binary.LittleEndian, uint32(0x01000007)) // cpu type: x86_64
-	binary.Write(buf, binary.LittleEndian, uint32(3))          // cpu subtype
-	binary.Write(buf, binary.LittleEndian, uint32(2))          // file type: MH_EXECUTE
-	binary.Write(buf, binary.LittleEndian, uint32(1))          // number of load commands
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0xFEEDFACF)) // magic
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x01000007)) // cpu type: x86_64
+	_ = binary.Write(buf, binary.LittleEndian, uint32(3))          // cpu subtype
+	_ = binary.Write(buf, binary.LittleEndian, uint32(2))          // file type: MH_EXECUTE
+	_ = binary.Write(buf, binary.LittleEndian, uint32(1))          // number of load commands
 	cmdSize := 24 + len("/usr/lib/libSystem.B.dylib") + 1
 	// align to 8 bytes
 	cmdSize = (cmdSize + 7) & ^7
-	binary.Write(buf, binary.LittleEndian, uint32(cmdSize)) // size of load commands
-	binary.Write(buf, binary.LittleEndian, uint32(0))       // flags
-	binary.Write(buf, binary.LittleEndian, uint32(0))       // reserved
+	//nolint:gosec // G115: safe conversion - cmdSize is small validated value
+	_ = binary.Write(buf, binary.LittleEndian, uint32(cmdSize)) // size of load commands
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))       // flags
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))       // reserved
 
 	// dylib command (LC_LOAD_DYLIB = 0xc)
-	binary.Write(buf, binary.LittleEndian, uint32(0xc))     // cmd
-	binary.Write(buf, binary.LittleEndian, uint32(cmdSize)) // cmdsize
-	binary.Write(buf, binary.LittleEndian, uint32(24))      // name offset
-	binary.Write(buf, binary.LittleEndian, uint32(0))       // timestamp
-	binary.Write(buf, binary.LittleEndian, uint32(0))       // current version
-	binary.Write(buf, binary.LittleEndian, uint32(0))       // compatibility version
-	buf.WriteString("/usr/lib/libSystem.B.dylib")           // name
-	buf.WriteByte(0)                                        // null terminator
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0xc)) // cmd
+	//nolint:gosec // G115: safe conversion - cmdSize is small validated value
+	_ = binary.Write(buf, binary.LittleEndian, uint32(cmdSize)) // cmdsize
+	_ = binary.Write(buf, binary.LittleEndian, uint32(24))      // name offset
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))       // timestamp
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))       // current version
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))       // compatibility version
+	buf.WriteString("/usr/lib/libSystem.B.dylib")               // name
+	buf.WriteByte(0)                                            // null terminator
 	// pad to alignment
 	for buf.Len() < 32+cmdSize {
 		buf.WriteByte(0)

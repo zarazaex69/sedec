@@ -64,7 +64,11 @@ func TestExtractMachOSectionsFromLoadCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create macho file: %v", err)
 	}
-	defer machoFile.Close()
+	defer func() {
+		if err := machoFile.Close(); err != nil {
+			t.Logf("failed to close macho file: %v", err)
+		}
+	}()
 
 	parser := NewStandardLibParser()
 	sections := parser.extractMachOSectionsFromLoadCommands(machoFile)
@@ -91,7 +95,11 @@ func TestExtractMachOSymbolsFromSymtab(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create macho file: %v", err)
 	}
-	defer machoFile.Close()
+	defer func() {
+		if err := machoFile.Close(); err != nil {
+			t.Logf("failed to close macho file: %v", err)
+		}
+	}()
 
 	parser := NewStandardLibParser()
 	symbols := parser.extractMachOSymbolsFromSymtab(machoFile)
@@ -118,7 +126,11 @@ func TestExtractMachODynamicRelocations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create macho file: %v", err)
 	}
-	defer machoFile.Close()
+	defer func() {
+		if err := machoFile.Close(); err != nil {
+			t.Logf("failed to close macho file: %v", err)
+		}
+	}()
 
 	parser := NewStandardLibParser()
 	relocations := parser.extractMachODynamicRelocations(machoFile, data)
@@ -145,7 +157,11 @@ func TestBuildMachOGroundTruthDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create macho file: %v", err)
 	}
-	defer machoFile.Close()
+	defer func() {
+		if err := machoFile.Close(); err != nil {
+			t.Logf("failed to close macho file: %v", err)
+		}
+	}()
 
 	parser := NewStandardLibParser()
 	info, err := parser.parseSingleMachO(data, machoFile)
@@ -272,16 +288,29 @@ func TestParseMachO_MalformedBinary(t *testing.T) {
 func createMinimalFatMachO() []byte {
 	buf := new(bytes.Buffer)
 
-	// fat header
-	binary.Write(buf, binary.BigEndian, uint32(0xCAFEBABE)) // magic
-	binary.Write(buf, binary.BigEndian, uint32(0x00000001)) // nfat_arch
+	if err := binary.Write(buf, binary.BigEndian, uint32(0xCAFEBABE)); err != nil {
+		return nil
+	} // magic
+	if err := binary.Write(buf, binary.BigEndian, uint32(0x00000001)); err != nil {
+		return nil
+	} // nfat_arch
 
 	// fat arch
-	binary.Write(buf, binary.BigEndian, uint32(0x01000007)) // cputype (x86_64)
-	binary.Write(buf, binary.BigEndian, uint32(0x00000003)) // cpusubtype
-	binary.Write(buf, binary.BigEndian, uint32(0x00001000)) // offset
-	binary.Write(buf, binary.BigEndian, uint32(0x00000020)) // size
-	binary.Write(buf, binary.BigEndian, uint32(0x0000000C)) // align
+	if err := binary.Write(buf, binary.BigEndian, uint32(0x01000007)); err != nil {
+		return nil
+	} // cputype (x86_64)
+	if err := binary.Write(buf, binary.BigEndian, uint32(0x00000003)); err != nil {
+		return nil
+	} // cpusubtype
+	if err := binary.Write(buf, binary.BigEndian, uint32(0x00001000)); err != nil {
+		return nil
+	} // offset
+	if err := binary.Write(buf, binary.BigEndian, uint32(0x00000020)); err != nil {
+		return nil
+	} // size
+	if err := binary.Write(buf, binary.BigEndian, uint32(0x0000000C)); err != nil {
+		return nil
+	} // align
 
 	// pad to offset
 	for buf.Len() < 0x1000 {
@@ -299,14 +328,14 @@ func createMinimalMachO64Helper() []byte {
 	buf := new(bytes.Buffer)
 
 	// mach header 64
-	binary.Write(buf, binary.LittleEndian, uint32(0xFEEDFACF)) // magic
-	binary.Write(buf, binary.LittleEndian, uint32(0x01000007)) // cputype (x86_64)
-	binary.Write(buf, binary.LittleEndian, uint32(0x00000003)) // cpusubtype
-	binary.Write(buf, binary.LittleEndian, uint32(0x00000002)) // filetype (MH_EXECUTE)
-	binary.Write(buf, binary.LittleEndian, uint32(0x00000000)) // ncmds
-	binary.Write(buf, binary.LittleEndian, uint32(0x00000000)) // sizeofcmds
-	binary.Write(buf, binary.LittleEndian, uint32(0x00000000)) // flags
-	binary.Write(buf, binary.LittleEndian, uint32(0x00000000)) // reserved
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0xFEEDFACF)) // magic
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x01000007)) // cputype (x86_64)
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x00000003)) // cpusubtype
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x00000002)) // filetype (MH_EXECUTE)
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x00000000)) // ncmds
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x00000000)) // sizeofcmds
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x00000000)) // flags
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0x00000000)) // reserved
 
 	return buf.Bytes()
 }

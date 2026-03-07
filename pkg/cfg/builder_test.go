@@ -585,6 +585,8 @@ func TestCFGBuilder_EdgeTypes(t *testing.T) {
 			hasFallthrough = true
 		case EdgeTypeUnconditional:
 			hasUnconditional = true
+		case EdgeTypeUnknown, EdgeTypeCall, EdgeTypeReturn, EdgeTypeIndirect:
+			// skip other edge types
 		}
 	}
 

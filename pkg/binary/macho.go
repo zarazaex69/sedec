@@ -4,10 +4,18 @@ import (
 	"bytes"
 	"debug/macho"
 	"encoding/binary"
+	"errors"
 	"fmt"
 )
 
-// detectMachOArchitecture determines the architecture from Mach-O file
+var (
+	// errFatBinaryNoArchitectures indicates fat binary contains no architectures.
+	errFatBinaryNoArchitectures = errors.New("fat binary contains no architectures")
+	// errFatArchitectureExceedsFileSize indicates fat architecture exceeds file size.
+	errFatArchitectureExceedsFileSize = errors.New("fat architecture offset + size exceeds file size")
+)
+
+// detectMachOArchitecture determines the architecture from Mach-O file.
 func (p *StandardLibParser) detectMachOArchitecture(machoFile *macho.File) Architecture {
 	switch machoFile.Cpu {
 	case macho.CpuAmd64:
@@ -27,7 +35,7 @@ func (p *StandardLibParser) detectMachOArchitecture(machoFile *macho.File) Archi
 	}
 }
 
-// findMachOEntryPoint finds the entry point from LC_MAIN or LC_UNIXTHREAD
+// findMachOEntryPoint finds the entry point from LC_MAIN or LC_UNIXTHREAD.
 func (p *StandardLibParser) findMachOEntryPoint(machoFile *macho.File) Address {
 	// try to find LC_MAIN command (modern mach-o)
 	for _, load := range machoFile.Loads {
@@ -48,8 +56,8 @@ func (p *StandardLibParser) findMachOEntryPoint(machoFile *macho.File) Address {
 	return 0
 }
 
-// extractMachOSectionsFromLoadCommands extracts sections by iterating through load commands
-// this provides more complete information including segment details
+// extractMachOSectionsFromLoadCommands extracts sections by iterating through load commands.
+// This provides more complete information including segment details.
 func (p *StandardLibParser) extractMachOSectionsFromLoadCommands(machoFile *macho.File) []*Section {
 	sections := make([]*Section, 0, len(machoFile.Sections))
 
@@ -95,7 +103,7 @@ func (p *StandardLibParser) extractMachOSectionsFromLoadCommands(machoFile *mach
 	return sections
 }
 
-// extractMachOSymbolsFromSymtab extracts symbols from symtab with complete information
+// extractMachOSymbolsFromSymtab extracts symbols from symtab with complete information.
 func (p *StandardLibParser) extractMachOSymbolsFromSymtab(machoFile *macho.File) []*Symbol {
 	symbols := make([]*Symbol, 0, 256)
 
@@ -131,7 +139,7 @@ func (p *StandardLibParser) extractMachOSymbolsFromSymtab(machoFile *macho.File)
 	return symbols
 }
 
-// convertMachOSymbolType converts Mach-O symbol type to our type
+// convertMachOSymbolType converts Mach-O symbol type to our type.
 func (p *StandardLibParser) convertMachOSymbolType(symType uint8) SymbolType {
 	// mach-o symbol type is in lower 4 bits
 	nType := symType & 0x0E
@@ -148,7 +156,7 @@ func (p *StandardLibParser) convertMachOSymbolType(symType uint8) SymbolType {
 	}
 }
 
-// convertMachOSymbolBinding converts Mach-O symbol flags to binding type
+// convertMachOSymbolBinding converts Mach-O symbol flags to binding type.
 func (p *StandardLibParser) convertMachOSymbolBinding(symType uint8, desc uint16) SymbolBinding {
 	// check if external symbol (N_EXT flag)
 	if (symType & 0x01) != 0 {
@@ -161,7 +169,7 @@ func (p *StandardLibParser) convertMachOSymbolBinding(symType uint8, desc uint16
 	return SymbolBindingLocal
 }
 
-// extractMachORelocations extracts relocations from sections
+// extractMachORelocations extracts relocations from sections.
 func (p *StandardLibParser) extractMachORelocations(machoFile *macho.File) []*Relocation {
 	relocations := make([]*Relocation, 0, 256)
 
@@ -192,8 +200,8 @@ func (p *StandardLibParser) extractMachORelocations(machoFile *macho.File) []*Re
 	return relocations
 }
 
-// extractMachODynamicRelocations extracts dynamic relocations via dysymtab command
-// this includes indirect symbols, external relocations, and local relocations
+// extractMachODynamicRelocations extracts dynamic relocations via dysymtab command.
+// This includes indirect symbols, external relocations, and local relocations.
 func (p *StandardLibParser) extractMachODynamicRelocations(machoFile *macho.File, data []byte) []*Relocation {
 	relocations := make([]*Relocation, 0, 512)
 
@@ -226,8 +234,8 @@ func (p *StandardLibParser) extractMachODynamicRelocations(machoFile *macho.File
 	return relocations
 }
 
-// extractMachOIndirectSymbols extracts indirect symbol table entries
-// these map stub sections and pointer sections to their target symbols
+// extractMachOIndirectSymbols extracts indirect symbol table entries.
+// These map stub sections and pointer sections to their target symbols.
 func (p *StandardLibParser) extractMachOIndirectSymbols(machoFile *macho.File,
 	dysymtab *macho.Dysymtab, data []byte) []*Relocation {
 	relocations := make([]*Relocation, 0, 256)
@@ -471,7 +479,7 @@ func (p *StandardLibParser) parseFatMachO(data []byte) (*BinaryInfo, error) {
 	// read fat header
 	nfatArch := binary.BigEndian.Uint32(data[4:8])
 	if nfatArch == 0 {
-		return nil, fmt.Errorf("fat binary contains no architectures")
+		return nil, errFatBinaryNoArchitectures
 	}
 
 	// read first architecture (typically x86_64 or arm64)
@@ -487,8 +495,8 @@ func (p *StandardLibParser) parseFatMachO(data []byte) (*BinaryInfo, error) {
 
 	// validate bounds
 	if uint64(offset)+uint64(size) > uint64(len(data)) {
-		return nil, fmt.Errorf("fat architecture offset %d + size %d exceeds file size %d",
-			offset, size, len(data))
+		return nil, fmt.Errorf("%w: offset %d + size %d exceeds file size %d",
+			errFatArchitectureExceedsFileSize, offset, size, len(data))
 	}
 
 	// extract single architecture binary

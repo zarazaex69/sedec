@@ -1,5 +1,7 @@
 // Package capstone provides CGO bindings to Capstone disassembly engine for x86_64 architecture.
 // It wraps the C API with type-safe Go interfaces and handles memory management automatically.
+//
+//nolint:godot // CGO file with many C-style comments
 package capstone
 
 /*
@@ -25,25 +27,36 @@ static inline x86_op_mem get_op_mem(cs_x86_op* op) {
 	return op->mem;
 }
 */
-import "C" //nolint:gocritic // cgo requires separate import "C" block
+import "C"
 
-//nolint:gocritic // cgo requires separate import "C" block
 import (
+	"errors"
 	"fmt"
 	"unsafe"
 )
 
-// Architecture types
+var (
+	// errCSOpenFailed indicates cs_open failed.
+	errCSOpenFailed = errors.New("cs_open failed")
+	// errCSCloseFailed indicates cs_close failed.
+	errCSCloseFailed = errors.New("cs_close failed")
+	// errCSOptionFailed indicates cs_option failed.
+	errCSOptionFailed = errors.New("cs_option failed")
+	// errDisassemblyFailed indicates disassembly failed.
+	errDisassemblyFailed = errors.New("disassembly failed")
+)
+
+// Architecture types.
 const (
 	ArchX86 = C.CS_ARCH_X86
 )
 
-// Mode types
+// Mode types.
 const (
 	Mode64 = C.CS_MODE_64
 )
 
-// Option types
+// Option types.
 const (
 	OptDetail      = C.CS_OPT_DETAIL
 	OptDetailOn    = C.CS_OPT_ON
@@ -51,18 +64,18 @@ const (
 	OptSyntaxIntel = C.CS_OPT_SYNTAX_INTEL
 )
 
-// Operand types
+// Operand types.
 const (
 	OpReg = C.X86_OP_REG
 	OpImm = C.X86_OP_IMM
 	OpMem = C.X86_OP_MEM
 )
 
-// Register constants for x86_64
+// Register constants for x86_64.
 const (
 	RegInvalid = C.X86_REG_INVALID
 
-	// 8-bit registers
+	// 8-bit registers.
 	RegAL = C.X86_REG_AL
 	RegAH = C.X86_REG_AH
 	RegBL = C.X86_REG_BL
@@ -72,7 +85,7 @@ const (
 	RegDL = C.X86_REG_DL
 	RegDH = C.X86_REG_DH
 
-	// 16-bit registers
+	// 16-bit registers.
 	RegAX = C.X86_REG_AX
 	RegBX = C.X86_REG_BX
 	RegCX = C.X86_REG_CX
@@ -82,7 +95,7 @@ const (
 	RegBP = C.X86_REG_BP
 	RegSP = C.X86_REG_SP
 
-	// 32-bit registers
+	// 32-bit registers.
 	RegEAX = C.X86_REG_EAX
 	RegEBX = C.X86_REG_EBX
 	RegECX = C.X86_REG_ECX
@@ -92,7 +105,7 @@ const (
 	RegEBP = C.X86_REG_EBP
 	RegESP = C.X86_REG_ESP
 
-	// 64-bit registers
+	// 64-bit registers.
 	RegRAX = C.X86_REG_RAX
 	RegRBX = C.X86_REG_RBX
 	RegRCX = C.X86_REG_RCX
@@ -110,10 +123,10 @@ const (
 	RegR14 = C.X86_REG_R14
 	RegR15 = C.X86_REG_R15
 
-	// instruction pointer
+	// instruction pointer.
 	RegRIP = C.X86_REG_RIP
 
-	// segment registers
+	// segment registers.
 	RegCS = C.X86_REG_CS
 	RegDS = C.X86_REG_DS
 	RegES = C.X86_REG_ES
@@ -122,14 +135,12 @@ const (
 	RegSS = C.X86_REG_SS
 )
 
-// Engine represents capstone disassembly engine
+// Engine represents capstone disassembly engine.
 type Engine struct {
 	handle C.csh
 }
 
-// Instruction represents a disassembled instruction
-//
-//nolint:govet // field order optimized for cgo interop, not memory alignment
+// Instruction represents a disassembled instruction.
 type Instruction struct {
 	Detail   *InstructionDetail
 	Bytes    []byte
@@ -139,18 +150,18 @@ type Instruction struct {
 	Size     uint16
 }
 
-// InstructionDetail contains detailed instruction information
+// InstructionDetail contains detailed instruction information.
 type InstructionDetail struct {
 	X86 *X86Detail
 }
 
-// X86Detail contains x86-specific instruction details
+// X86Detail contains x86-specific instruction details.
 type X86Detail struct {
 	Operands []X86Operand
 	OpCount  uint8
 }
 
-// X86Operand represents an x86 operand
+// X86Operand represents an x86 operand.
 type X86Operand struct {
 	Type uint32
 	Reg  uint32
@@ -159,7 +170,7 @@ type X86Operand struct {
 	Size uint8
 }
 
-// X86OpMem represents a memory operand
+// X86OpMem represents a memory operand.
 type X86OpMem struct {
 	Segment uint32
 	Base    uint32
@@ -168,13 +179,13 @@ type X86OpMem struct {
 	Disp    int64
 }
 
-// New creates a new capstone engine
+// New creates a new capstone engine.
 func New(arch, mode int) (*Engine, error) {
 	var handle C.csh
 
 	err := C.cs_open(C.cs_arch(arch), C.cs_mode(mode), &handle)
 	if err != C.CS_ERR_OK {
-		return nil, fmt.Errorf("cs_open failed: %d", err)
+		return nil, fmt.Errorf("%w: %d", errCSOpenFailed, err)
 	}
 
 	return &Engine{handle: handle}, nil
@@ -184,7 +195,7 @@ func New(arch, mode int) (*Engine, error) {
 func (e *Engine) Close() error {
 	err := C.cs_close(&e.handle)
 	if err != C.CS_ERR_OK {
-		return fmt.Errorf("cs_close failed: %d", err)
+		return fmt.Errorf("%w: %d", errCSCloseFailed, err)
 	}
 	return nil
 }
@@ -193,7 +204,7 @@ func (e *Engine) Close() error {
 func (e *Engine) SetOption(optType, value int) error {
 	err := C.cs_option(e.handle, C.cs_opt_type(optType), C.size_t(value))
 	if err != C.CS_ERR_OK {
-		return fmt.Errorf("cs_option failed: %d", err)
+		return fmt.Errorf("%w: %d", errCSOptionFailed, err)
 	}
 	return nil
 }
@@ -218,7 +229,7 @@ func (e *Engine) Disasm(code []byte, address uint64, count int) ([]Instruction, 
 	)
 
 	if n == 0 {
-		return nil, fmt.Errorf("disassembly failed")
+		return nil, errDisassemblyFailed
 	}
 
 	defer C.cs_free(insn, n)

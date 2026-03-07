@@ -66,9 +66,9 @@ func BenchmarkComputeDominators_Small(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := builder.ComputeDominators()
-		if err != nil {
-			b.Fatalf("failed to compute dominators: %v", err)
+		_, computeErr := builder.ComputeDominators()
+		if computeErr != nil {
+			b.Fatalf("failed to compute dominators: %v", computeErr)
 		}
 	}
 }
@@ -143,9 +143,9 @@ func BenchmarkComputeDominators_Medium(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := builder.ComputeDominators()
-		if err != nil {
-			b.Fatalf("failed to compute dominators: %v", err)
+		_, computeErr := builder.ComputeDominators()
+		if computeErr != nil {
+			b.Fatalf("failed to compute dominators: %v", computeErr)
 		}
 	}
 }

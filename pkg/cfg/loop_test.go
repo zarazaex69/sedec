@@ -84,8 +84,8 @@ func TestDetectLoops_SimpleWhileLoop(t *testing.T) {
 	}
 
 	// verify loop info
-	if err := loopInfo.VerifyLoopInfo(); err != nil {
-		t.Errorf("loop info verification failed: %v", err)
+	if verifyErr := loopInfo.VerifyLoopInfo(); verifyErr != nil {
+		t.Errorf("loop info verification failed: %v", verifyErr)
 	}
 }
 
@@ -99,32 +99,7 @@ func TestDetectLoops_NestedLoops(t *testing.T) {
 	// block 4: outer loop body -> block 1 (outer back-edge)
 	// block 5: exit
 
-	instructions := []*disasm.Instruction{
-		// block 0: entry
-		{Address: 0x1000, Mnemonic: "mov", Length: 3},
-		{Address: 0x1003, Mnemonic: "jmp", Length: 2, Operands: []disasm.Operand{disasm.ImmediateOperand{Value: 0x1005}}},
-
-		// block 1: outer loop header (0x1005-0x1009)
-		{Address: 0x1005, Mnemonic: "cmp", Length: 3},
-		// jg jumps to exit (0x101a), fallthrough goes to inner loop (0x100a)
-		{Address: 0x1008, Mnemonic: "jg", Length: 2, Operands: []disasm.Operand{disasm.ImmediateOperand{Value: 0x101a}}},
-
-		// block 2: inner loop header (0x100a-0x100e)
-		{Address: 0x100a, Mnemonic: "cmp", Length: 3},
-		// jg jumps to outer body (0x1015), fallthrough goes to inner body (0x100f)
-		{Address: 0x100d, Mnemonic: "jg", Length: 2, Operands: []disasm.Operand{disasm.ImmediateOperand{Value: 0x1015}}},
-
-		// block 3: inner loop body (0x100f-0x1013)
-		{Address: 0x100f, Mnemonic: "add", Length: 3},
-		{Address: 0x1012, Mnemonic: "jmp", Length: 2, Operands: []disasm.Operand{disasm.ImmediateOperand{Value: 0x100a}}},
-
-		// block 4: outer loop body (0x1015-0x1019)
-		{Address: 0x1015, Mnemonic: "sub", Length: 3},
-		{Address: 0x1018, Mnemonic: "jmp", Length: 2, Operands: []disasm.Operand{disasm.ImmediateOperand{Value: 0x1005}}},
-
-		// block 5: exit (0x101a)
-		{Address: 0x101a, Mnemonic: "ret", Length: 1},
-	}
+	instructions := createNestedLoopInstructions()
 
 	builder := NewCFGBuilder()
 	cfg, err := builder.Build(instructions)
@@ -148,9 +123,9 @@ func TestDetectLoops_NestedLoops(t *testing.T) {
 	for _, loop := range loopInfo.Loops {
 		headerBlock, _ := cfg.GetBlock(loop.Header)
 		switch headerBlock.StartAddress {
-		case 0x1005:
+		case 0x1003: // outer loop header
 			outerLoop = loop
-		case 0x100a:
+		case 0x1008: // inner loop header
 			innerLoop = loop
 		}
 	}
@@ -185,8 +160,8 @@ func TestDetectLoops_NestedLoops(t *testing.T) {
 	}
 
 	// verify loop info
-	if err := loopInfo.VerifyLoopInfo(); err != nil {
-		t.Errorf("loop info verification failed: %v", err)
+	if verifyErr := loopInfo.VerifyLoopInfo(); verifyErr != nil {
+		t.Errorf("loop info verification failed: %v", verifyErr)
 	}
 }
 
@@ -247,8 +222,8 @@ func TestDetectLoops_DoWhileLoop(t *testing.T) {
 	}
 
 	// verify loop info
-	if err := loopInfo.VerifyLoopInfo(); err != nil {
-		t.Errorf("loop info verification failed: %v", err)
+	if verifyErr := loopInfo.VerifyLoopInfo(); verifyErr != nil {
+		t.Errorf("loop info verification failed: %v", verifyErr)
 	}
 }
 
@@ -287,38 +262,15 @@ func TestDetectLoops_NoLoops(t *testing.T) {
 	}
 
 	// verify loop info
-	if err := loopInfo.VerifyLoopInfo(); err != nil {
-		t.Errorf("loop info verification failed: %v", err)
+	if verifyErr := loopInfo.VerifyLoopInfo(); verifyErr != nil {
+		t.Errorf("loop info verification failed: %v", verifyErr)
 	}
 }
 
 // TestLoopInfo_BlockToLoopsMapping tests block-to-loops mapping
 func TestLoopInfo_BlockToLoopsMapping(t *testing.T) {
 	// construct nested loops to test mapping
-	instructions := []*disasm.Instruction{
-		// block 0: entry
-		{Address: 0x1000, Mnemonic: "mov", Length: 3},
-		{Address: 0x1003, Mnemonic: "jmp", Length: 2, Operands: []disasm.Operand{disasm.ImmediateOperand{Value: 0x1005}}},
-
-		// block 1: outer loop header
-		{Address: 0x1005, Mnemonic: "cmp", Length: 3},
-		{Address: 0x1008, Mnemonic: "jg", Length: 2, Operands: []disasm.Operand{disasm.ImmediateOperand{Value: 0x101a}}},
-
-		// block 2: inner loop header
-		{Address: 0x100a, Mnemonic: "cmp", Length: 3},
-		{Address: 0x100d, Mnemonic: "jg", Length: 2, Operands: []disasm.Operand{disasm.ImmediateOperand{Value: 0x1015}}},
-
-		// block 3: inner loop body
-		{Address: 0x100f, Mnemonic: "add", Length: 3},
-		{Address: 0x1012, Mnemonic: "jmp", Length: 2, Operands: []disasm.Operand{disasm.ImmediateOperand{Value: 0x100a}}},
-
-		// block 4: outer loop body
-		{Address: 0x1015, Mnemonic: "sub", Length: 3},
-		{Address: 0x1018, Mnemonic: "jmp", Length: 2, Operands: []disasm.Operand{disasm.ImmediateOperand{Value: 0x1005}}},
-
-		// block 5: exit
-		{Address: 0x101a, Mnemonic: "ret", Length: 1},
-	}
+	instructions := createNestedLoopInstructions()
 
 	builder := NewCFGBuilder()
 	cfg, err := builder.Build(instructions)
@@ -334,7 +286,7 @@ func TestLoopInfo_BlockToLoopsMapping(t *testing.T) {
 	// find inner loop header block
 	var innerLoopHeaderBlock BlockID
 	for id, block := range cfg.Blocks {
-		if block.StartAddress == 0x100a {
+		if block.StartAddress == 0x1008 { // inner loop header
 			innerLoopHeaderBlock = id
 			break
 		}
@@ -378,22 +330,7 @@ func TestLoopInfo_BlockToLoopsMapping(t *testing.T) {
 
 // TestLoopInfo_IsLoopHeader tests loop header detection
 func TestLoopInfo_IsLoopHeader(t *testing.T) {
-	instructions := []*disasm.Instruction{
-		// block 0: entry
-		{Address: 0x1000, Mnemonic: "mov", Length: 3},
-		{Address: 0x1003, Mnemonic: "jmp", Length: 2, Operands: []disasm.Operand{disasm.ImmediateOperand{Value: 0x1005}}},
-
-		// block 1: loop header
-		{Address: 0x1005, Mnemonic: "cmp", Length: 3},
-		{Address: 0x1008, Mnemonic: "jg", Length: 2, Operands: []disasm.Operand{disasm.ImmediateOperand{Value: 0x1010}}},
-
-		// block 2: loop body
-		{Address: 0x100a, Mnemonic: "add", Length: 3},
-		{Address: 0x100d, Mnemonic: "jmp", Length: 2, Operands: []disasm.Operand{disasm.ImmediateOperand{Value: 0x1005}}},
-
-		// block 3: exit
-		{Address: 0x1010, Mnemonic: "ret", Length: 1},
-	}
+	instructions := createNestedLoopInstructions()
 
 	builder := NewCFGBuilder()
 	cfg, err := builder.Build(instructions)
@@ -410,9 +347,9 @@ func TestLoopInfo_IsLoopHeader(t *testing.T) {
 	var headerBlock, bodyBlock BlockID
 	for id, block := range cfg.Blocks {
 		switch block.StartAddress {
-		case 0x1005:
+		case 0x1003: // outer loop header
 			headerBlock = id
-		case 0x100a:
+		case 0x100d: // inner loop body
 			bodyBlock = id
 		}
 	}
@@ -431,30 +368,7 @@ func TestLoopInfo_IsLoopHeader(t *testing.T) {
 // TestLoopInfo_GetTopLevelLoops tests retrieval of top-level loops
 func TestLoopInfo_GetTopLevelLoops(t *testing.T) {
 	// construct two separate top-level loops
-	instructions := []*disasm.Instruction{
-		// block 0: entry
-		{Address: 0x1000, Mnemonic: "mov", Length: 3},
-		{Address: 0x1003, Mnemonic: "jmp", Length: 2, Operands: []disasm.Operand{disasm.ImmediateOperand{Value: 0x1005}}},
-
-		// block 1: first loop header
-		{Address: 0x1005, Mnemonic: "cmp", Length: 3},
-		{Address: 0x1008, Mnemonic: "jg", Length: 2, Operands: []disasm.Operand{disasm.ImmediateOperand{Value: 0x1010}}},
-
-		// block 2: first loop body
-		{Address: 0x100a, Mnemonic: "add", Length: 3},
-		{Address: 0x100d, Mnemonic: "jmp", Length: 2, Operands: []disasm.Operand{disasm.ImmediateOperand{Value: 0x1005}}},
-
-		// block 3: second loop header
-		{Address: 0x1010, Mnemonic: "cmp", Length: 3},
-		{Address: 0x1013, Mnemonic: "jg", Length: 2, Operands: []disasm.Operand{disasm.ImmediateOperand{Value: 0x101a}}},
-
-		// block 4: second loop body
-		{Address: 0x1015, Mnemonic: "sub", Length: 3},
-		{Address: 0x1018, Mnemonic: "jmp", Length: 2, Operands: []disasm.Operand{disasm.ImmediateOperand{Value: 0x1010}}},
-
-		// block 5: exit
-		{Address: 0x101a, Mnemonic: "ret", Length: 1},
-	}
+	instructions := createSequentialLoopsInstructions()
 
 	builder := NewCFGBuilder()
 	_, err := builder.Build(instructions)

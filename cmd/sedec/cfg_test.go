@@ -59,7 +59,11 @@ func TestRunCFG_InvalidBinary(t *testing.T) {
 func TestRunCFG_WithTestBinary(t *testing.T) {
 	// create temporary test binary (simple elf)
 	testBinary := createTestELFBinary(t)
-	defer os.Remove(testBinary)
+	defer func() {
+		if err := os.Remove(testBinary); err != nil {
+			t.Logf("failed to remove test binary: %v", err)
+		}
+	}()
 
 	var stdout, stderr bytes.Buffer
 
@@ -81,7 +85,11 @@ func TestRunCFG_WithTestBinary(t *testing.T) {
 
 func TestRunCFG_OutputToFile(t *testing.T) {
 	testBinary := createTestELFBinary(t)
-	defer os.Remove(testBinary)
+	defer func() {
+		if err := os.Remove(testBinary); err != nil {
+			t.Logf("failed to remove test binary: %v", err)
+		}
+	}()
 
 	// create temporary output file
 	tmpDir := t.TempDir()
@@ -95,11 +103,12 @@ func TestRunCFG_OutputToFile(t *testing.T) {
 	}
 
 	// verify file was created
-	if _, err := os.Stat(outputFile); os.IsNotExist(err) {
+	if _, statErr := os.Stat(outputFile); os.IsNotExist(statErr) {
 		t.Fatal("output file was not created")
 	}
 
 	// read and verify content
+	//nolint:gosec // G304: test code reads test files
 	content, err := os.ReadFile(outputFile)
 	if err != nil {
 		t.Fatalf("failed to read output file: %v", err)
@@ -121,7 +130,11 @@ func TestRunCFG_OutputToFile(t *testing.T) {
 
 func TestRunCFG_NoInstructions(t *testing.T) {
 	testBinary := createTestELFBinary(t)
-	defer os.Remove(testBinary)
+	defer func() {
+		if err := os.Remove(testBinary); err != nil {
+			t.Logf("failed to remove test binary: %v", err)
+		}
+	}()
 
 	var stdout, stderr bytes.Buffer
 
@@ -145,7 +158,11 @@ func TestRunCFG_NoInstructions(t *testing.T) {
 
 func TestRunCFG_MaxInstructions(t *testing.T) {
 	testBinary := createTestELFBinary(t)
-	defer os.Remove(testBinary)
+	defer func() {
+		if err := os.Remove(testBinary); err != nil {
+			t.Logf("failed to remove test binary: %v", err)
+		}
+	}()
 
 	var stdout, stderr bytes.Buffer
 
@@ -164,7 +181,11 @@ func TestRunCFG_MaxInstructions(t *testing.T) {
 
 func TestRunCFG_ShowProvenance(t *testing.T) {
 	testBinary := createTestELFBinary(t)
-	defer os.Remove(testBinary)
+	defer func() {
+		if err := os.Remove(testBinary); err != nil {
+			t.Logf("failed to remove test binary: %v", err)
+		}
+	}()
 
 	var stdout, stderr bytes.Buffer
 
@@ -220,7 +241,11 @@ func TestRunCFG_NonexistentFile(t *testing.T) {
 
 func TestRunCFG_NonexistentFunction(t *testing.T) {
 	testBinary := createTestELFBinary(t)
-	defer os.Remove(testBinary)
+	defer func() {
+		if err := os.Remove(testBinary); err != nil {
+			t.Logf("failed to remove test binary: %v", err)
+		}
+	}()
 
 	var stdout, stderr bytes.Buffer
 
@@ -234,7 +259,7 @@ func TestRunCFG_NonexistentFunction(t *testing.T) {
 	}
 }
 
-// createTestELFBinary creates a minimal valid elf binary for testing
+// createTestELFBinary creates a minimal valid elf binary for testing.
 func createTestELFBinary(t *testing.T) string {
 	t.Helper()
 
@@ -338,7 +363,9 @@ func createTestELFBinary(t *testing.T) string {
 		0x03, 0x00, 0x00, 0x00, // sh_type: sht_strtab
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // sh_flags: 0
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // sh_addr: 0
+		//nolint:gosec // G115: test code uses safe integer conversion
 		byte(shstrtabOffset), byte(shstrtabOffset >> 8), 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // sh_offset
+		//nolint:gosec // G115: test code uses safe integer conversion
 		byte(len(shstrtab)), 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // sh_size
 		0x00, 0x00, 0x00, 0x00, // sh_link
 		0x00, 0x00, 0x00, 0x00, // sh_info
@@ -347,7 +374,8 @@ func createTestELFBinary(t *testing.T) string {
 	}
 
 	// assemble complete elf file
-	var elfData []byte
+	elfData := make([]byte, 0, len(elfHeader)+len(programHeader)+len(codeData)+len(padding)+
+		len(sectionHeader0)+len(sectionHeader1)+len(sectionHeader2)+len(sectionHeader3)+len(shstrtab))
 	elfData = append(elfData, elfHeader...)
 	elfData = append(elfData, programHeader...)
 	elfData = append(elfData, codeData...)
@@ -363,15 +391,17 @@ func createTestELFBinary(t *testing.T) string {
 		t.Fatalf("failed to create temp file: %v", err)
 	}
 
-	if _, err := tmpFile.Write(elfData); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpFile.Name())
-		t.Fatalf("failed to write test binary: %v", err)
+	if _, writeErr := tmpFile.Write(elfData); writeErr != nil {
+		_ = tmpFile.Close()
+		//nolint:gosec // G703: test code removes temporary files
+		_ = os.Remove(tmpFile.Name())
+		t.Fatalf("failed to write test binary: %v", writeErr)
 	}
 
-	if err := tmpFile.Close(); err != nil {
-		os.Remove(tmpFile.Name())
-		t.Fatalf("failed to close temp file: %v", err)
+	if closeErr := tmpFile.Close(); closeErr != nil {
+		//nolint:gosec // G703: test code removes temporary files
+		_ = os.Remove(tmpFile.Name())
+		t.Fatalf("failed to close temp file: %v", closeErr)
 	}
 
 	return tmpFile.Name()
@@ -379,7 +409,11 @@ func createTestELFBinary(t *testing.T) string {
 
 func TestRunCFG_WithAddress(t *testing.T) {
 	testBinary := createTestELFBinary(t)
-	defer os.Remove(testBinary)
+	defer func() {
+		if err := os.Remove(testBinary); err != nil {
+			t.Logf("failed to remove test binary: %v", err)
+		}
+	}()
 
 	var stdout, stderr bytes.Buffer
 
@@ -402,7 +436,11 @@ func TestRunCFG_WithAddress(t *testing.T) {
 
 func TestRunCFG_WithAddressDecimal(t *testing.T) {
 	testBinary := createTestELFBinary(t)
-	defer os.Remove(testBinary)
+	defer func() {
+		if err := os.Remove(testBinary); err != nil {
+			t.Logf("failed to remove test binary: %v", err)
+		}
+	}()
 
 	var stdout, stderr bytes.Buffer
 
@@ -422,7 +460,11 @@ func TestRunCFG_WithAddressDecimal(t *testing.T) {
 
 func TestRunCFG_InvalidAddress(t *testing.T) {
 	testBinary := createTestELFBinary(t)
-	defer os.Remove(testBinary)
+	defer func() {
+		if err := os.Remove(testBinary); err != nil {
+			t.Logf("failed to remove test binary: %v", err)
+		}
+	}()
 
 	var stdout, stderr bytes.Buffer
 
@@ -439,7 +481,11 @@ func TestRunCFG_InvalidAddress(t *testing.T) {
 
 func TestRunCFG_AddressOutOfRange(t *testing.T) {
 	testBinary := createTestELFBinary(t)
-	defer os.Remove(testBinary)
+	defer func() {
+		if err := os.Remove(testBinary); err != nil {
+			t.Logf("failed to remove test binary: %v", err)
+		}
+	}()
 
 	var stdout, stderr bytes.Buffer
 
@@ -456,7 +502,11 @@ func TestRunCFG_AddressOutOfRange(t *testing.T) {
 
 func TestRunCFG_AddressWithStatistics(t *testing.T) {
 	testBinary := createTestELFBinary(t)
-	defer os.Remove(testBinary)
+	defer func() {
+		if err := os.Remove(testBinary); err != nil {
+			t.Logf("failed to remove test binary: %v", err)
+		}
+	}()
 
 	tmpDir := t.TempDir()
 	outputFile := filepath.Join(tmpDir, "cfg.dot")

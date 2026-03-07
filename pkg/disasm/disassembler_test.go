@@ -5,6 +5,10 @@ import (
 	"testing"
 )
 
+const (
+	testMnemonicNop = "nop"
+)
+
 // newTestDisassembler creates a disassembler with automatic cleanup
 func newTestDisassembler(t *testing.T) *Disassembler {
 	t.Helper()
@@ -33,7 +37,6 @@ func TestNewDisassembler(t *testing.T) {
 func TestDisassemble_ValidInstructions(t *testing.T) {
 	d := newTestDisassembler(t)
 
-	//nolint:govet // test struct, memory alignment not critical
 	tests := []struct {
 		address  Address
 		bytes    []byte
@@ -122,7 +125,6 @@ func TestDisassemble_ValidInstructions(t *testing.T) {
 func TestDisassemble_SSE_Instructions(t *testing.T) {
 	d := newTestDisassembler(t)
 
-	//nolint:govet // test struct, memory alignment not critical
 	tests := []struct {
 		bytes    []byte
 		mnemonic string
@@ -163,7 +165,6 @@ func TestDisassemble_SSE_Instructions(t *testing.T) {
 func TestDisassemble_AVX_Instructions(t *testing.T) {
 	d := newTestDisassembler(t)
 
-	//nolint:govet // test struct, memory alignment not critical
 	tests := []struct {
 		bytes    []byte
 		mnemonic string
@@ -199,7 +200,6 @@ func TestDisassemble_AVX_Instructions(t *testing.T) {
 func TestDisassemble_AVX512_Instructions(t *testing.T) {
 	d := newTestDisassembler(t)
 
-	//nolint:govet // test struct, memory alignment not critical
 	tests := []struct {
 		bytes    []byte
 		mnemonic string
@@ -287,7 +287,7 @@ func TestDisassembleBytes_MixedValidInvalid(t *testing.T) {
 	}
 
 	// verify first instruction is nop
-	if insns[0].Mnemonic != "nop" {
+	if insns[0].Mnemonic != testMnemonicNop {
 		t.Errorf("first instruction mnemonic: got %q, want %q", insns[0].Mnemonic, "nop")
 	}
 
@@ -331,7 +331,6 @@ func TestDisassembleFunction_CompleteFunction(t *testing.T) {
 func TestDisassemble_OperandExtraction(t *testing.T) {
 	d := newTestDisassembler(t)
 
-	//nolint:govet // test struct, memory alignment not critical
 	tests := []struct {
 		bytes         []byte
 		firstOperand  string
@@ -393,7 +392,6 @@ func TestDisassemble_OperandExtraction(t *testing.T) {
 func TestDisassemble_MemoryOperands(t *testing.T) {
 	d := newTestDisassembler(t)
 
-	//nolint:govet // test struct, memory alignment not critical
 	tests := []struct {
 		bytes []byte
 		name  string
@@ -679,7 +677,6 @@ func TestOperandFormatting(t *testing.T) {
 func TestRegisterSizes(t *testing.T) {
 	d := newTestDisassembler(t)
 
-	//nolint:govet // test struct, memory alignment not critical
 	tests := []struct {
 		bytes    []byte
 		regName  string
@@ -744,7 +741,6 @@ func TestRegisterSizes(t *testing.T) {
 func TestDisassemble_AVX2_Instructions(t *testing.T) {
 	d := newTestDisassembler(t)
 
-	//nolint:govet // test struct, memory alignment not critical
 	tests := []struct {
 		bytes    []byte
 		mnemonic string
@@ -780,7 +776,6 @@ func TestDisassemble_AVX2_Instructions(t *testing.T) {
 func TestDisassemble_ComplexMemoryOperands(t *testing.T) {
 	d := newTestDisassembler(t)
 
-	//nolint:govet // test struct, memory alignment not critical
 	tests := []struct {
 		bytes []byte
 		name  string

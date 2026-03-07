@@ -58,6 +58,8 @@ func (p *StandardLibParser) Parse(data []byte) (*BinaryInfo, error) {
 		return p.parsePE(data)
 	case BinaryFormatMachO:
 		return p.parseMachO(data)
+	case BinaryFormatUnknown:
+		return nil, &InvalidMagicError{Magic: data[:4]}
 	default:
 		return nil, &InvalidMagicError{Magic: data[:4]}
 	}
