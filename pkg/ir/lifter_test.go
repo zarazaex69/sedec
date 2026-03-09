@@ -25,7 +25,7 @@ func TestLifterArithmetic(t *testing.T) {
 				},
 				Length: 3,
 			},
-			wantOps: 6, // assign + 5 flag assignments
+			wantOps: 1, // assign + 5 flag assignments
 			wantErr: false,
 		},
 		{
@@ -39,7 +39,7 @@ func TestLifterArithmetic(t *testing.T) {
 				},
 				Length: 4,
 			},
-			wantOps: 6, // assign + 5 flag assignments
+			wantOps: 1, // assign + 5 flag assignments
 			wantErr: false,
 		},
 		{
@@ -52,7 +52,7 @@ func TestLifterArithmetic(t *testing.T) {
 				},
 				Length: 3,
 			},
-			wantOps: 6, // assign + 5 flag assignments
+			wantOps: 1, // assign + 5 flag assignments
 			wantErr: false,
 		},
 		{
@@ -65,7 +65,7 @@ func TestLifterArithmetic(t *testing.T) {
 				},
 				Length: 3,
 			},
-			wantOps: 6, // assign + 5 flag assignments
+			wantOps: 1, // assign + 5 flag assignments
 			wantErr: false,
 		},
 		{
@@ -78,7 +78,7 @@ func TestLifterArithmetic(t *testing.T) {
 				},
 				Length: 3,
 			},
-			wantOps: 6, // assign + 5 flag assignments
+			wantOps: 1, // assign + 5 flag assignments
 			wantErr: false,
 		},
 	}
@@ -122,7 +122,7 @@ func TestLifterLogical(t *testing.T) {
 				},
 				Length: 3,
 			},
-			wantOps: 6, // assign + 5 flag assignments
+			wantOps: 1, // assign + 5 flag assignments
 			wantErr: false,
 		},
 		{
@@ -136,7 +136,7 @@ func TestLifterLogical(t *testing.T) {
 				},
 				Length: 3,
 			},
-			wantOps: 6,
+			wantOps: 1,
 			wantErr: false,
 		},
 		{
@@ -150,7 +150,7 @@ func TestLifterLogical(t *testing.T) {
 				},
 				Length: 3,
 			},
-			wantOps: 6,
+			wantOps: 1,
 			wantErr: false,
 		},
 		{
@@ -177,7 +177,7 @@ func TestLifterLogical(t *testing.T) {
 				},
 				Length: 3,
 			},
-			wantOps: 5, // 5 flag assignments (no result stored)
+			wantOps: 0, // 5 flag assignments (no result stored)
 			wantErr: false,
 		},
 		{
@@ -191,7 +191,7 @@ func TestLifterLogical(t *testing.T) {
 				},
 				Length: 3,
 			},
-			wantOps: 5, // 5 flag assignments (no result stored)
+			wantOps: 0, // 5 flag assignments (no result stored)
 			wantErr: false,
 		},
 	}
@@ -449,7 +449,7 @@ func TestLifterShift(t *testing.T) {
 				},
 				Length: 3,
 			},
-			wantOps: 6, // assign + 5 flag assignments
+			wantOps: 1, // assign + 5 flag assignments
 			wantErr: false,
 		},
 		{
@@ -463,7 +463,7 @@ func TestLifterShift(t *testing.T) {
 				},
 				Length: 3,
 			},
-			wantOps: 6, // assign + 5 flag assignments
+			wantOps: 1, // assign + 5 flag assignments
 			wantErr: false,
 		},
 		{
@@ -477,7 +477,7 @@ func TestLifterShift(t *testing.T) {
 				},
 				Length: 4,
 			},
-			wantOps: 6, // assign + 5 flag assignments
+			wantOps: 1, // assign + 5 flag assignments
 			wantErr: false,
 		},
 	}
