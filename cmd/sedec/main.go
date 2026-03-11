@@ -53,6 +53,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runDisasm(subArgs, stdin, stdout, stderr)
 	case "cfg":
 		return runCFG(subArgs, stdin, stdout, stderr)
+	case "ir":
+		return runIR(subArgs, stdin, stdout, stderr)
 	default:
 		//nolint:errcheck,gosec // error message output is informational, subcommand is from args
 		fmt.Fprintf(stderr, "unknown command: %s\n\n", subcommand)
@@ -75,6 +77,7 @@ usage:
 commands:
   disasm    disassemble binary to assembly output
   cfg       export control flow graph in dot format
+  ir        lift binary to intermediate representation
 
 global options:
   --version    print version information
@@ -99,6 +102,12 @@ examples:
   # export control flow graph
   sedec cfg --output cfg.dot /bin/ls
   dot -Tpng cfg.dot -o cfg.png
+
+  # lift to intermediate representation
+  sedec ir /bin/ls
+
+  # lift to ssa form
+  sedec ir --ssa /bin/ls
 
 run 'sedec <command> --help' for command-specific options.
 `, version)
