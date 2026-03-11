@@ -1,81 +1,54 @@
-// Package ir defines the Intermediate Representation for platform-independent analysis.
-// It provides three-address code with explicit operands, typed values, memory operations,
-// control flow instructions, and support for SSA phi-nodes.
-// Package ir provides the Intermediate Representation (IR) for the sedec decompiler.
+// Package ir provides intermediate representation (IR) for the sedec decompiler.
 //
-// The IR is a platform-independent, typed, three-address code representation that serves
-// as the foundation for all analysis and optimization passes. It abstracts away
-// architecture-specific details while preserving semantic information necessary for
-// accurate decompilation.
+// The IR package implements a platform-independent intermediate representation
+// that serves as the foundation for analysis and optimization passes. It includes:
 //
-// # Design Principles
+// - Type system (integers, floats, pointers, arrays, structs, functions)
+// - Expression trees (variables, constants, binary/unary operations, casts)
+// - IR instructions (assign, load, store, branch, jump, call, return, phi)
+// - Sub-register operations (extract, insert, zero-extend)
+// - Lazy CPU flags evaluation for x86_64
+// - IR parser and pretty printer with round-trip property
 //
-// 1. Platform Independence: IR abstracts x86_64/ARM64/MIPS specifics into uniform operations
-// 2. Strong Typing: Every expression and variable has an explicit type for inference
-// 3. SSA Support: Phi nodes enable Static Single Assignment form for precise data flow
-// 4. Traceability: Source location metadata links IR back to original assembly
-// 5. Serializability: Human-readable text format for debugging and inspection
+// # IR Text Format
 //
-// # Type System
+// The IR can be serialized to and parsed from a human-readable text format:
 //
-// The IR type system includes:
-//   - Primitive types: Void, Bool, Int (signed/unsigned, 8/16/32/64-bit), Float (32/64/80/128-bit)
-//   - Composite types: Pointer, Array, Struct
-//   - Function types: Complete signatures with parameters and return types
+//	func add(i64, i64) i64
 //
-// # Instruction Set
+//	bb0:
+//	  sum_1 = (a_1 + b_1)
+//	  return sum_1
 //
-// IR instructions follow three-address code format:
-//   - Assign: dest = source
-//   - Load: dest = *address (explicit memory read)
-//   - Store: *address = value (explicit memory write)
-//   - Branch: conditional control flow
-//   - Jump: unconditional control flow
-//   - Call: function invocation
-//   - Return: function exit
-//   - Phi: SSA merge point for multiple definitions
+// # Parser and Printer
 //
-// # Expression System
+// The package provides a complete parser and pretty printer:
 //
-// Expressions are typed, composable value producers:
-//   - Variable references
-//   - Constants (integer, float, bool, null)
-//   - Binary operations (arithmetic, bitwise, comparison, logical)
-//   - Unary operations (negation, bitwise not, logical not)
-//   - Type casts
+//	// Parse IR from text
+//	parser := ir.NewParser(strings.NewReader(irText))
+//	fn, err := parser.ParseFunction()
 //
-// # Usage Example
+//	// Print IR to text
+//	output, err := ir.PrettyPrint(fn)
 //
-//	// create a simple function: int add(int a, int b) { return a + b; }
-//	fn := &ir.Function{
-//		Name: "add",
-//		Signature: ir.FunctionType{
-//			ReturnType: ir.IntType{Width: ir.Size4, Signed: true},
-//			Parameters: []ir.Type{
-//				ir.IntType{Width: ir.Size4, Signed: true},
-//				ir.IntType{Width: ir.Size4, Signed: true},
-//			},
-//		},
-//		Blocks: make(map[ir.BlockID]*ir.BasicBlock),
-//		EntryBlock: 0,
-//	}
+// # Round-Trip Property
 //
-//	// create basic block with addition
-//	block := &ir.BasicBlock{
-//		ID: 0,
-//		Instructions: []ir.IRInstruction{
-//			&ir.Assign{
-//				Dest: ir.Variable{Name: "result", Type: ir.IntType{Width: ir.Size4, Signed: true}},
-//				Source: &ir.BinaryOp{
-//					Op: ir.BinOpAdd,
-//					Left: &ir.VariableExpr{Var: ir.Variable{Name: "a", Type: ir.IntType{Width: ir.Size4, Signed: true}}},
-//					Right: &ir.VariableExpr{Var: ir.Variable{Name: "b", Type: ir.IntType{Width: ir.Size4, Signed: true}}},
-//				},
-//			},
-//			&ir.Return{
-//				Value: &ir.Variable{Name: "result", Type: ir.IntType{Width: ir.Size4, Signed: true}},
-//			},
-//		},
-//	}
-//	fn.Blocks[0] = block
+// The parser and printer satisfy the round-trip property:
+//
+//	parse(print(ir)) == ir
+//
+// This ensures that IR can be reliably serialized, stored, and reconstructed
+// without loss of information.
+//
+// # Comments
+//
+// The IR text format supports comments using // or # syntax:
+//
+//	func test() void  // function declaration
+//
+//	bb0:  // entry block
+//	  x = 42  // assignment
+//	  return  // void return
+//
+// Comments are preserved during parsing but not included in the IR structure.
 package ir
