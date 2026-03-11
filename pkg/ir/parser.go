@@ -67,6 +67,9 @@ func (p *Parser) ParseFunction() (*Function, error) {
 			if len(fn.Blocks) == 1 {
 				fn.EntryBlock = block.ID
 			}
+		} else if strings.Contains(line, ":") && !strings.Contains(line, "=") {
+			// looks like a block label but doesn't start with "bb" — invalid
+			return nil, p.errorf("invalid block label: %s", line)
 		}
 	}
 
@@ -525,38 +528,35 @@ func (p *Parser) parsePhi(line string) (*Phi, error) {
 func (p *Parser) parseExpression(s string) (Expression, error) {
 	s = strings.TrimSpace(s)
 
-	// check for parenthesized expression first
-	if strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")") {
-		inner := s[1 : len(s)-1]
+	// check for type cast: (type)expr — opening paren followed by a type name and closing paren
+	// this must be checked before the fully-parenthesized expression branch
+	if strings.HasPrefix(s, "(") {
+		// find the matching close paren for the opening one
+		closeIdx := p.findMatchingParen(s, 0)
+		if closeIdx != -1 {
+			inner := strings.TrimSpace(s[1:closeIdx])
+			rest := strings.TrimSpace(s[closeIdx+1:])
 
-		// check if it's a type cast: (type)expr
-		closeIdx := strings.Index(inner, ")")
-		if closeIdx == -1 {
-			// simple parenthesized expression
-			return p.parseExpression(inner)
-		}
-
-		// might be cast like (i32)x where inner is "i32)x"
-		// or just nested parens like ((a + b))
-		typeStr := inner[:closeIdx]
-		if p.isTypeName(typeStr) {
-			// it's a cast
-			targetType, err := p.parseType(typeStr)
-			if err == nil {
-				exprStr := strings.TrimSpace(inner[closeIdx+1:])
-				expr, err := p.parseExpression(exprStr)
-				if err != nil {
-					return nil, err
+			if rest != "" && p.isTypeName(inner) {
+				// it's a cast: (type)expr
+				targetType, err := p.parseType(inner)
+				if err == nil {
+					expr, err := p.parseExpression(rest)
+					if err != nil {
+						return nil, err
+					}
+					return Cast{
+						Expr:       expr,
+						TargetType: targetType,
+					}, nil
 				}
-				return Cast{
-					Expr:       expr,
-					TargetType: targetType,
-				}, nil
+			}
+
+			// not a cast — if rest is empty, it's a fully-parenthesized expression
+			if rest == "" {
+				return p.parseExpression(inner)
 			}
 		}
-
-		// not a cast, just parenthesized expression
-		return p.parseExpression(inner)
 	}
 
 	// check for binary operations (lowest precedence first)
@@ -896,6 +896,13 @@ func (p *Parser) findOperator(s, op string) int {
 			depth--
 		} else if depth == 0 && i+opLen <= len(s) && s[i:i+opLen] == op {
 			// found potential operator match
+
+			// for operators that can be both unary and binary (-, +),
+			// skip if at start of string (unary position)
+			if i == 0 && (op == "-" || op == "+") {
+				continue
+			}
+
 			// check it's not part of a longer operator
 			if i+opLen < len(s) {
 				next := s[i+opLen]

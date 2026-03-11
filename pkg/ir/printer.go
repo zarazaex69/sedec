@@ -3,6 +3,7 @@ package ir
 import (
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 )
 
@@ -28,16 +29,24 @@ func (pr *Printer) PrintFunction(fn *Function) error {
 	pr.printFunctionSignature(fn.Signature)
 	pr.println("")
 
-	// print entry block first
-	if block, ok := fn.Blocks[fn.EntryBlock]; ok {
-		pr.printBasicBlock(block)
+	// collect and sort block ids for deterministic output
+	ids := make([]BlockID, 0, len(fn.Blocks))
+	for id := range fn.Blocks {
+		ids = append(ids, id)
 	}
-
-	// print remaining blocks
-	for id, block := range fn.Blocks {
-		if id != fn.EntryBlock {
-			pr.printBasicBlock(block)
+	sort.Slice(ids, func(i, j int) bool {
+		// entry block always first, then ascending order
+		if ids[i] == fn.EntryBlock {
+			return true
 		}
+		if ids[j] == fn.EntryBlock {
+			return false
+		}
+		return ids[i] < ids[j]
+	})
+
+	for _, id := range ids {
+		pr.printBasicBlock(fn.Blocks[id])
 	}
 
 	return pr.err
