@@ -1052,7 +1052,7 @@ func TestLifterJccAllConditions(t *testing.T) {
 				t.Errorf("%s: expected 1 branch instruction, got %d", mnemonic, len(result))
 				return
 			}
-			branch, ok := result[0].(Branch)
+			branch, ok := result[0].(*Branch)
 			if !ok {
 				t.Errorf("%s: expected Branch instruction, got %T", mnemonic, result[0])
 				return
@@ -1461,7 +1461,7 @@ func TestLifterIRInstructionTypes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if _, ok := result[0].(Assign); !ok {
+		if _, ok := result[0].(*Assign); !ok {
 			t.Errorf("expected Assign, got %T", result[0])
 		}
 	})
@@ -1484,10 +1484,10 @@ func TestLifterIRInstructionTypes(t *testing.T) {
 		if len(result) < 2 {
 			t.Fatalf("expected at least 2 instructions, got %d", len(result))
 		}
-		if _, ok := result[0].(Load); !ok {
+		if _, ok := result[0].(*Load); !ok {
 			t.Errorf("expected Load at [0], got %T", result[0])
 		}
-		if _, ok := result[1].(Assign); !ok {
+		if _, ok := result[1].(*Assign); !ok {
 			t.Errorf("expected Assign at [1], got %T", result[1])
 		}
 	})
@@ -1507,7 +1507,7 @@ func TestLifterIRInstructionTypes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if _, ok := result[0].(Store); !ok {
+		if _, ok := result[0].(*Store); !ok {
 			t.Errorf("expected Store, got %T", result[0])
 		}
 	})
@@ -1526,7 +1526,7 @@ func TestLifterIRInstructionTypes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if _, ok := result[0].(Jump); !ok {
+		if _, ok := result[0].(*Jump); !ok {
 			t.Errorf("expected Jump, got %T", result[0])
 		}
 	})
@@ -1545,7 +1545,7 @@ func TestLifterIRInstructionTypes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if _, ok := result[0].(Branch); !ok {
+		if _, ok := result[0].(*Branch); !ok {
 			t.Errorf("expected Branch, got %T", result[0])
 		}
 	})
@@ -1566,7 +1566,7 @@ func TestLifterIRInstructionTypes(t *testing.T) {
 		}
 		// last instruction must be Call
 		last := result[len(result)-1]
-		if _, ok := last.(Call); !ok {
+		if _, ok := last.(*Call); !ok {
 			t.Errorf("expected Call as last instruction, got %T", last)
 		}
 	})
@@ -1584,7 +1584,7 @@ func TestLifterIRInstructionTypes(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		last := result[len(result)-1]
-		if _, ok := last.(Return); !ok {
+		if _, ok := last.(*Return); !ok {
 			t.Errorf("expected Return as last instruction, got %T", last)
 		}
 	})

@@ -359,7 +359,7 @@ func (l *Lifter) loadFromMemory(mem disasm.MemoryOperand) Variable {
 	addr := l.translateMemoryAddress(mem)
 	dest := l.newTemp(l.getIntType(Size(mem.Size), false))
 
-	l.emit(Load{
+	l.emit(&Load{
 		baseInstruction: baseInstruction{Loc: l.currentLocation},
 		Dest:            dest,
 		Address:         addr,
@@ -373,7 +373,7 @@ func (l *Lifter) loadFromMemory(mem disasm.MemoryOperand) Variable {
 func (l *Lifter) storeToMemory(mem disasm.MemoryOperand, value Expression) {
 	addr := l.translateMemoryAddress(mem)
 
-	l.emit(Store{
+	l.emit(&Store{
 		baseInstruction: baseInstruction{Loc: l.currentLocation},
 		Address:         addr,
 		Value:           value,
@@ -431,7 +431,7 @@ func (l *Lifter) liftBinaryOperation(insn *disasm.Instruction, opErr error, binO
 	if mem, ok := dest.(disasm.MemoryOperand); ok {
 		l.storeToMemory(mem, resultExpr)
 	} else {
-		l.emit(Assign{
+		l.emit(&Assign{
 			baseInstruction: baseInstruction{Loc: l.currentLocation},
 			Dest:            destVar,
 			Source:          resultExpr,
@@ -512,14 +512,14 @@ func (l *Lifter) liftMul(insn *disasm.Instruction) ([]IRInstruction, error) {
 	if size == Size1 {
 		// 8-bit: al * src -> ax
 		axVar := Variable{Name: "ax", Type: l.getIntType(Size2, false)}
-		l.emit(Assign{
+		l.emit(&Assign{
 			baseInstruction: baseInstruction{Loc: l.currentLocation},
 			Dest:            axVar,
 			Source:          resultExpr,
 		})
 	} else {
 		// store low part in rax
-		l.emit(Assign{
+		l.emit(&Assign{
 			baseInstruction: baseInstruction{Loc: l.currentLocation},
 			Dest:            raxVar,
 			Source:          resultExpr,
@@ -560,7 +560,7 @@ func (l *Lifter) liftMul(insn *disasm.Instruction) ([]IRInstruction, error) {
 			Type: l.getIntType(size, false),
 		}
 
-		l.emit(Assign{
+		l.emit(&Assign{
 			baseInstruction: baseInstruction{Loc: l.currentLocation},
 			Dest:            rdxVar,
 			Source:          highExpr,
@@ -639,7 +639,7 @@ func (l *Lifter) liftIMulOneOperand(insn *disasm.Instruction) ([]IRInstruction, 
 	}
 
 	// store low part
-	l.emit(Assign{
+	l.emit(&Assign{
 		baseInstruction: baseInstruction{Loc: l.currentLocation},
 		Dest:            raxVar,
 		Source:          resultExpr,
@@ -680,7 +680,7 @@ func (l *Lifter) liftIMulOneOperand(insn *disasm.Instruction) ([]IRInstruction, 
 			Type: l.getIntType(size, true),
 		}
 
-		l.emit(Assign{
+		l.emit(&Assign{
 			baseInstruction: baseInstruction{Loc: l.currentLocation},
 			Dest:            rdxVar,
 			Source:          highExpr,
@@ -738,7 +738,7 @@ func (l *Lifter) liftIMulTwoOperands(insn *disasm.Instruction) ([]IRInstruction,
 	if mem, ok := dest.(disasm.MemoryOperand); ok {
 		l.storeToMemory(mem, resultExpr)
 	} else {
-		l.emit(Assign{
+		l.emit(&Assign{
 			baseInstruction: baseInstruction{Loc: l.currentLocation},
 			Dest:            destVar,
 			Source:          resultExpr,
@@ -794,7 +794,7 @@ func (l *Lifter) liftIMulThreeOperands(insn *disasm.Instruction) ([]IRInstructio
 	}
 
 	// store result
-	l.emit(Assign{
+	l.emit(&Assign{
 		baseInstruction: baseInstruction{Loc: l.currentLocation},
 		Dest:            destVar,
 		Source:          resultExpr,
@@ -903,7 +903,7 @@ func (l *Lifter) liftDivOperation(insn *disasm.Instruction, opErr error, binOpDi
 	// store quotient and remainder
 	if size == Size1 {
 		alVar := Variable{Name: "al", Type: l.getIntType(Size1, signed)}
-		l.emit(Assign{
+		l.emit(&Assign{
 			baseInstruction: baseInstruction{Loc: l.currentLocation},
 			Dest:            alVar,
 			Source:          quotientExpr,
@@ -911,13 +911,13 @@ func (l *Lifter) liftDivOperation(insn *disasm.Instruction, opErr error, binOpDi
 
 		// store remainder in ah
 		ahVar := Variable{Name: "ah", Type: l.getIntType(Size1, signed)}
-		l.emit(Assign{
+		l.emit(&Assign{
 			baseInstruction: baseInstruction{Loc: l.currentLocation},
 			Dest:            ahVar,
 			Source:          remainderExpr,
 		})
 	} else {
-		l.emit(Assign{
+		l.emit(&Assign{
 			baseInstruction: baseInstruction{Loc: l.currentLocation},
 			Dest:            raxVar,
 			Source:          quotientExpr,
@@ -929,7 +929,7 @@ func (l *Lifter) liftDivOperation(insn *disasm.Instruction, opErr error, binOpDi
 			Type: l.getIntType(size, signed),
 		}
 
-		l.emit(Assign{
+		l.emit(&Assign{
 			baseInstruction: baseInstruction{Loc: l.currentLocation},
 			Dest:            rdxVar,
 			Source:          remainderExpr,
@@ -979,7 +979,7 @@ func (l *Lifter) liftUnaryOperation(insn *disasm.Instruction, opErr error, getRe
 	if mem, ok := dest.(disasm.MemoryOperand); ok {
 		l.storeToMemory(mem, resultExpr)
 	} else {
-		l.emit(Assign{
+		l.emit(&Assign{
 			baseInstruction: baseInstruction{Loc: l.currentLocation},
 			Dest:            destVar,
 			Source:          resultExpr,
@@ -1076,7 +1076,7 @@ func (l *Lifter) liftNot(insn *disasm.Instruction) ([]IRInstruction, error) {
 	if mem, ok := dest.(disasm.MemoryOperand); ok {
 		l.storeToMemory(mem, resultExpr)
 	} else {
-		l.emit(Assign{
+		l.emit(&Assign{
 			baseInstruction: baseInstruction{Loc: l.currentLocation},
 			Dest:            destVar,
 			Source:          resultExpr,
@@ -1216,7 +1216,7 @@ func (l *Lifter) liftMov(insn *disasm.Instruction) ([]IRInstruction, error) {
 			Name: destReg.Name,
 			Type: l.getIntType(Size(destReg.Size), false),
 		}
-		l.emit(Assign{
+		l.emit(&Assign{
 			baseInstruction: baseInstruction{Loc: l.currentLocation},
 			Dest:            destVar,
 			Source:          VariableExpr{Var: srcVar},
@@ -1235,7 +1235,7 @@ func (l *Lifter) liftMov(insn *disasm.Instruction) ([]IRInstruction, error) {
 			Name: destReg.Name,
 			Type: l.getIntType(Size(destReg.Size), false),
 		}
-		l.emit(Assign{
+		l.emit(&Assign{
 			baseInstruction: baseInstruction{Loc: l.currentLocation},
 			Dest:            destVar,
 			Source:          srcExpr,
@@ -1283,7 +1283,7 @@ func (l *Lifter) liftMovExtend(insn *disasm.Instruction, signed bool, errMissing
 		TargetType: destVar.Type,
 	}
 
-	l.emit(Assign{
+	l.emit(&Assign{
 		baseInstruction: baseInstruction{Loc: l.currentLocation},
 		Dest:            destVar,
 		Source:          resultExpr,
@@ -1331,7 +1331,7 @@ func (l *Lifter) liftLea(insn *disasm.Instruction) ([]IRInstruction, error) {
 		Type: l.getIntType(Size(destReg.Size), false),
 	}
 
-	l.emit(Assign{
+	l.emit(&Assign{
 		baseInstruction: baseInstruction{Loc: l.currentLocation},
 		Dest:            destVar,
 		Source:          addrExpr,
@@ -1388,14 +1388,14 @@ func (l *Lifter) liftPush(insn *disasm.Instruction) ([]IRInstruction, error) {
 		Right: sizeExpr,
 	}
 
-	l.emit(Assign{
+	l.emit(&Assign{
 		baseInstruction: baseInstruction{Loc: l.currentLocation},
 		Dest:            rspVar,
 		Source:          newRsp,
 	})
 
 	// store value at [rsp]
-	l.emit(Store{
+	l.emit(&Store{
 		baseInstruction: baseInstruction{Loc: l.currentLocation},
 		Address:         VariableExpr{Var: rspVar},
 		Value:           srcExpr,
@@ -1427,7 +1427,7 @@ func (l *Lifter) liftPop(insn *disasm.Instruction) ([]IRInstruction, error) {
 	// load value from [rsp]
 	tempVar := l.newTemp(l.getIntType(size, false))
 
-	l.emit(Load{
+	l.emit(&Load{
 		baseInstruction: baseInstruction{Loc: l.currentLocation},
 		Dest:            tempVar,
 		Address:         VariableExpr{Var: rspVar},
@@ -1449,7 +1449,7 @@ func (l *Lifter) liftPop(insn *disasm.Instruction) ([]IRInstruction, error) {
 		Right: sizeExpr,
 	}
 
-	l.emit(Assign{
+	l.emit(&Assign{
 		baseInstruction: baseInstruction{Loc: l.currentLocation},
 		Dest:            rspVar,
 		Source:          newRsp,
@@ -1464,7 +1464,7 @@ func (l *Lifter) liftPop(insn *disasm.Instruction) ([]IRInstruction, error) {
 			Type: l.getIntType(Size(reg.Size), false),
 		}
 
-		l.emit(Assign{
+		l.emit(&Assign{
 			baseInstruction: baseInstruction{Loc: l.currentLocation},
 			Dest:            destVar,
 			Source:          VariableExpr{Var: tempVar},
@@ -1498,7 +1498,7 @@ func (l *Lifter) liftJmp(insn *disasm.Instruction) ([]IRInstruction, error) {
 		_ = targetAddr                           // will be used by cfg builder
 
 		// emit jump (block id will be resolved by cfg builder)
-		l.emit(Jump{
+		l.emit(&Jump{
 			baseInstruction: baseInstruction{Loc: l.currentLocation},
 			Target:          BlockID(targetAddr),
 		})
@@ -1532,7 +1532,7 @@ func (l *Lifter) liftJcc(insn *disasm.Instruction) ([]IRInstruction, error) {
 
 	// emit conditional branch
 	// fall-through target will be next instruction (resolved by cfg builder)
-	l.emit(Branch{
+	l.emit(&Branch{
 		baseInstruction: baseInstruction{Loc: l.currentLocation},
 		Condition:       condition,
 		TrueTarget:      BlockID(targetAddr),
@@ -1712,7 +1712,7 @@ func (l *Lifter) liftCall(insn *disasm.Instruction) ([]IRInstruction, error) {
 		Right: sizeExpr,
 	}
 
-	l.emit(Assign{
+	l.emit(&Assign{
 		baseInstruction: baseInstruction{Loc: l.currentLocation},
 		Dest:            rspVar,
 		Source:          newRsp,
@@ -1727,7 +1727,7 @@ func (l *Lifter) liftCall(insn *disasm.Instruction) ([]IRInstruction, error) {
 		},
 	}
 
-	l.emit(Store{
+	l.emit(&Store{
 		baseInstruction: baseInstruction{Loc: l.currentLocation},
 		Address:         VariableExpr{Var: rspVar},
 		Value:           returnAddrExpr,
@@ -1749,7 +1749,7 @@ func (l *Lifter) liftCall(insn *disasm.Instruction) ([]IRInstruction, error) {
 		}
 	}
 
-	l.emit(Call{
+	l.emit(&Call{
 		baseInstruction: baseInstruction{Loc: l.currentLocation},
 		Dest:            nil, // return value handling done separately
 		Target:          targetExpr,
@@ -1769,7 +1769,7 @@ func (l *Lifter) liftRet(insn *disasm.Instruction) ([]IRInstruction, error) {
 	// load return address from [rsp]
 	returnAddrVar := l.newTemp(IntType{Width: Size8, Signed: false})
 
-	l.emit(Load{
+	l.emit(&Load{
 		baseInstruction: baseInstruction{Loc: l.currentLocation},
 		Dest:            returnAddrVar,
 		Address:         VariableExpr{Var: rspVar},
@@ -1791,7 +1791,7 @@ func (l *Lifter) liftRet(insn *disasm.Instruction) ([]IRInstruction, error) {
 		Right: sizeExpr,
 	}
 
-	l.emit(Assign{
+	l.emit(&Assign{
 		baseInstruction: baseInstruction{Loc: l.currentLocation},
 		Dest:            rspVar,
 		Source:          newRsp,
@@ -1814,7 +1814,7 @@ func (l *Lifter) liftRet(insn *disasm.Instruction) ([]IRInstruction, error) {
 				Right: popBytes,
 			}
 
-			l.emit(Assign{
+			l.emit(&Assign{
 				baseInstruction: baseInstruction{Loc: l.currentLocation},
 				Dest:            rspVar,
 				Source:          finalRsp,
@@ -1824,7 +1824,7 @@ func (l *Lifter) liftRet(insn *disasm.Instruction) ([]IRInstruction, error) {
 
 	// emit return instruction
 	// return value (rax) will be handled by abi analyzer
-	l.emit(Return{
+	l.emit(&Return{
 		baseInstruction: baseInstruction{Loc: l.currentLocation},
 		Value:           nil, // return value extracted separately
 	})

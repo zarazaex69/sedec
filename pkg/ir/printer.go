@@ -152,22 +152,41 @@ func (pr *Printer) formatExpression(expr Expression) string {
 	switch e := expr.(type) {
 	case VariableExpr:
 		return e.Var.String()
+	case *VariableExpr:
+		return e.Var.String()
 	case ConstantExpr:
+		return e.Value.String()
+	case *ConstantExpr:
 		return e.Value.String()
 	case BinaryOp:
 		return fmt.Sprintf("(%s %s %s)",
 			pr.formatExpression(e.Left),
 			e.Op.String(),
 			pr.formatExpression(e.Right))
+	case *BinaryOp:
+		return fmt.Sprintf("(%s %s %s)",
+			pr.formatExpression(e.Left),
+			e.Op.String(),
+			pr.formatExpression(e.Right))
 	case UnaryOp:
+		return fmt.Sprintf("(%s%s)", e.Op.String(), pr.formatExpression(e.Operand))
+	case *UnaryOp:
 		return fmt.Sprintf("(%s%s)", e.Op.String(), pr.formatExpression(e.Operand))
 	case Cast:
 		return fmt.Sprintf("(%s)%s", e.TargetType.String(), pr.formatExpression(e.Expr))
+	case *Cast:
+		return fmt.Sprintf("(%s)%s", e.TargetType.String(), pr.formatExpression(e.Expr))
 	case Extract:
+		return fmt.Sprintf("extract(%s, %d, %d)", pr.formatExpression(VariableExpr{Var: Variable{Name: e.Source.Name, Type: e.Source.Type}}), e.Offset, e.Size)
+	case *Extract:
 		return fmt.Sprintf("extract(%s, %d, %d)", pr.formatExpression(VariableExpr{Var: Variable{Name: e.Source.Name, Type: e.Source.Type}}), e.Offset, e.Size)
 	case Insert:
 		return fmt.Sprintf("insert(%s, %s, %d, %d)", pr.formatExpression(VariableExpr{Var: Variable{Name: e.Dest.Name, Type: e.Dest.Type}}), pr.formatExpression(e.Value), e.Offset, e.Size)
+	case *Insert:
+		return fmt.Sprintf("insert(%s, %s, %d, %d)", pr.formatExpression(VariableExpr{Var: Variable{Name: e.Dest.Name, Type: e.Dest.Type}}), pr.formatExpression(e.Value), e.Offset, e.Size)
 	case ZeroExtend:
+		return fmt.Sprintf("zext(%s, %d, %d)", pr.formatExpression(VariableExpr{Var: Variable{Name: e.Source.Name, Type: e.Source.Type}}), e.FromSize, e.ToSize)
+	case *ZeroExtend:
 		return fmt.Sprintf("zext(%s, %d, %d)", pr.formatExpression(VariableExpr{Var: Variable{Name: e.Source.Name, Type: e.Source.Type}}), e.FromSize, e.ToSize)
 	default:
 		return fmt.Sprintf("/* unknown expr: %T */", expr)

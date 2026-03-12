@@ -53,6 +53,10 @@ func NewTransformer(function *ir.Function, cfgGraph *cfg.CFG, domTree *cfg.Domin
 // TransformToSSA performs complete ssa transformation
 // this is the main entry point for ssa conversion
 func (t *Transformer) TransformToSSA() error {
+	// step 0: normalize all instructions and expressions to pointer types
+	// lifter may emit value types; ssa requires pointer types for in-place mutation
+	t.normalizeInstructions()
+
 	// step 1: compute dominance frontiers
 	t.domFront = t.domTree.ComputeDominanceFrontiers()
 
@@ -70,6 +74,81 @@ func (t *Transformer) TransformToSSA() error {
 	}
 
 	return nil
+}
+
+// normalizeInstructions converts all value-type instructions and expressions
+// to pointer types. ssa transformation requires pointer types for in-place
+// mutation of variable versions during renaming.
+func (t *Transformer) normalizeInstructions() {
+	for _, block := range t.function.Blocks {
+		for i, instr := range block.Instructions {
+			block.Instructions[i] = normalizeInstruction(instr)
+		}
+	}
+}
+
+// normalizeInstruction converts a value-type instruction to pointer type
+func normalizeInstruction(instr ir.IRInstruction) ir.IRInstruction {
+	switch v := instr.(type) {
+	case ir.Assign:
+		v.Source = normalizeExpression(v.Source)
+		return &v
+	case ir.Load:
+		v.Address = normalizeExpression(v.Address)
+		return &v
+	case ir.Store:
+		v.Address = normalizeExpression(v.Address)
+		v.Value = normalizeExpression(v.Value)
+		return &v
+	case ir.Branch:
+		v.Condition = normalizeExpression(v.Condition)
+		return &v
+	case ir.Jump:
+		return &v
+	case ir.Call:
+		v.Target = normalizeExpression(v.Target)
+		return &v
+	case ir.Return:
+		return &v
+	case ir.Phi:
+		return &v
+	default:
+		// already pointer type or unknown - return as-is
+		return instr
+	}
+}
+
+// normalizeExpression converts value-type expressions to pointer types recursively
+func normalizeExpression(expr ir.Expression) ir.Expression {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.(type) {
+	case ir.VariableExpr:
+		return &e
+	case ir.ConstantExpr:
+		return &e
+	case ir.BinaryOp:
+		e.Left = normalizeExpression(e.Left)
+		e.Right = normalizeExpression(e.Right)
+		return &e
+	case ir.UnaryOp:
+		e.Operand = normalizeExpression(e.Operand)
+		return &e
+	case ir.Cast:
+		e.Expr = normalizeExpression(e.Expr)
+		return &e
+	case ir.Extract:
+		return &e
+	case ir.Insert:
+		e.Value = normalizeExpression(e.Value)
+		return &e
+	case ir.ZeroExtend:
+		return &e
+	default:
+		// already pointer type or unknown
+		return expr
+	}
 }
 
 // collectVariableDefinitions scans all blocks to find where each variable is defined
