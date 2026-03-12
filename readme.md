@@ -9,12 +9,19 @@
 
 ## About
 sedec is a new decompiler written in golang 
-made for freedom by zarazaex and zowue
+made by zarazaex
+libre [license](/home/zarazaex/Projects/sadec/LICENSE)
 
-## Roadmap
-[The roadmap is here](https://github.com/zarazaex69/sedec/issues/2)
 
- 
+# Docs
+[NOTICES](NOTICES)
+
+[CONTRIBUTION](CONTRIBUTION)
+
+[LICENSE](LICENSE)
+
+[ROADMAP](https://github.com/zarazaex69/sedec/issues/2)
+
 <div align="center">
 
 ---
