@@ -11,6 +11,8 @@ import (
 // ============================================================================
 
 // TestLifterMul tests unsigned multiply in all operand-size variants.
+//
+//nolint:dupl // test struct repetition
 func TestLifterMul(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -434,6 +436,8 @@ func TestLifterIDiv(t *testing.T) {
 // ============================================================================
 
 // TestLifterMovzx tests zero-extension move.
+//
+//nolint:dupl // test struct repetition
 func TestLifterMovzx(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -533,6 +537,8 @@ func TestLifterMovzx(t *testing.T) {
 }
 
 // TestLifterMovsx tests sign-extension move.
+//
+//nolint:dupl // test struct repetition
 func TestLifterMovsx(t *testing.T) {
 	tests := []struct {
 		name    string

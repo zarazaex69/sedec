@@ -8,9 +8,18 @@ import (
 // Type System Tests
 // ============================================================================
 
+const (
+	strVoid  = "void"
+	strBool  = "bool"
+	strTrue  = "true"
+	strFalse = "false"
+	strNull  = "null"
+	strAdd   = "add"
+)
+
 func TestVoidType(t *testing.T) {
 	vt := VoidType{}
-	if vt.String() != "void" {
+	if vt.String() != strVoid {
 		t.Errorf("expected 'void', got '%s'", vt.String())
 	}
 	if vt.Size() != 0 {
@@ -20,7 +29,7 @@ func TestVoidType(t *testing.T) {
 
 func TestBoolType(t *testing.T) {
 	bt := BoolType{}
-	if bt.String() != "bool" {
+	if bt.String() != strBool {
 		t.Errorf("expected 'bool', got '%s'", bt.String())
 	}
 	if bt.Size() != Size1 {
@@ -234,12 +243,12 @@ func TestFloatConstant(t *testing.T) {
 
 func TestBoolConstant(t *testing.T) {
 	trueConst := BoolConstant{Value: true}
-	if trueConst.String() != "true" {
+	if trueConst.String() != strTrue {
 		t.Errorf("expected 'true', got '%s'", trueConst.String())
 	}
 
 	falseConst := BoolConstant{Value: false}
-	if falseConst.String() != "false" {
+	if falseConst.String() != strFalse {
 		t.Errorf("expected 'false', got '%s'", falseConst.String())
 	}
 }
@@ -248,7 +257,7 @@ func TestNullConstant(t *testing.T) {
 	nc := NullConstant{
 		PointerType: PointerType{Pointee: IntType{Width: Size4, Signed: true}},
 	}
-	if nc.String() != "null" {
+	if nc.String() != strNull {
 		t.Errorf("expected 'null', got '%s'", nc.String())
 	}
 }
@@ -631,7 +640,7 @@ func TestFunctionConstruction(t *testing.T) {
 	}
 	fn.Blocks[0] = block
 
-	if fn.Name != "add" {
+	if fn.Name != strAdd {
 		t.Errorf("expected function name 'add', got '%s'", fn.Name)
 	}
 	if len(fn.Blocks) != 1 {

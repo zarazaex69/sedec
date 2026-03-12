@@ -118,7 +118,7 @@ func genSimpleBlock(id BlockID, totalBlocks int) *BasicBlock {
 	}
 
 	// add 0-2 non-terminator instructions
-	numInsns := int(id) % 3
+	numInsns := int(id) % 3 //nolint:gosec // id is generated small above
 	for i := 0; i < numInsns; i++ {
 		insn := genNonTerminatorInsn(id, i)
 		block.Instructions = append(block.Instructions, insn)
@@ -134,7 +134,7 @@ func genSimpleBlock(id BlockID, totalBlocks int) *BasicBlock {
 // genNonTerminatorInsn generates assign, load, or store instructions.
 func genNonTerminatorInsn(blockID BlockID, idx int) IRInstruction {
 	// cycle through instruction types deterministically
-	switch (int(blockID) + idx) % 3 {
+	switch (int(blockID) + idx) % 3 { //nolint:gosec // blockID is generated small above
 	case 0:
 		return genAssignInsn(blockID, idx)
 	case 1:
@@ -194,12 +194,12 @@ func genStoreInsn(blockID BlockID, idx int) *Store {
 // genTerminator generates a valid terminator instruction for a block.
 func genTerminator(id BlockID, totalBlocks int) IRInstruction {
 	// last block always returns
-	if int(id) == totalBlocks-1 || totalBlocks == 1 {
+	if int(id) == totalBlocks-1 || totalBlocks == 1 { //nolint:gosec // id is generated small above
 		return &Return{Value: nil}
 	}
 
 	// other blocks jump to next block
-	nextBlock := BlockID(int(id) + 1)
+	nextBlock := id + 1
 	return &Jump{Target: nextBlock}
 }
 
@@ -207,7 +207,9 @@ func genTerminator(id BlockID, totalBlocks int) IRInstruction {
 func genSimpleExpr(blockID BlockID, idx int, depth int) Expression {
 	if depth >= 2 {
 		// base case: return a variable or constant
-		if (int(blockID)+idx+depth)%2 == 0 {
+		//nolint:gosec // id is small test bounds
+		idx64 := uint64(uint(idx + depth))
+		if (uint64(blockID)+idx64)%2 == 0 {
 			return genIntConstantExpr(int64(idx * 10))
 		}
 		return VariableExpr{
@@ -219,10 +221,12 @@ func genSimpleExpr(blockID BlockID, idx int, depth int) Expression {
 		}
 	}
 
+	//nolint:gosec // id is small test bounds
+	idx64 := uint64(uint(idx + depth))
 	// cycle through expression types
-	switch (int(blockID) + idx + depth) % 5 {
+	switch (uint64(blockID) + idx64) % 5 {
 	case 0:
-		return genIntConstantExpr(int64(blockID)*10 + int64(idx))
+		return genIntConstantExpr(int64(blockID)*10 + int64(idx)) //nolint:gosec // blockID is generated small above
 	case 1:
 		return genBinaryOpExpr(blockID, idx, depth)
 	case 2:
@@ -258,7 +262,7 @@ func genBinaryOpExpr(blockID BlockID, idx int, depth int) BinaryOp {
 		BinOpAdd, BinOpSub, BinOpMul,
 		BinOpAnd, BinOpOr, BinOpXor,
 	}
-	op := ops[(int(blockID)+idx)%len(ops)]
+	op := ops[(uint64(blockID)+uint64(uint(idx)))%uint64(len(ops))] //nolint:gosec // idx bounds
 
 	left := genSimpleExpr(blockID, idx, depth+1)
 	right := genSimpleExpr(blockID, idx+1, depth+1)
@@ -269,7 +273,7 @@ func genBinaryOpExpr(blockID BlockID, idx int, depth int) BinaryOp {
 // genUnaryOpExpr generates a unary operation expression.
 func genUnaryOpExpr(blockID BlockID, idx int, depth int) UnaryOp {
 	ops := []UnaryOperator{UnOpNeg, UnOpNot}
-	op := ops[(int(blockID)+idx)%len(ops)]
+	op := ops[(uint64(blockID)+uint64(uint(idx)))%uint64(len(ops))] //nolint:gosec // idx bounds
 	operand := genSimpleExpr(blockID, idx, depth+1)
 	return UnaryOp{Op: op, Operand: operand}
 }
@@ -281,7 +285,9 @@ func genCastExpr(blockID BlockID, idx int, depth int) Cast {
 		IntType{Width: Size2, Signed: false},
 		IntType{Width: Size1, Signed: false},
 	}
-	targetType := targetTypes[(int(blockID)+idx)%len(targetTypes)]
+	//nolint:gosec // test bounds
+	idx64 := uint64(idx)
+	targetType := targetTypes[(uint64(blockID)+idx64)%uint64(len(targetTypes))]
 	inner := genSimpleExpr(blockID, idx, depth+1)
 	return Cast{Expr: inner, TargetType: targetType}
 }

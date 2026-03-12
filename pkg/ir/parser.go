@@ -2,12 +2,19 @@ package ir
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
 	"strings"
 	"unicode"
 )
+
+// ErrParse is returned when the IR parser encounters invalid syntax or structure
+var ErrParse = errors.New("parse error")
+
+// ErrEmptyInstruction indicates that a parsed line contained no instruction.
+var ErrEmptyInstruction = errors.New("empty instruction")
 
 // Parser parses serialized IR text format into IR structures
 type Parser struct {
@@ -195,6 +202,9 @@ func (p *Parser) parseBasicBlock() (*BasicBlock, error) {
 		}
 
 		insn, err := p.parseInstruction()
+		if errors.Is(err, ErrEmptyInstruction) {
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -212,7 +222,7 @@ func (p *Parser) parseInstruction() (IRInstruction, error) {
 	line = strings.TrimSpace(line)
 
 	if line == "" {
-		return nil, nil
+		return nil, ErrEmptyInstruction
 	}
 
 	// determine instruction type by keywords
@@ -530,6 +540,7 @@ func (p *Parser) parseExpression(s string) (Expression, error) {
 
 	// check for type cast: (type)expr — opening paren followed by a type name and closing paren
 	// this must be checked before the fully-parenthesized expression branch
+	//nolint:nestif // grammar checking naturally leads to nesting
 	if strings.HasPrefix(s, "(") {
 		// find the matching close paren for the opening one
 		closeIdx := p.findMatchingParen(s, 0)
@@ -630,6 +641,7 @@ func (p *Parser) parseExpression(s string) (Expression, error) {
 		}, nil
 	}
 	// unary minus: check it's not a negative number literal
+	//nolint:nestif // grammar checking naturally leads to nesting
 	if len(s) > 0 && s[0] == '-' {
 		rest := strings.TrimSpace(s[1:])
 		// if rest starts with digit, it's a negative number
@@ -665,6 +677,8 @@ func (p *Parser) parseExpression(s string) (Expression, error) {
 }
 
 // parseVariable parses a variable: name or name_version
+//
+//nolint:unparam // error return is intentionally kept for consistency with other parse functions
 func (p *Parser) parseVariable(s string) (Variable, error) {
 	s = strings.TrimSpace(s)
 
@@ -730,13 +744,14 @@ func (p *Parser) parseConstant(s string) (Constant, error) {
 	// determine width and signedness
 	signed := val < 0
 	var width Size
-	if val >= -128 && val <= 127 {
+	switch {
+	case val >= -128 && val <= 127:
 		width = Size1
-	} else if val >= -32768 && val <= 32767 {
+	case val >= -32768 && val <= 32767:
 		width = Size2
-	} else if val >= -2147483648 && val <= 2147483647 {
+	case val >= -2147483648 && val <= 2147483647:
 		width = Size4
-	} else {
+	default:
 		width = Size8
 	}
 
@@ -763,7 +778,7 @@ func (p *Parser) parseType(s string) (Type, error) {
 		signed := strings.HasPrefix(s, "i")
 		widthStr := s[1:]
 		width, err := strconv.Atoi(widthStr)
-		if err != nil {
+		if err != nil || width < 0 || width > 256 {
 			return nil, p.errorf("invalid integer type: %s", s)
 		}
 		return IntType{
@@ -776,7 +791,7 @@ func (p *Parser) parseType(s string) (Type, error) {
 	if strings.HasPrefix(s, "f") {
 		widthStr := s[1:]
 		width, err := strconv.Atoi(widthStr)
-		if err != nil {
+		if err != nil || width < 0 || width > 1024 {
 			return nil, p.errorf("invalid float type: %s", s)
 		}
 		return FloatType{Width: Size(width / 8)}, nil
@@ -876,12 +891,12 @@ func (p *Parser) trimComment(s string) string {
 }
 
 func (p *Parser) error(msg string) error {
-	return fmt.Errorf("line %d: %s", p.line, msg)
+	return fmt.Errorf("line %d: %w: %s", p.line, ErrParse, msg)
 }
 
 func (p *Parser) errorf(format string, args ...interface{}) error {
 	msg := fmt.Sprintf(format, args...)
-	return fmt.Errorf("line %d: %s", p.line, msg)
+	return fmt.Errorf("line %d: %w: %s", p.line, ErrParse, msg)
 }
 
 func (p *Parser) findOperator(s, op string) int {
@@ -890,11 +905,12 @@ func (p *Parser) findOperator(s, op string) int {
 	opLen := len(op)
 
 	for i := 0; i < len(s); i++ {
-		if s[i] == '(' {
+		switch {
+		case s[i] == '(':
 			depth++
-		} else if s[i] == ')' {
+		case s[i] == ')':
 			depth--
-		} else if depth == 0 && i+opLen <= len(s) && s[i:i+opLen] == op {
+		case depth == 0 && i+opLen <= len(s) && s[i:i+opLen] == op:
 			// found potential operator match
 
 			// for operators that can be both unary and binary (-, +),
@@ -964,9 +980,10 @@ func (p *Parser) findMatchingParen(s string, start int) int {
 
 	depth := 0
 	for i := start; i < len(s); i++ {
-		if s[i] == '(' {
+		switch s[i] {
+		case '(':
 			depth++
-		} else if s[i] == ')' {
+		case ')':
 			depth--
 			if depth == 0 {
 				return i

@@ -39,6 +39,12 @@ func (s SourceLocation) String() string {
 // Type System
 // ============================================================================
 
+// Keywords for types
+const (
+	KeywordVoid = "void"
+	KeywordBool = "bool"
+)
+
 // Type represents the type of a value in IR
 type Type interface {
 	isType()
@@ -49,8 +55,9 @@ type Type interface {
 // VoidType represents the absence of a value
 type VoidType struct{}
 
-func (VoidType) isType()        {}
-func (VoidType) String() string { return "void" }
+func (VoidType) isType() {}
+
+func (VoidType) String() string { return KeywordVoid }
 
 // Size returns the size in bytes (0 for void)
 func (VoidType) Size() Size { return 0 }
@@ -58,8 +65,9 @@ func (VoidType) Size() Size { return 0 }
 // BoolType represents a boolean value (1 byte)
 type BoolType struct{}
 
-func (BoolType) isType()        {}
-func (BoolType) String() string { return "bool" }
+func (BoolType) isType() {}
+
+func (BoolType) String() string { return KeywordBool }
 
 // Size returns the size in bytes (1 for bool)
 func (BoolType) Size() Size { return Size1 }

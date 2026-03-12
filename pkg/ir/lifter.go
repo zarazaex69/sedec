@@ -1,10 +1,65 @@
 package ir
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/zarazaex69/sedec/pkg/disasm"
+)
+
+// register name constants for implicit x86_64 operands
+const (
+	raxReg = "rax"
+	eaxReg = "eax"
+	rdxReg = "rdx"
+	edxReg = "edx"
+)
+
+// sentinel errors for lifter operations
+var (
+	errUnsupportedInstruction   = errors.New("unsupported instruction")
+	errMemOpRequiresLoad        = errors.New("memory operand requires explicit load")
+	errUnknownOperandType       = errors.New("unknown operand type")
+	errAddRequires2Operands     = errors.New("add requires 2 operands")
+	errSubRequires2Operands     = errors.New("sub requires 2 operands")
+	errMulRequires1Operand      = errors.New("mul requires 1 operand")
+	errIMulRequires13Operands   = errors.New("imul requires 1-3 operands")
+	errIMulThreeOpNeedReg       = errors.New("imul three-operand form requires register destination")
+	errDivRequires1Operand      = errors.New("div requires 1 operand")
+	errIDivRequires1Operand     = errors.New("idiv requires 1 operand")
+	errIncRequires1Operand      = errors.New("inc requires 1 operand")
+	errDecRequires1Operand      = errors.New("dec requires 1 operand")
+	errNegRequires1Operand      = errors.New("neg requires 1 operand")
+	errAndRequires2Operands     = errors.New("and requires 2 operands")
+	errOrRequires2Operands      = errors.New("or requires 2 operands")
+	errXorRequires2Operands     = errors.New("xor requires 2 operands")
+	errNotRequires1Operand      = errors.New("not requires 1 operand")
+	errTestRequires2Operands    = errors.New("test requires 2 operands")
+	errCmpRequires2Operands     = errors.New("cmp requires 2 operands")
+	errShlRequires2Operands     = errors.New("shl requires 2 operands")
+	errShrRequires2Operands     = errors.New("shr requires 2 operands")
+	errSarRequires2Operands     = errors.New("sar requires 2 operands")
+	errRolNotImplemented        = errors.New("rol not yet implemented")
+	errRorNotImplemented        = errors.New("ror not yet implemented")
+	errMovRequires2Operands     = errors.New("mov requires 2 operands")
+	errMovBothMem               = errors.New("mov cannot have both operands as memory")
+	errMovDestMustBeRegOrMem    = errors.New("mov destination must be register or memory")
+	errMovzxRequires2Operands   = errors.New("movzx requires 2 operands")
+	errMovzxDestMustBeReg       = errors.New("movzx destination must be register")
+	errMovsxRequires2Operands   = errors.New("movsx requires 2 operands")
+	errMovsxDestMustBeReg       = errors.New("movsx destination must be register")
+	errLeaRequires2Operands     = errors.New("lea requires 2 operands")
+	errLeaSrcMustBeMem          = errors.New("lea source must be memory operand")
+	errLeaDestMustBeReg         = errors.New("lea destination must be register")
+	errPushRequires1Operand     = errors.New("push requires 1 operand")
+	errPopRequires1Operand      = errors.New("pop requires 1 operand")
+	errPopDestMustBeRegOrMem    = errors.New("pop destination must be register or memory")
+	errJmpRequires1Operand      = errors.New("jmp requires 1 operand")
+	errIndirectJumpNotSupported = errors.New("indirect jump not yet fully supported in lifter")
+	errJccRequires1Operand      = errors.New("jcc requires 1 operand")
+	errJccTargetMustBeImm       = errors.New("jcc target must be immediate address")
+	errCallRequires1Operand     = errors.New("call requires 1 operand")
 )
 
 // Lifter translates x86_64 assembly instructions to platform-independent IR.
@@ -31,6 +86,8 @@ func NewLifter() *Lifter {
 
 // LiftInstruction translates a single x86_64 instruction to IR.
 // Returns slice of IR instructions (complex instructions decompose into multiple IR ops).
+//
+//nolint:gocyclo // dispatch table for x86_64 instruction set — inherently high complexity
 func (l *Lifter) LiftInstruction(insn *disasm.Instruction) ([]IRInstruction, error) {
 	// reset current block for new instruction
 	l.currentBlock = l.currentBlock[:0]
@@ -121,7 +178,7 @@ func (l *Lifter) LiftInstruction(insn *disasm.Instruction) ([]IRInstruction, err
 		return l.currentBlock, nil
 
 	default:
-		return nil, fmt.Errorf("unsupported instruction: %s at 0x%x", insn.Mnemonic, insn.Address)
+		return nil, fmt.Errorf("%w: %s at 0x%x", errUnsupportedInstruction, insn.Mnemonic, insn.Address)
 	}
 }
 
@@ -193,10 +250,10 @@ func (l *Lifter) translateOperandToExpr(op disasm.Operand) (Expression, error) {
 
 	case disasm.MemoryOperand:
 		// memory operand requires load - caller must handle
-		return nil, fmt.Errorf("memory operand requires explicit load")
+		return nil, errMemOpRequiresLoad
 
 	default:
-		return nil, fmt.Errorf("unknown operand type")
+		return nil, errUnknownOperandType
 	}
 }
 
@@ -329,18 +386,16 @@ func (l *Lifter) storeToMemory(mem disasm.MemoryOperand, value Expression) {
 // ============================================================================
 
 // liftAdd lifts ADD instruction: dest = dest + src
-func (l *Lifter) liftAdd(insn *disasm.Instruction) ([]IRInstruction, error) {
+func (l *Lifter) liftBinaryOperation(insn *disasm.Instruction, opErr error, binOp BinaryOperator, flagSetter func(Expression, Size)) ([]IRInstruction, error) {
 	if len(insn.Operands) != 2 {
-		return nil, fmt.Errorf("add requires 2 operands")
+		return nil, opErr
 	}
 
 	dest := insn.Operands[0]
 	src := insn.Operands[1]
 
-	// load source operand
 	var srcExpr Expression
 	var err error
-
 	if mem, ok := src.(disasm.MemoryOperand); ok {
 		srcVar := l.loadFromMemory(mem)
 		srcExpr = VariableExpr{Var: srcVar}
@@ -351,7 +406,6 @@ func (l *Lifter) liftAdd(insn *disasm.Instruction) ([]IRInstruction, error) {
 		}
 	}
 
-	// load destination operand
 	var destExpr Expression
 	var destVar Variable
 
@@ -368,14 +422,12 @@ func (l *Lifter) liftAdd(insn *disasm.Instruction) ([]IRInstruction, error) {
 		}
 	}
 
-	// compute result: dest + src
 	resultExpr := BinaryOp{
-		Op:    BinOpAdd,
+		Op:    binOp,
 		Left:  destExpr,
 		Right: srcExpr,
 	}
 
-	// store result back to destination
 	if mem, ok := dest.(disasm.MemoryOperand); ok {
 		l.storeToMemory(mem, resultExpr)
 	} else {
@@ -386,80 +438,24 @@ func (l *Lifter) liftAdd(insn *disasm.Instruction) ([]IRInstruction, error) {
 		})
 	}
 
-	// set flags (lazy evaluation - mark as lazy for later elimination)
-	l.setArithmeticFlags(resultExpr, destVar.Type.Size())
-
+	flagSetter(resultExpr, destVar.Type.Size())
 	return l.currentBlock, nil
+}
+
+// liftAdd lifts ADD instruction: dest = dest + src
+func (l *Lifter) liftAdd(insn *disasm.Instruction) ([]IRInstruction, error) {
+	return l.liftBinaryOperation(insn, errAddRequires2Operands, BinOpAdd, l.setArithmeticFlags)
 }
 
 // liftSub lifts SUB instruction: dest = dest - src
 func (l *Lifter) liftSub(insn *disasm.Instruction) ([]IRInstruction, error) {
-	if len(insn.Operands) != 2 {
-		return nil, fmt.Errorf("sub requires 2 operands")
-	}
-
-	dest := insn.Operands[0]
-	src := insn.Operands[1]
-
-	// load source operand
-	var srcExpr Expression
-	var err error
-
-	if mem, ok := src.(disasm.MemoryOperand); ok {
-		srcVar := l.loadFromMemory(mem)
-		srcExpr = VariableExpr{Var: srcVar}
-	} else {
-		srcExpr, err = l.translateOperandToExpr(src)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// load destination operand
-	var destExpr Expression
-	var destVar Variable
-
-	if mem, ok := dest.(disasm.MemoryOperand); ok {
-		destVar = l.loadFromMemory(mem)
-		destExpr = VariableExpr{Var: destVar}
-	} else {
-		destExpr, err = l.translateOperandToExpr(dest)
-		if err != nil {
-			return nil, err
-		}
-		if varExpr, ok := destExpr.(VariableExpr); ok {
-			destVar = varExpr.Var
-		}
-	}
-
-	// compute result: dest - src
-	resultExpr := BinaryOp{
-		Op:    BinOpSub,
-		Left:  destExpr,
-		Right: srcExpr,
-	}
-
-	// store result back to destination
-	if mem, ok := dest.(disasm.MemoryOperand); ok {
-		l.storeToMemory(mem, resultExpr)
-	} else {
-		l.emit(Assign{
-			baseInstruction: baseInstruction{Loc: l.currentLocation},
-			Dest:            destVar,
-			Source:          resultExpr,
-		})
-	}
-
-	// set flags (lazy evaluation)
-	l.setArithmeticFlags(resultExpr, destVar.Type.Size())
-
-	return l.currentBlock, nil
+	return l.liftBinaryOperation(insn, errSubRequires2Operands, BinOpSub, l.setArithmeticFlags)
 }
 
 // liftMul lifts MUL instruction: rdx:rax = rax * src (unsigned)
 func (l *Lifter) liftMul(insn *disasm.Instruction) ([]IRInstruction, error) {
 	if len(insn.Operands) != 1 {
-		return nil, fmt.Errorf("mul requires 1 operand")
+		return nil, errMulRequires1Operand
 	}
 
 	src := insn.Operands[0]
@@ -487,11 +483,13 @@ func (l *Lifter) liftMul(insn *disasm.Instruction) ([]IRInstruction, error) {
 	case Size2:
 		raxName = "ax"
 	case Size4:
-		raxName = "eax"
+		raxName = eaxReg
 	case Size8:
-		raxName = "rax"
+		raxName = raxReg
+	case Size10, Size16, Size32, Size64:
+		raxName = raxReg
 	default:
-		raxName = "rax"
+		raxName = raxReg
 	}
 
 	raxVar := Variable{
@@ -548,11 +546,13 @@ func (l *Lifter) liftMul(insn *disasm.Instruction) ([]IRInstruction, error) {
 		case Size2:
 			rdxName = "dx"
 		case Size4:
-			rdxName = "edx"
+			rdxName = edxReg
 		case Size8:
-			rdxName = "rdx"
+			rdxName = rdxReg
+		case Size1, Size10, Size16, Size32, Size64:
+			rdxName = rdxReg
 		default:
-			rdxName = "rdx"
+			rdxName = rdxReg
 		}
 
 		rdxVar := Variable{
@@ -586,7 +586,7 @@ func (l *Lifter) liftIMul(insn *disasm.Instruction) ([]IRInstruction, error) {
 		// imul dest, src, imm: dest = src * imm
 		return l.liftIMulThreeOperands(insn)
 	default:
-		return nil, fmt.Errorf("imul requires 1-3 operands")
+		return nil, errIMulRequires13Operands
 	}
 }
 
@@ -617,11 +617,13 @@ func (l *Lifter) liftIMulOneOperand(insn *disasm.Instruction) ([]IRInstruction, 
 	case Size2:
 		raxName = "ax"
 	case Size4:
-		raxName = "eax"
+		raxName = eaxReg
 	case Size8:
-		raxName = "rax"
+		raxName = raxReg
+	case Size10, Size16, Size32, Size64:
+		raxName = raxReg
 	default:
-		raxName = "rax"
+		raxName = raxReg
 	}
 
 	raxVar := Variable{
@@ -664,11 +666,13 @@ func (l *Lifter) liftIMulOneOperand(insn *disasm.Instruction) ([]IRInstruction, 
 		case Size2:
 			rdxName = "dx"
 		case Size4:
-			rdxName = "edx"
+			rdxName = edxReg
 		case Size8:
-			rdxName = "rdx"
+			rdxName = rdxReg
+		case Size1, Size10, Size16, Size32, Size64:
+			rdxName = rdxReg
 		default:
-			rdxName = "rdx"
+			rdxName = rdxReg
 		}
 
 		rdxVar := Variable{
@@ -786,7 +790,7 @@ func (l *Lifter) liftIMulThreeOperands(insn *disasm.Instruction) ([]IRInstructio
 			Type: l.getIntType(Size(reg.Size), true),
 		}
 	} else {
-		return nil, fmt.Errorf("imul three-operand form requires register destination")
+		return nil, errIMulThreeOpNeedReg
 	}
 
 	// store result
@@ -800,10 +804,9 @@ func (l *Lifter) liftIMulThreeOperands(insn *disasm.Instruction) ([]IRInstructio
 	return l.currentBlock, nil
 }
 
-// liftDiv lifts DIV instruction: rax = rdx:rax / src, rdx = rdx:rax % src (unsigned)
-func (l *Lifter) liftDiv(insn *disasm.Instruction) ([]IRInstruction, error) {
+func (l *Lifter) liftDivOperation(insn *disasm.Instruction, opErr error, binOpDiv, binOpMod BinaryOperator, signed bool) ([]IRInstruction, error) {
 	if len(insn.Operands) != 1 {
-		return nil, fmt.Errorf("div requires 1 operand")
+		return nil, opErr
 	}
 
 	src := insn.Operands[0]
@@ -833,19 +836,22 @@ func (l *Lifter) liftDiv(insn *disasm.Instruction) ([]IRInstruction, error) {
 		raxName = "ax"
 		rdxName = "dx"
 	case Size4:
-		raxName = "eax"
-		rdxName = "edx"
+		raxName = eaxReg
+		rdxName = edxReg
 	case Size8:
-		raxName = "rax"
-		rdxName = "rdx"
+		raxName = raxReg
+		rdxName = rdxReg
+	case Size10, Size16, Size32, Size64:
+		raxName = raxReg
+		rdxName = rdxReg
 	default:
-		raxName = "rax"
-		rdxName = "rdx"
+		raxName = raxReg
+		rdxName = rdxReg
 	}
 
 	raxVar := Variable{
 		Name: raxName,
-		Type: l.getIntType(size, false),
+		Type: l.getIntType(size, signed),
 	}
 
 	var dividendExpr Expression
@@ -856,7 +862,7 @@ func (l *Lifter) liftDiv(insn *disasm.Instruction) ([]IRInstruction, error) {
 		// construct rdx:rax as (rdx << (size*8)) | rax
 		rdxVar := Variable{
 			Name: rdxName,
-			Type: l.getIntType(size, false),
+			Type: l.getIntType(size, signed),
 		}
 
 		shiftAmount := ConstantExpr{
@@ -880,23 +886,23 @@ func (l *Lifter) liftDiv(insn *disasm.Instruction) ([]IRInstruction, error) {
 		}
 	}
 
-	// compute quotient: dividend / divisor
+	// compute quotient
 	quotientExpr := BinaryOp{
-		Op:    BinOpUDiv,
+		Op:    binOpDiv,
 		Left:  dividendExpr,
 		Right: srcExpr,
 	}
 
-	// compute remainder: dividend % divisor
+	// compute remainder
 	remainderExpr := BinaryOp{
-		Op:    BinOpUMod,
+		Op:    binOpMod,
 		Left:  dividendExpr,
 		Right: srcExpr,
 	}
 
-	// store quotient in rax (or al for 8-bit)
+	// store quotient and remainder
 	if size == Size1 {
-		alVar := Variable{Name: "al", Type: l.getIntType(Size1, false)}
+		alVar := Variable{Name: "al", Type: l.getIntType(Size1, signed)}
 		l.emit(Assign{
 			baseInstruction: baseInstruction{Loc: l.currentLocation},
 			Dest:            alVar,
@@ -904,7 +910,7 @@ func (l *Lifter) liftDiv(insn *disasm.Instruction) ([]IRInstruction, error) {
 		})
 
 		// store remainder in ah
-		ahVar := Variable{Name: "ah", Type: l.getIntType(Size1, false)}
+		ahVar := Variable{Name: "ah", Type: l.getIntType(Size1, signed)}
 		l.emit(Assign{
 			baseInstruction: baseInstruction{Loc: l.currentLocation},
 			Dest:            ahVar,
@@ -920,7 +926,7 @@ func (l *Lifter) liftDiv(insn *disasm.Instruction) ([]IRInstruction, error) {
 		// store remainder in rdx
 		rdxVar := Variable{
 			Name: rdxName,
-			Type: l.getIntType(size, false),
+			Type: l.getIntType(size, signed),
 		}
 
 		l.emit(Assign{
@@ -934,500 +940,110 @@ func (l *Lifter) liftDiv(insn *disasm.Instruction) ([]IRInstruction, error) {
 	return l.currentBlock, nil
 }
 
+// liftDiv lifts DIV instruction: rax = rdx:rax / src, rdx = rdx:rax % src (unsigned)
+func (l *Lifter) liftDiv(insn *disasm.Instruction) ([]IRInstruction, error) {
+	return l.liftDivOperation(insn, errDivRequires1Operand, BinOpUDiv, BinOpUMod, false)
+}
+
 // liftIDiv lifts IDIV instruction (signed division, similar to div but signed)
 func (l *Lifter) liftIDiv(insn *disasm.Instruction) ([]IRInstruction, error) {
+	return l.liftDivOperation(insn, errIDivRequires1Operand, BinOpDiv, BinOpMod, true)
+}
+
+func (l *Lifter) liftUnaryOperation(insn *disasm.Instruction, opErr error, getResult func(destExpr Expression, destVar Variable) Expression, flagSetter func(Expression, Size)) ([]IRInstruction, error) {
 	if len(insn.Operands) != 1 {
-		return nil, fmt.Errorf("idiv requires 1 operand")
+		return nil, opErr
 	}
 
-	src := insn.Operands[0]
-	size := l.getOperandSize(src)
+	dest := insn.Operands[0]
 
-	// load source operand (divisor)
-	var srcExpr Expression
+	var destExpr Expression
+	var destVar Variable
 	var err error
 
-	if mem, ok := src.(disasm.MemoryOperand); ok {
-		srcVar := l.loadFromMemory(mem)
-		srcExpr = VariableExpr{Var: srcVar}
+	if mem, ok := dest.(disasm.MemoryOperand); ok {
+		destVar = l.loadFromMemory(mem)
+		destExpr = VariableExpr{Var: destVar}
 	} else {
-		srcExpr, err = l.translateOperandToExpr(src)
+		destExpr, err = l.translateOperandToExpr(dest)
 		if err != nil {
 			return nil, err
 		}
-	}
-
-	// implicit operands: rdx:rax (dividend)
-	var raxName, rdxName string
-	switch size {
-	case Size1:
-		raxName = "ax"
-		rdxName = ""
-	case Size2:
-		raxName = "ax"
-		rdxName = "dx"
-	case Size4:
-		raxName = "eax"
-		rdxName = "edx"
-	case Size8:
-		raxName = "rax"
-		rdxName = "rdx"
-	default:
-		raxName = "rax"
-		rdxName = "rdx"
-	}
-
-	raxVar := Variable{
-		Name: raxName,
-		Type: l.getIntType(size, true), // signed
-	}
-
-	var dividendExpr Expression
-	if size == Size1 {
-		dividendExpr = VariableExpr{Var: raxVar}
-	} else {
-		rdxVar := Variable{
-			Name: rdxName,
-			Type: l.getIntType(size, true),
-		}
-
-		shiftAmount := ConstantExpr{
-			Value: IntConstant{
-				Value:  int64(size * 8),
-				Width:  Size1,
-				Signed: false,
-			},
-		}
-
-		rdxShifted := BinaryOp{
-			Op:    BinOpShl,
-			Left:  VariableExpr{Var: rdxVar},
-			Right: shiftAmount,
-		}
-
-		dividendExpr = BinaryOp{
-			Op:    BinOpOr,
-			Left:  rdxShifted,
-			Right: VariableExpr{Var: raxVar},
+		if varExpr, ok := destExpr.(VariableExpr); ok {
+			destVar = varExpr.Var
 		}
 	}
 
-	// compute quotient: dividend / divisor (signed)
-	quotientExpr := BinaryOp{
-		Op:    BinOpDiv,
-		Left:  dividendExpr,
-		Right: srcExpr,
-	}
+	resultExpr := getResult(destExpr, destVar)
 
-	// compute remainder: dividend % divisor (signed)
-	remainderExpr := BinaryOp{
-		Op:    BinOpMod,
-		Left:  dividendExpr,
-		Right: srcExpr,
-	}
-
-	// store quotient and remainder
-	if size == Size1 {
-		alVar := Variable{Name: "al", Type: l.getIntType(Size1, true)}
-		l.emit(Assign{
-			baseInstruction: baseInstruction{Loc: l.currentLocation},
-			Dest:            alVar,
-			Source:          quotientExpr,
-		})
-
-		ahVar := Variable{Name: "ah", Type: l.getIntType(Size1, true)}
-		l.emit(Assign{
-			baseInstruction: baseInstruction{Loc: l.currentLocation},
-			Dest:            ahVar,
-			Source:          remainderExpr,
-		})
+	if mem, ok := dest.(disasm.MemoryOperand); ok {
+		l.storeToMemory(mem, resultExpr)
 	} else {
 		l.emit(Assign{
 			baseInstruction: baseInstruction{Loc: l.currentLocation},
-			Dest:            raxVar,
-			Source:          quotientExpr,
-		})
-
-		rdxVar := Variable{
-			Name: rdxName,
-			Type: l.getIntType(size, true),
-		}
-
-		l.emit(Assign{
-			baseInstruction: baseInstruction{Loc: l.currentLocation},
-			Dest:            rdxVar,
-			Source:          remainderExpr,
+			Dest:            destVar,
+			Source:          resultExpr,
 		})
 	}
 
+	flagSetter(resultExpr, destVar.Type.Size())
 	return l.currentBlock, nil
 }
 
 // liftInc lifts INC instruction: dest = dest + 1
 func (l *Lifter) liftInc(insn *disasm.Instruction) ([]IRInstruction, error) {
-	if len(insn.Operands) != 1 {
-		return nil, fmt.Errorf("inc requires 1 operand")
-	}
-
-	dest := insn.Operands[0]
-
-	// load destination operand
-	var destExpr Expression
-	var destVar Variable
-	var err error
-
-	if mem, ok := dest.(disasm.MemoryOperand); ok {
-		destVar = l.loadFromMemory(mem)
-		destExpr = VariableExpr{Var: destVar}
-	} else {
-		destExpr, err = l.translateOperandToExpr(dest)
-		if err != nil {
-			return nil, err
+	return l.liftUnaryOperation(insn, errIncRequires1Operand, func(destExpr Expression, destVar Variable) Expression {
+		return BinaryOp{
+			Op:    BinOpAdd,
+			Left:  destExpr,
+			Right: ConstantExpr{Value: IntConstant{Value: 1, Width: destVar.Type.Size(), Signed: false}},
 		}
-		if varExpr, ok := destExpr.(VariableExpr); ok {
-			destVar = varExpr.Var
-		}
-	}
-
-	// compute result: dest + 1
-	oneExpr := ConstantExpr{
-		Value: IntConstant{
-			Value:  1,
-			Width:  destVar.Type.Size(),
-			Signed: false,
-		},
-	}
-
-	resultExpr := BinaryOp{
-		Op:    BinOpAdd,
-		Left:  destExpr,
-		Right: oneExpr,
-	}
-
-	// store result
-	if mem, ok := dest.(disasm.MemoryOperand); ok {
-		l.storeToMemory(mem, resultExpr)
-	} else {
-		l.emit(Assign{
-			baseInstruction: baseInstruction{Loc: l.currentLocation},
-			Dest:            destVar,
-			Source:          resultExpr,
-		})
-	}
-
-	// set flags (cf not affected by inc)
-	l.setArithmeticFlags(resultExpr, destVar.Type.Size())
-
-	return l.currentBlock, nil
+	}, l.setArithmeticFlags)
 }
 
 // liftDec lifts DEC instruction: dest = dest - 1
 func (l *Lifter) liftDec(insn *disasm.Instruction) ([]IRInstruction, error) {
-	if len(insn.Operands) != 1 {
-		return nil, fmt.Errorf("dec requires 1 operand")
-	}
-
-	dest := insn.Operands[0]
-
-	// load destination operand
-	var destExpr Expression
-	var destVar Variable
-	var err error
-
-	if mem, ok := dest.(disasm.MemoryOperand); ok {
-		destVar = l.loadFromMemory(mem)
-		destExpr = VariableExpr{Var: destVar}
-	} else {
-		destExpr, err = l.translateOperandToExpr(dest)
-		if err != nil {
-			return nil, err
+	return l.liftUnaryOperation(insn, errDecRequires1Operand, func(destExpr Expression, destVar Variable) Expression {
+		return BinaryOp{
+			Op:    BinOpSub,
+			Left:  destExpr,
+			Right: ConstantExpr{Value: IntConstant{Value: 1, Width: destVar.Type.Size(), Signed: false}},
 		}
-		if varExpr, ok := destExpr.(VariableExpr); ok {
-			destVar = varExpr.Var
-		}
-	}
-
-	// compute result: dest - 1
-	oneExpr := ConstantExpr{
-		Value: IntConstant{
-			Value:  1,
-			Width:  destVar.Type.Size(),
-			Signed: false,
-		},
-	}
-
-	resultExpr := BinaryOp{
-		Op:    BinOpSub,
-		Left:  destExpr,
-		Right: oneExpr,
-	}
-
-	// store result
-	if mem, ok := dest.(disasm.MemoryOperand); ok {
-		l.storeToMemory(mem, resultExpr)
-	} else {
-		l.emit(Assign{
-			baseInstruction: baseInstruction{Loc: l.currentLocation},
-			Dest:            destVar,
-			Source:          resultExpr,
-		})
-	}
-
-	// set flags (cf not affected by dec)
-	l.setArithmeticFlags(resultExpr, destVar.Type.Size())
-
-	return l.currentBlock, nil
+	}, l.setArithmeticFlags)
 }
 
 // liftNeg lifts NEG instruction: dest = -dest
 func (l *Lifter) liftNeg(insn *disasm.Instruction) ([]IRInstruction, error) {
-	if len(insn.Operands) != 1 {
-		return nil, fmt.Errorf("neg requires 1 operand")
-	}
-
-	dest := insn.Operands[0]
-
-	// load destination operand
-	var destExpr Expression
-	var destVar Variable
-	var err error
-
-	if mem, ok := dest.(disasm.MemoryOperand); ok {
-		destVar = l.loadFromMemory(mem)
-		destExpr = VariableExpr{Var: destVar}
-	} else {
-		destExpr, err = l.translateOperandToExpr(dest)
-		if err != nil {
-			return nil, err
+	return l.liftUnaryOperation(insn, errNegRequires1Operand, func(destExpr Expression, _ Variable) Expression {
+		return UnaryOp{
+			Op:      UnOpNeg,
+			Operand: destExpr,
 		}
-		if varExpr, ok := destExpr.(VariableExpr); ok {
-			destVar = varExpr.Var
-		}
-	}
-
-	// compute result: -dest
-	resultExpr := UnaryOp{
-		Op:      UnOpNeg,
-		Operand: destExpr,
-	}
-
-	// store result
-	if mem, ok := dest.(disasm.MemoryOperand); ok {
-		l.storeToMemory(mem, resultExpr)
-	} else {
-		l.emit(Assign{
-			baseInstruction: baseInstruction{Loc: l.currentLocation},
-			Dest:            destVar,
-			Source:          resultExpr,
-		})
-	}
-
-	// set flags
-	l.setArithmeticFlags(resultExpr, destVar.Type.Size())
-
-	return l.currentBlock, nil
+	}, l.setArithmeticFlags)
 }
 
 // ============================================================================
 // Logical Operations
 // ============================================================================
 
-// liftAnd lifts AND instruction: dest = dest & src
 func (l *Lifter) liftAnd(insn *disasm.Instruction) ([]IRInstruction, error) {
-	if len(insn.Operands) != 2 {
-		return nil, fmt.Errorf("and requires 2 operands")
-	}
-
-	dest := insn.Operands[0]
-	src := insn.Operands[1]
-
-	// load source operand
-	var srcExpr Expression
-	var err error
-
-	if mem, ok := src.(disasm.MemoryOperand); ok {
-		srcVar := l.loadFromMemory(mem)
-		srcExpr = VariableExpr{Var: srcVar}
-	} else {
-		srcExpr, err = l.translateOperandToExpr(src)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// load destination operand
-	var destExpr Expression
-	var destVar Variable
-
-	if mem, ok := dest.(disasm.MemoryOperand); ok {
-		destVar = l.loadFromMemory(mem)
-		destExpr = VariableExpr{Var: destVar}
-	} else {
-		destExpr, err = l.translateOperandToExpr(dest)
-		if err != nil {
-			return nil, err
-		}
-		if varExpr, ok := destExpr.(VariableExpr); ok {
-			destVar = varExpr.Var
-		}
-	}
-
-	// compute result: dest & src
-	resultExpr := BinaryOp{
-		Op:    BinOpAnd,
-		Left:  destExpr,
-		Right: srcExpr,
-	}
-
-	// store result
-	if mem, ok := dest.(disasm.MemoryOperand); ok {
-		l.storeToMemory(mem, resultExpr)
-	} else {
-		l.emit(Assign{
-			baseInstruction: baseInstruction{Loc: l.currentLocation},
-			Dest:            destVar,
-			Source:          resultExpr,
-		})
-	}
-
-	// set flags (cf=0, of=0, sf/zf/pf set according to result)
-	l.setLogicalFlags(resultExpr, destVar.Type.Size())
-
-	return l.currentBlock, nil
+	return l.liftBinaryOperation(insn, errAndRequires2Operands, BinOpAnd, l.setLogicalFlags)
 }
 
 // liftOr lifts OR instruction: dest = dest | src
 func (l *Lifter) liftOr(insn *disasm.Instruction) ([]IRInstruction, error) {
-	if len(insn.Operands) != 2 {
-		return nil, fmt.Errorf("or requires 2 operands")
-	}
-
-	dest := insn.Operands[0]
-	src := insn.Operands[1]
-
-	// load source operand
-	var srcExpr Expression
-	var err error
-
-	if mem, ok := src.(disasm.MemoryOperand); ok {
-		srcVar := l.loadFromMemory(mem)
-		srcExpr = VariableExpr{Var: srcVar}
-	} else {
-		srcExpr, err = l.translateOperandToExpr(src)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// load destination operand
-	var destExpr Expression
-	var destVar Variable
-
-	if mem, ok := dest.(disasm.MemoryOperand); ok {
-		destVar = l.loadFromMemory(mem)
-		destExpr = VariableExpr{Var: destVar}
-	} else {
-		destExpr, err = l.translateOperandToExpr(dest)
-		if err != nil {
-			return nil, err
-		}
-		if varExpr, ok := destExpr.(VariableExpr); ok {
-			destVar = varExpr.Var
-		}
-	}
-
-	// compute result: dest | src
-	resultExpr := BinaryOp{
-		Op:    BinOpOr,
-		Left:  destExpr,
-		Right: srcExpr,
-	}
-
-	// store result
-	if mem, ok := dest.(disasm.MemoryOperand); ok {
-		l.storeToMemory(mem, resultExpr)
-	} else {
-		l.emit(Assign{
-			baseInstruction: baseInstruction{Loc: l.currentLocation},
-			Dest:            destVar,
-			Source:          resultExpr,
-		})
-	}
-
-	// set flags
-	l.setLogicalFlags(resultExpr, destVar.Type.Size())
-
-	return l.currentBlock, nil
+	return l.liftBinaryOperation(insn, errOrRequires2Operands, BinOpOr, l.setLogicalFlags)
 }
 
 // liftXor lifts XOR instruction: dest = dest ^ src
 func (l *Lifter) liftXor(insn *disasm.Instruction) ([]IRInstruction, error) {
-	if len(insn.Operands) != 2 {
-		return nil, fmt.Errorf("xor requires 2 operands")
-	}
-
-	dest := insn.Operands[0]
-	src := insn.Operands[1]
-
-	// load source operand
-	var srcExpr Expression
-	var err error
-
-	if mem, ok := src.(disasm.MemoryOperand); ok {
-		srcVar := l.loadFromMemory(mem)
-		srcExpr = VariableExpr{Var: srcVar}
-	} else {
-		srcExpr, err = l.translateOperandToExpr(src)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// load destination operand
-	var destExpr Expression
-	var destVar Variable
-
-	if mem, ok := dest.(disasm.MemoryOperand); ok {
-		destVar = l.loadFromMemory(mem)
-		destExpr = VariableExpr{Var: destVar}
-	} else {
-		destExpr, err = l.translateOperandToExpr(dest)
-		if err != nil {
-			return nil, err
-		}
-		if varExpr, ok := destExpr.(VariableExpr); ok {
-			destVar = varExpr.Var
-		}
-	}
-
-	// compute result: dest ^ src
-	resultExpr := BinaryOp{
-		Op:    BinOpXor,
-		Left:  destExpr,
-		Right: srcExpr,
-	}
-
-	// store result
-	if mem, ok := dest.(disasm.MemoryOperand); ok {
-		l.storeToMemory(mem, resultExpr)
-	} else {
-		l.emit(Assign{
-			baseInstruction: baseInstruction{Loc: l.currentLocation},
-			Dest:            destVar,
-			Source:          resultExpr,
-		})
-	}
-
-	// set flags
-	l.setLogicalFlags(resultExpr, destVar.Type.Size())
-
-	return l.currentBlock, nil
+	return l.liftBinaryOperation(insn, errXorRequires2Operands, BinOpXor, l.setLogicalFlags)
 }
 
 // liftNot lifts NOT instruction: dest = ~dest
 func (l *Lifter) liftNot(insn *disasm.Instruction) ([]IRInstruction, error) {
 	if len(insn.Operands) != 1 {
-		return nil, fmt.Errorf("not requires 1 operand")
+		return nil, errNotRequires1Operand
 	}
 
 	dest := insn.Operands[0]
@@ -1471,16 +1087,14 @@ func (l *Lifter) liftNot(insn *disasm.Instruction) ([]IRInstruction, error) {
 	return l.currentBlock, nil
 }
 
-// liftTest lifts TEST instruction: compute dest & src and set flags (result discarded)
-func (l *Lifter) liftTest(insn *disasm.Instruction) ([]IRInstruction, error) {
+func (l *Lifter) liftFlagsOnlyOperation(insn *disasm.Instruction, opErr error, binOp BinaryOperator, flagSetter func(Expression, Size)) ([]IRInstruction, error) {
 	if len(insn.Operands) != 2 {
-		return nil, fmt.Errorf("test requires 2 operands")
+		return nil, opErr
 	}
 
 	dest := insn.Operands[0]
 	src := insn.Operands[1]
 
-	// load source operand
 	var srcExpr Expression
 	var err error
 
@@ -1494,7 +1108,6 @@ func (l *Lifter) liftTest(insn *disasm.Instruction) ([]IRInstruction, error) {
 		}
 	}
 
-	// load destination operand
 	var destExpr Expression
 
 	if mem, ok := dest.(disasm.MemoryOperand); ok {
@@ -1507,68 +1120,26 @@ func (l *Lifter) liftTest(insn *disasm.Instruction) ([]IRInstruction, error) {
 		}
 	}
 
-	// compute result: dest & src (result not stored, only flags set)
 	resultExpr := BinaryOp{
-		Op:    BinOpAnd,
+		Op:    binOp,
 		Left:  destExpr,
 		Right: srcExpr,
 	}
 
-	// set flags based on result
 	size := l.getOperandSize(dest)
-	l.setLogicalFlags(resultExpr, size)
+	flagSetter(resultExpr, size)
 
 	return l.currentBlock, nil
 }
 
+// liftTest lifts TEST instruction: compute dest & src and set flags (result discarded)
+func (l *Lifter) liftTest(insn *disasm.Instruction) ([]IRInstruction, error) {
+	return l.liftFlagsOnlyOperation(insn, errTestRequires2Operands, BinOpAnd, l.setLogicalFlags)
+}
+
 // liftCmp lifts CMP instruction: compute dest - src and set flags (result discarded)
 func (l *Lifter) liftCmp(insn *disasm.Instruction) ([]IRInstruction, error) {
-	if len(insn.Operands) != 2 {
-		return nil, fmt.Errorf("cmp requires 2 operands")
-	}
-
-	dest := insn.Operands[0]
-	src := insn.Operands[1]
-
-	// load source operand
-	var srcExpr Expression
-	var err error
-
-	if mem, ok := src.(disasm.MemoryOperand); ok {
-		srcVar := l.loadFromMemory(mem)
-		srcExpr = VariableExpr{Var: srcVar}
-	} else {
-		srcExpr, err = l.translateOperandToExpr(src)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// load destination operand
-	var destExpr Expression
-
-	if mem, ok := dest.(disasm.MemoryOperand); ok {
-		destVar := l.loadFromMemory(mem)
-		destExpr = VariableExpr{Var: destVar}
-	} else {
-		destExpr, err = l.translateOperandToExpr(dest)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// compute result: dest - src (result not stored, only flags set)
-	resultExpr := BinaryOp{
-		Op:    BinOpSub,
-		Left:  destExpr,
-		Right: srcExpr,
-	}
-
-	// set flags based on result
-	size := l.getOperandSize(dest)
-	l.setArithmeticFlags(resultExpr, size)
-
-	return l.currentBlock, nil
+	return l.liftFlagsOnlyOperation(insn, errCmpRequires2Operands, BinOpSub, l.setArithmeticFlags)
 }
 
 // ============================================================================
@@ -1577,208 +1148,31 @@ func (l *Lifter) liftCmp(insn *disasm.Instruction) ([]IRInstruction, error) {
 
 // liftShl lifts SHL/SAL instruction: dest = dest << src
 func (l *Lifter) liftShl(insn *disasm.Instruction) ([]IRInstruction, error) {
-	if len(insn.Operands) != 2 {
-		return nil, fmt.Errorf("shl requires 2 operands")
-	}
-
-	dest := insn.Operands[0]
-	src := insn.Operands[1]
-
-	// load shift count
-	var srcExpr Expression
-	var err error
-
-	if mem, ok := src.(disasm.MemoryOperand); ok {
-		srcVar := l.loadFromMemory(mem)
-		srcExpr = VariableExpr{Var: srcVar}
-	} else {
-		srcExpr, err = l.translateOperandToExpr(src)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// load destination operand
-	var destExpr Expression
-	var destVar Variable
-
-	if mem, ok := dest.(disasm.MemoryOperand); ok {
-		destVar = l.loadFromMemory(mem)
-		destExpr = VariableExpr{Var: destVar}
-	} else {
-		destExpr, err = l.translateOperandToExpr(dest)
-		if err != nil {
-			return nil, err
-		}
-		if varExpr, ok := destExpr.(VariableExpr); ok {
-			destVar = varExpr.Var
-		}
-	}
-
-	// compute result: dest << src
-	resultExpr := BinaryOp{
-		Op:    BinOpShl,
-		Left:  destExpr,
-		Right: srcExpr,
-	}
-
-	// store result
-	if mem, ok := dest.(disasm.MemoryOperand); ok {
-		l.storeToMemory(mem, resultExpr)
-	} else {
-		l.emit(Assign{
-			baseInstruction: baseInstruction{Loc: l.currentLocation},
-			Dest:            destVar,
-			Source:          resultExpr,
-		})
-	}
-
-	// set flags
-	l.setShiftFlags(resultExpr, destVar.Type.Size())
-
-	return l.currentBlock, nil
+	return l.liftBinaryOperation(insn, errShlRequires2Operands, BinOpShl, l.setShiftFlags)
 }
 
 // liftShr lifts SHR instruction: dest = dest >> src (logical right shift)
 func (l *Lifter) liftShr(insn *disasm.Instruction) ([]IRInstruction, error) {
-	if len(insn.Operands) != 2 {
-		return nil, fmt.Errorf("shr requires 2 operands")
-	}
-
-	dest := insn.Operands[0]
-	src := insn.Operands[1]
-
-	// load shift count
-	var srcExpr Expression
-	var err error
-
-	if mem, ok := src.(disasm.MemoryOperand); ok {
-		srcVar := l.loadFromMemory(mem)
-		srcExpr = VariableExpr{Var: srcVar}
-	} else {
-		srcExpr, err = l.translateOperandToExpr(src)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// load destination operand
-	var destExpr Expression
-	var destVar Variable
-
-	if mem, ok := dest.(disasm.MemoryOperand); ok {
-		destVar = l.loadFromMemory(mem)
-		destExpr = VariableExpr{Var: destVar}
-	} else {
-		destExpr, err = l.translateOperandToExpr(dest)
-		if err != nil {
-			return nil, err
-		}
-		if varExpr, ok := destExpr.(VariableExpr); ok {
-			destVar = varExpr.Var
-		}
-	}
-
-	// compute result: dest >> src (logical)
-	resultExpr := BinaryOp{
-		Op:    BinOpShr,
-		Left:  destExpr,
-		Right: srcExpr,
-	}
-
-	// store result
-	if mem, ok := dest.(disasm.MemoryOperand); ok {
-		l.storeToMemory(mem, resultExpr)
-	} else {
-		l.emit(Assign{
-			baseInstruction: baseInstruction{Loc: l.currentLocation},
-			Dest:            destVar,
-			Source:          resultExpr,
-		})
-	}
-
-	// set flags
-	l.setShiftFlags(resultExpr, destVar.Type.Size())
-
-	return l.currentBlock, nil
+	return l.liftBinaryOperation(insn, errShrRequires2Operands, BinOpShr, l.setShiftFlags)
 }
 
 // liftSar lifts SAR instruction: dest = dest >> src (arithmetic right shift)
 func (l *Lifter) liftSar(insn *disasm.Instruction) ([]IRInstruction, error) {
-	if len(insn.Operands) != 2 {
-		return nil, fmt.Errorf("sar requires 2 operands")
-	}
-
-	dest := insn.Operands[0]
-	src := insn.Operands[1]
-
-	// load shift count
-	var srcExpr Expression
-	var err error
-
-	if mem, ok := src.(disasm.MemoryOperand); ok {
-		srcVar := l.loadFromMemory(mem)
-		srcExpr = VariableExpr{Var: srcVar}
-	} else {
-		srcExpr, err = l.translateOperandToExpr(src)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// load destination operand
-	var destExpr Expression
-	var destVar Variable
-
-	if mem, ok := dest.(disasm.MemoryOperand); ok {
-		destVar = l.loadFromMemory(mem)
-		destExpr = VariableExpr{Var: destVar}
-	} else {
-		destExpr, err = l.translateOperandToExpr(dest)
-		if err != nil {
-			return nil, err
-		}
-		if varExpr, ok := destExpr.(VariableExpr); ok {
-			destVar = varExpr.Var
-		}
-	}
-
-	// compute result: dest >>> src (arithmetic)
-	resultExpr := BinaryOp{
-		Op:    BinOpSar,
-		Left:  destExpr,
-		Right: srcExpr,
-	}
-
-	// store result
-	if mem, ok := dest.(disasm.MemoryOperand); ok {
-		l.storeToMemory(mem, resultExpr)
-	} else {
-		l.emit(Assign{
-			baseInstruction: baseInstruction{Loc: l.currentLocation},
-			Dest:            destVar,
-			Source:          resultExpr,
-		})
-	}
-
-	// set flags
-	l.setShiftFlags(resultExpr, destVar.Type.Size())
-
-	return l.currentBlock, nil
+	return l.liftBinaryOperation(insn, errSarRequires2Operands, BinOpSar, l.setShiftFlags)
 }
 
 // liftRol lifts ROL instruction: rotate left (not implemented as binary op, use intrinsic)
-func (l *Lifter) liftRol(insn *disasm.Instruction) ([]IRInstruction, error) {
+func (l *Lifter) liftRol(_ *disasm.Instruction) ([]IRInstruction, error) {
 	// rol is complex - would need intrinsic or decomposition
 	// for now, return unsupported
-	return nil, fmt.Errorf("rol not yet implemented")
+	return nil, errRolNotImplemented
 }
 
 // liftRor lifts ROR instruction: rotate right (not implemented as binary op, use intrinsic)
-func (l *Lifter) liftRor(insn *disasm.Instruction) ([]IRInstruction, error) {
+func (l *Lifter) liftRor(_ *disasm.Instruction) ([]IRInstruction, error) {
 	// ror is complex - would need intrinsic or decomposition
 	// for now, return unsupported
-	return nil, fmt.Errorf("ror not yet implemented")
+	return nil, errRorNotImplemented
 }
 
 // ============================================================================
@@ -1788,7 +1182,7 @@ func (l *Lifter) liftRor(insn *disasm.Instruction) ([]IRInstruction, error) {
 // liftMov lifts MOV instruction: dest = src
 func (l *Lifter) liftMov(insn *disasm.Instruction) ([]IRInstruction, error) {
 	if len(insn.Operands) != 2 {
-		return nil, fmt.Errorf("mov requires 2 operands")
+		return nil, errMovRequires2Operands
 	}
 
 	dest := insn.Operands[0]
@@ -1800,55 +1194,47 @@ func (l *Lifter) liftMov(insn *disasm.Instruction) ([]IRInstruction, error) {
 
 	if destIsMem && srcIsMem {
 		// mem to mem not allowed in x86_64
-		return nil, fmt.Errorf("mov cannot have both operands as memory")
+		return nil, errMovBothMem
 	}
 
-	if destIsMem {
+	switch {
+	case destIsMem:
 		// mov [mem], reg/imm
-		var srcExpr Expression
-		var err error
-
-		srcExpr, err = l.translateOperandToExpr(src)
+		srcExpr, err := l.translateOperandToExpr(src)
 		if err != nil {
 			return nil, err
 		}
-
 		l.storeToMemory(destMem, srcExpr)
-	} else if srcIsMem {
+	case srcIsMem:
 		// mov reg, [mem]
 		destReg, ok := dest.(disasm.RegisterOperand)
 		if !ok {
-			return nil, fmt.Errorf("mov destination must be register or memory")
+			return nil, errMovDestMustBeRegOrMem
 		}
-
 		srcVar := l.loadFromMemory(srcMem)
 		destVar := Variable{
 			Name: destReg.Name,
 			Type: l.getIntType(Size(destReg.Size), false),
 		}
-
 		l.emit(Assign{
 			baseInstruction: baseInstruction{Loc: l.currentLocation},
 			Dest:            destVar,
 			Source:          VariableExpr{Var: srcVar},
 		})
-	} else {
+	default:
 		// mov reg, reg/imm
 		destReg, ok := dest.(disasm.RegisterOperand)
 		if !ok {
-			return nil, fmt.Errorf("mov destination must be register or memory")
+			return nil, errMovDestMustBeRegOrMem
 		}
-
 		srcExpr, err := l.translateOperandToExpr(src)
 		if err != nil {
 			return nil, err
 		}
-
 		destVar := Variable{
 			Name: destReg.Name,
 			Type: l.getIntType(Size(destReg.Size), false),
 		}
-
 		l.emit(Assign{
 			baseInstruction: baseInstruction{Loc: l.currentLocation},
 			Dest:            destVar,
@@ -1861,15 +1247,14 @@ func (l *Lifter) liftMov(insn *disasm.Instruction) ([]IRInstruction, error) {
 }
 
 // liftMovzx lifts MOVZX instruction: dest = zero_extend(src)
-func (l *Lifter) liftMovzx(insn *disasm.Instruction) ([]IRInstruction, error) {
+func (l *Lifter) liftMovExtend(insn *disasm.Instruction, signed bool, errMissing, errDestReg error) ([]IRInstruction, error) {
 	if len(insn.Operands) != 2 {
-		return nil, fmt.Errorf("movzx requires 2 operands")
+		return nil, errMissing
 	}
 
 	dest := insn.Operands[0]
 	src := insn.Operands[1]
 
-	// load source operand
 	var srcExpr Expression
 	var err error
 
@@ -1883,18 +1268,16 @@ func (l *Lifter) liftMovzx(insn *disasm.Instruction) ([]IRInstruction, error) {
 		}
 	}
 
-	// get destination register
 	destReg, ok := dest.(disasm.RegisterOperand)
 	if !ok {
-		return nil, fmt.Errorf("movzx destination must be register")
+		return nil, errDestReg
 	}
 
 	destVar := Variable{
 		Name: destReg.Name,
-		Type: l.getIntType(Size(destReg.Size), false),
+		Type: l.getIntType(Size(destReg.Size), signed),
 	}
 
-	// zero-extend by casting to larger unsigned type
 	resultExpr := Cast{
 		Expr:       srcExpr,
 		TargetType: destVar.Type,
@@ -1909,59 +1292,20 @@ func (l *Lifter) liftMovzx(insn *disasm.Instruction) ([]IRInstruction, error) {
 	return l.currentBlock, nil
 }
 
+// liftMovzx lifts MOVZX instruction: dest = zero_extend(src)
+func (l *Lifter) liftMovzx(insn *disasm.Instruction) ([]IRInstruction, error) {
+	return l.liftMovExtend(insn, false, errMovzxRequires2Operands, errMovzxDestMustBeReg)
+}
+
 // liftMovsx lifts MOVSX instruction: dest = sign_extend(src)
 func (l *Lifter) liftMovsx(insn *disasm.Instruction) ([]IRInstruction, error) {
-	if len(insn.Operands) != 2 {
-		return nil, fmt.Errorf("movsx requires 2 operands")
-	}
-
-	dest := insn.Operands[0]
-	src := insn.Operands[1]
-
-	// load source operand
-	var srcExpr Expression
-	var err error
-
-	if mem, ok := src.(disasm.MemoryOperand); ok {
-		srcVar := l.loadFromMemory(mem)
-		srcExpr = VariableExpr{Var: srcVar}
-	} else {
-		srcExpr, err = l.translateOperandToExpr(src)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// get destination register
-	destReg, ok := dest.(disasm.RegisterOperand)
-	if !ok {
-		return nil, fmt.Errorf("movsx destination must be register")
-	}
-
-	destVar := Variable{
-		Name: destReg.Name,
-		Type: l.getIntType(Size(destReg.Size), true), // signed
-	}
-
-	// sign-extend by casting to larger signed type
-	resultExpr := Cast{
-		Expr:       srcExpr,
-		TargetType: destVar.Type,
-	}
-
-	l.emit(Assign{
-		baseInstruction: baseInstruction{Loc: l.currentLocation},
-		Dest:            destVar,
-		Source:          resultExpr,
-	})
-
-	return l.currentBlock, nil
+	return l.liftMovExtend(insn, true, errMovsxRequires2Operands, errMovsxDestMustBeReg)
 }
 
 // liftLea lifts LEA instruction: dest = address_of(src)
 func (l *Lifter) liftLea(insn *disasm.Instruction) ([]IRInstruction, error) {
 	if len(insn.Operands) != 2 {
-		return nil, fmt.Errorf("lea requires 2 operands")
+		return nil, errLeaRequires2Operands
 	}
 
 	dest := insn.Operands[0]
@@ -1970,13 +1314,13 @@ func (l *Lifter) liftLea(insn *disasm.Instruction) ([]IRInstruction, error) {
 	// source must be memory operand
 	srcMem, ok := src.(disasm.MemoryOperand)
 	if !ok {
-		return nil, fmt.Errorf("lea source must be memory operand")
+		return nil, errLeaSrcMustBeMem
 	}
 
 	// destination must be register
 	destReg, ok := dest.(disasm.RegisterOperand)
 	if !ok {
-		return nil, fmt.Errorf("lea destination must be register")
+		return nil, errLeaDestMustBeReg
 	}
 
 	// compute effective address (without dereferencing)
@@ -2000,7 +1344,7 @@ func (l *Lifter) liftLea(insn *disasm.Instruction) ([]IRInstruction, error) {
 // liftPush lifts PUSH instruction: rsp -= 8; [rsp] = src
 func (l *Lifter) liftPush(insn *disasm.Instruction) ([]IRInstruction, error) {
 	if len(insn.Operands) != 1 {
-		return nil, fmt.Errorf("push requires 1 operand")
+		return nil, errPushRequires1Operand
 	}
 
 	src := insn.Operands[0]
@@ -2064,7 +1408,7 @@ func (l *Lifter) liftPush(insn *disasm.Instruction) ([]IRInstruction, error) {
 // liftPop lifts POP instruction: dest = [rsp]; rsp += 8
 func (l *Lifter) liftPop(insn *disasm.Instruction) ([]IRInstruction, error) {
 	if len(insn.Operands) != 1 {
-		return nil, fmt.Errorf("pop requires 1 operand")
+		return nil, errPopRequires1Operand
 	}
 
 	dest := insn.Operands[0]
@@ -2126,7 +1470,7 @@ func (l *Lifter) liftPop(insn *disasm.Instruction) ([]IRInstruction, error) {
 			Source:          VariableExpr{Var: tempVar},
 		})
 	} else {
-		return nil, fmt.Errorf("pop destination must be register or memory")
+		return nil, errPopDestMustBeRegOrMem
 	}
 
 	return l.currentBlock, nil
@@ -2139,7 +1483,7 @@ func (l *Lifter) liftPop(insn *disasm.Instruction) ([]IRInstruction, error) {
 // liftJmp lifts JMP instruction: unconditional jump
 func (l *Lifter) liftJmp(insn *disasm.Instruction) ([]IRInstruction, error) {
 	if len(insn.Operands) != 1 {
-		return nil, fmt.Errorf("jmp requires 1 operand")
+		return nil, errJmpRequires1Operand
 	}
 
 	target := insn.Operands[0]
@@ -2150,8 +1494,8 @@ func (l *Lifter) liftJmp(insn *disasm.Instruction) ([]IRInstruction, error) {
 
 	if imm, ok := target.(disasm.ImmediateOperand); ok {
 		// direct jump to immediate address
-		targetAddr := Address(imm.Value)
-		_ = targetAddr // will be used by cfg builder
+		targetAddr := Address(uint64(imm.Value)) //nolint:gosec // Address fits in uint64
+		_ = targetAddr                           // will be used by cfg builder
 
 		// emit jump (block id will be resolved by cfg builder)
 		l.emit(Jump{
@@ -2161,7 +1505,7 @@ func (l *Lifter) liftJmp(insn *disasm.Instruction) ([]IRInstruction, error) {
 	} else {
 		// indirect jump (register or memory)
 		// this requires special handling in cfg builder
-		return nil, fmt.Errorf("indirect jump not yet fully supported in lifter")
+		return nil, errIndirectJumpNotSupported
 	}
 
 	return l.currentBlock, nil
@@ -2170,17 +1514,17 @@ func (l *Lifter) liftJmp(insn *disasm.Instruction) ([]IRInstruction, error) {
 // liftJcc lifts conditional jump instructions (je, jne, jl, jg, etc.)
 func (l *Lifter) liftJcc(insn *disasm.Instruction) ([]IRInstruction, error) {
 	if len(insn.Operands) != 1 {
-		return nil, fmt.Errorf("jcc requires 1 operand")
+		return nil, errJccRequires1Operand
 	}
 
 	target := insn.Operands[0]
 
 	imm, ok := target.(disasm.ImmediateOperand)
 	if !ok {
-		return nil, fmt.Errorf("jcc target must be immediate address")
+		return nil, errJccTargetMustBeImm
 	}
 
-	targetAddr := Address(imm.Value)
+	targetAddr := Address(uint64(imm.Value)) //nolint:gosec // Address fits in uint64
 
 	// determine condition based on mnemonic
 	mnemonic := strings.ToLower(insn.Mnemonic)
@@ -2192,7 +1536,7 @@ func (l *Lifter) liftJcc(insn *disasm.Instruction) ([]IRInstruction, error) {
 		baseInstruction: baseInstruction{Loc: l.currentLocation},
 		Condition:       condition,
 		TrueTarget:      BlockID(targetAddr),
-		FalseTarget:     BlockID(Address(insn.Address) + Address(insn.Length)), // fall-through
+		FalseTarget:     BlockID(Address(insn.Address) + Address(uint64(insn.Length))), //nolint:gosec // fall-through and Length is small
 	})
 
 	return l.currentBlock, nil
@@ -2339,13 +1683,13 @@ func (l *Lifter) getConditionFromMnemonic(mnemonic string) Expression {
 // liftCall lifts CALL instruction: push return address, jump to target
 func (l *Lifter) liftCall(insn *disasm.Instruction) ([]IRInstruction, error) {
 	if len(insn.Operands) != 1 {
-		return nil, fmt.Errorf("call requires 1 operand")
+		return nil, errCallRequires1Operand
 	}
 
 	target := insn.Operands[0]
 
 	// compute return address (address of next instruction)
-	returnAddr := Address(insn.Address) + Address(insn.Length)
+	returnAddr := Address(insn.Address) + Address(uint64(insn.Length)) //nolint:gosec // Length is small
 
 	// push return address onto stack
 	rspVar := Variable{
@@ -2377,7 +1721,7 @@ func (l *Lifter) liftCall(insn *disasm.Instruction) ([]IRInstruction, error) {
 	// [rsp] = return_address
 	returnAddrExpr := ConstantExpr{
 		Value: IntConstant{
-			Value:  int64(returnAddr),
+			Value:  int64(returnAddr), //nolint:gosec // returnAddr is a valid address that fits in int64 on 64-bit systems
 			Width:  Size8,
 			Signed: false,
 		},
@@ -2508,20 +1852,6 @@ func (l *Lifter) setArithmeticFlags(result Expression, size Size) {
 
 	// no ir instructions emitted - flags are completely lazy
 	// materialization happens during data flow analysis
-}
-
-// setArithmeticFlagsWithOperands creates lazy flags with explicit operands.
-// this version is used when we have access to original operands (left, right)
-// for more precise flag computation during materialization.
-func (l *Lifter) setArithmeticFlagsWithOperands(operands []Expression, result Expression, size Size) {
-	// create lazy flags structure with full operand information
-	l.currentLazyFlags = NewLazyFlags(
-		FlagOpArithmetic,
-		operands,
-		result,
-		size,
-		l.currentLocation,
-	)
 }
 
 // setLogicalFlags creates lazy flags for logical operations.

@@ -338,6 +338,8 @@ func TestLifterMemory(t *testing.T) {
 }
 
 // TestLifterControlFlow tests lifting of control flow operations.
+//
+//nolint:dupl // test struct repetition
 func TestLifterControlFlow(t *testing.T) {
 	tests := []struct {
 		name    string

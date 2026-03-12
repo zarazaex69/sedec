@@ -259,20 +259,24 @@ func (lf *LazyFlags) materializeArithmeticFlag(flag CPUFlag) Expression {
 
 			// detect operation type from result expression
 			if binOp, ok := result.(BinaryOp); ok {
-				if binOp.Op == BinOpAdd {
+				//nolint:exhaustive // only relevant arithmetic ops are checked
+				switch binOp.Op {
+				case BinOpAdd:
 					// add: cf = (result < left)
 					return BinaryOp{
 						Op:    BinOpULt,
 						Left:  result,
 						Right: left,
 					}
-				} else if binOp.Op == BinOpSub {
+				case BinOpSub:
 					// sub: cf = (left < right)
 					return BinaryOp{
 						Op:    BinOpULt,
 						Left:  left,
 						Right: right,
 					}
+				default:
+					return ConstantExpr{Value: BoolConstant{Value: false}}
 				}
 			}
 		}
@@ -314,7 +318,9 @@ func (lf *LazyFlags) materializeArithmeticFlag(flag CPUFlag) Expression {
 
 			// detect operation type
 			if binOp, ok := result.(BinaryOp); ok {
-				if binOp.Op == BinOpAdd {
+				//nolint:exhaustive // only relevant arithmetic ops are checked
+				switch binOp.Op {
+				case BinOpAdd:
 					// add: of = (sign(left) == sign(right)) && (sign(result) != sign(left))
 					signsEqual := BinaryOp{
 						Op:    BinOpEq,
@@ -331,7 +337,7 @@ func (lf *LazyFlags) materializeArithmeticFlag(flag CPUFlag) Expression {
 						Left:  signsEqual,
 						Right: resultDifferent,
 					}
-				} else if binOp.Op == BinOpSub {
+				case BinOpSub:
 					// sub: of = (sign(left) != sign(right)) && (sign(result) != sign(left))
 					signsDifferent := BinaryOp{
 						Op:    BinOpNe,
@@ -348,6 +354,8 @@ func (lf *LazyFlags) materializeArithmeticFlag(flag CPUFlag) Expression {
 						Left:  signsDifferent,
 						Right: resultDifferent,
 					}
+				default:
+					return ConstantExpr{Value: BoolConstant{Value: false}}
 				}
 			}
 		}
@@ -456,73 +464,7 @@ func (lf *LazyFlags) materializeLogicalFlag(flag CPUFlag) Expression {
 
 // materializeShiftFlag computes flag for shift operations (shl, shr, sar, rol, ror)
 func (lf *LazyFlags) materializeShiftFlag(flag CPUFlag) Expression {
-	result := lf.Result
-
-	switch flag {
-	case FlagZF:
-		// zf = (result == 0)
-		zeroExpr := ConstantExpr{
-			Value: IntConstant{
-				Value:  0,
-				Width:  lf.Size,
-				Signed: false,
-			},
-		}
-		return BinaryOp{
-			Op:    BinOpEq,
-			Left:  result,
-			Right: zeroExpr,
-		}
-
-	case FlagSF:
-		// sf = sign bit set
-		signBitMask := ConstantExpr{
-			Value: IntConstant{
-				Value:  int64(1) << (int64(lf.Size)*8 - 1),
-				Width:  lf.Size,
-				Signed: false,
-			},
-		}
-		signBitExpr := BinaryOp{
-			Op:    BinOpAnd,
-			Left:  result,
-			Right: signBitMask,
-		}
-		zeroExpr := ConstantExpr{
-			Value: IntConstant{
-				Value:  0,
-				Width:  lf.Size,
-				Signed: false,
-			},
-		}
-		return BinaryOp{
-			Op:    BinOpNe,
-			Left:  signBitExpr,
-			Right: zeroExpr,
-		}
-
-	case FlagCF:
-		// cf = last bit shifted out
-		// complex - requires tracking shift count and original value
-		// for now, return false (will be eliminated if unused)
-		return ConstantExpr{Value: BoolConstant{Value: false}}
-
-	case FlagOF:
-		// of = sign bit changed (for single-bit shifts)
-		// complex - return false for now
-		return ConstantExpr{Value: BoolConstant{Value: false}}
-
-	case FlagPF:
-		// pf = parity of low byte
-		return ConstantExpr{Value: BoolConstant{Value: false}}
-
-	case FlagAF:
-		// af undefined for shift operations
-		return ConstantExpr{Value: BoolConstant{Value: false}}
-
-	default:
-		return ConstantExpr{Value: BoolConstant{Value: false}}
-	}
+	return lf.materializeLogicalFlag(flag)
 }
 
 // materializeMultiplyFlag computes flag for multiply operations (mul, imul)

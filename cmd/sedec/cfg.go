@@ -447,7 +447,6 @@ func exportCFG(controlFlowGraph *cfg.CFG, flags cfgFlags, startAddr, endAddr dis
 	if flags.output == "" {
 		output = stdout
 	} else {
-		//nolint:gosec // G703: file path from user input is expected
 		file, createErr := os.Create(flags.output)
 		if createErr != nil {
 			return fmt.Errorf("failed to create output file: %w", createErr)
@@ -475,7 +474,7 @@ func exportCFG(controlFlowGraph *cfg.CFG, flags cfgFlags, startAddr, endAddr dis
 
 // printStatistics prints cfg statistics to stderr
 //
-//nolint:gosec // G705: stderr output is safe, not web context
+
 func printStatistics(stderr io.Writer, outputFile string, startAddr, endAddr disasm.Address, controlFlowGraph *cfg.CFG) {
 	_, _ = fmt.Fprintf(stderr, "cfg exported to %s\n", outputFile)
 	_, _ = fmt.Fprintf(stderr, "address range: 0x%x - 0x%x (%d bytes)\n",

@@ -302,28 +302,20 @@ func TestLazyFlagsLogicalOperations(t *testing.T) {
 	ofExpr := lf.MaterializeFlag(FlagOF)
 
 	// verify they are constant false
-	if constExpr, ok := cfExpr.(ConstantExpr); ok {
-		if boolConst, ok := constExpr.Value.(BoolConstant); ok {
-			if boolConst.Value != false {
-				t.Error("cf should be false for logical operations")
-			}
-		} else {
-			t.Error("cf should be bool constant")
-		}
-	} else {
+	if constExpr, ok := cfExpr.(ConstantExpr); !ok {
 		t.Error("cf should be constant expression")
+	} else if boolConst, ok := constExpr.Value.(BoolConstant); !ok {
+		t.Error("cf should be bool constant")
+	} else if boolConst.Value != false {
+		t.Error("cf should be false for logical operations")
 	}
 
-	if constExpr, ok := ofExpr.(ConstantExpr); ok {
-		if boolConst, ok := constExpr.Value.(BoolConstant); ok {
-			if boolConst.Value != false {
-				t.Error("of should be false for logical operations")
-			}
-		} else {
-			t.Error("of should be bool constant")
-		}
-	} else {
+	if constExpr, ok := ofExpr.(ConstantExpr); !ok {
 		t.Error("of should be constant expression")
+	} else if boolConst, ok := constExpr.Value.(BoolConstant); !ok {
+		t.Error("of should be bool constant")
+	} else if boolConst.Value != false {
+		t.Error("of should be false for logical operations")
 	}
 }
 

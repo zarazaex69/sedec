@@ -133,10 +133,8 @@ bb3:
 	}
 	if phi, ok := bb2.Instructions[0].(*Phi); !ok {
 		t.Errorf("bb2[0]: expected Phi, got %T", bb2.Instructions[0])
-	} else {
-		if len(phi.Sources) != 2 {
-			t.Errorf("phi: expected 2 sources, got %d", len(phi.Sources))
-		}
+	} else if len(phi.Sources) != 2 {
+		t.Errorf("phi: expected 2 sources, got %d", len(phi.Sources))
 	}
 }
 
@@ -306,47 +304,98 @@ bb0:
 	block := fn.Blocks[fn.EntryBlock]
 
 	// check integer constant
-	assign0 := block.Instructions[0].(*Assign)
-	constExpr0 := assign0.Source.(ConstantExpr)
-	intConst := constExpr0.Value.(IntConstant)
+	assign0, ok := block.Instructions[0].(*Assign)
+	if !ok {
+		t.Fatalf("expected Assign, got %T", block.Instructions[0])
+	}
+	constExpr0, ok := assign0.Source.(ConstantExpr)
+	if !ok {
+		t.Fatalf("expected ConstantExpr, got %T", assign0.Source)
+	}
+	intConst, ok := constExpr0.Value.(IntConstant)
+	if !ok {
+		t.Fatalf("expected IntConstant, got %T", constExpr0.Value)
+	}
 	if intConst.Value != 42 {
 		t.Errorf("expected 42, got %d", intConst.Value)
 	}
 
 	// check negative integer
-	assign1 := block.Instructions[1].(*Assign)
-	constExpr1 := assign1.Source.(ConstantExpr)
-	intConst1 := constExpr1.Value.(IntConstant)
+	assign1, ok := block.Instructions[1].(*Assign)
+	if !ok {
+		t.Fatalf("expected Assign")
+	}
+	constExpr1, ok := assign1.Source.(ConstantExpr)
+	if !ok {
+		t.Fatalf("expected ConstantExpr")
+	}
+	intConst1, ok := constExpr1.Value.(IntConstant)
+	if !ok {
+		t.Fatalf("expected IntConstant")
+	}
 	if intConst1.Value != -100 {
 		t.Errorf("expected -100, got %d", intConst1.Value)
 	}
 
 	// check float constant
-	assign2 := block.Instructions[2].(*Assign)
-	constExpr2 := assign2.Source.(ConstantExpr)
-	floatConst := constExpr2.Value.(FloatConstant)
+	assign2, ok := block.Instructions[2].(*Assign)
+	if !ok {
+		t.Fatalf("expected Assign")
+	}
+	constExpr2, ok := assign2.Source.(ConstantExpr)
+	if !ok {
+		t.Fatalf("expected ConstantExpr")
+	}
+	floatConst, ok := constExpr2.Value.(FloatConstant)
+	if !ok {
+		t.Fatalf("expected FloatConstant")
+	}
 	if floatConst.Value != 3.14 {
 		t.Errorf("expected 3.14, got %f", floatConst.Value)
 	}
 
 	// check boolean constants
-	assign3 := block.Instructions[3].(*Assign)
-	constExpr3 := assign3.Source.(ConstantExpr)
-	boolConst3 := constExpr3.Value.(BoolConstant)
+	assign3, ok := block.Instructions[3].(*Assign)
+	if !ok {
+		t.Fatalf("expected Assign")
+	}
+	constExpr3, ok := assign3.Source.(ConstantExpr)
+	if !ok {
+		t.Fatalf("expected ConstantExpr")
+	}
+	boolConst3, ok := constExpr3.Value.(BoolConstant)
+	if !ok {
+		t.Fatalf("expected BoolConstant")
+	}
 	if !boolConst3.Value {
 		t.Errorf("expected true, got false")
 	}
 
-	assign4 := block.Instructions[4].(*Assign)
-	constExpr4 := assign4.Source.(ConstantExpr)
-	boolConst4 := constExpr4.Value.(BoolConstant)
+	assign4, ok := block.Instructions[4].(*Assign)
+	if !ok {
+		t.Fatalf("expected Assign")
+	}
+	constExpr4, ok := assign4.Source.(ConstantExpr)
+	if !ok {
+		t.Fatalf("expected ConstantExpr")
+	}
+	boolConst4, ok := constExpr4.Value.(BoolConstant)
+	if !ok {
+		t.Fatalf("expected BoolConstant")
+	}
 	if boolConst4.Value {
 		t.Errorf("expected false, got true")
 	}
 
 	// check null constant
-	assign5 := block.Instructions[5].(*Assign)
-	constExpr5 := assign5.Source.(ConstantExpr)
+	assign5, ok := block.Instructions[5].(*Assign)
+	if !ok {
+		t.Fatalf("expected Assign")
+	}
+	constExpr5, ok := assign5.Source.(ConstantExpr)
+	if !ok {
+		t.Fatalf("expected ConstantExpr")
+	}
 	if _, ok := constExpr5.Value.(NullConstant); !ok {
 		t.Errorf("expected NullConstant, got %T", constExpr5.Value)
 	}

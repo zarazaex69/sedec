@@ -27,7 +27,7 @@ func (pr *Printer) PrintFunction(fn *Function) error {
 	// print function header
 	pr.printf("func %s", fn.Name)
 	pr.printFunctionSignature(fn.Signature)
-	pr.println("")
+	pr.println()
 
 	// collect and sort block ids for deterministic output
 	ids := make([]BlockID, 0, len(fn.Blocks))
@@ -73,7 +73,7 @@ func (pr *Printer) printFunctionSignature(sig FunctionType) {
 // printBasicBlock prints a basic block with its instructions
 func (pr *Printer) printBasicBlock(block *BasicBlock) {
 	// print block label
-	pr.println("")
+	pr.println()
 	pr.printf("bb%d:", block.ID)
 
 	// add comment with predecessor info if any
@@ -83,7 +83,7 @@ func (pr *Printer) printBasicBlock(block *BasicBlock) {
 			pr.printf(" bb%d", pred)
 		}
 	}
-	pr.println("")
+	pr.println()
 
 	// print instructions with indentation
 	pr.indent++
@@ -144,7 +144,7 @@ func (pr *Printer) printInstruction(insn IRInstruction) {
 		pr.printf("  // %s", loc.String())
 	}
 
-	pr.println("")
+	pr.println()
 }
 
 // formatExpression formats an expression as a string
@@ -211,11 +211,11 @@ func (pr *Printer) printf(format string, args ...interface{}) {
 	}
 }
 
-func (pr *Printer) println(s string) {
+func (pr *Printer) println() {
 	if pr.err != nil {
 		return
 	}
-	_, err := fmt.Fprintln(pr.w, s)
+	_, err := fmt.Fprintln(pr.w)
 	if err != nil {
 		pr.err = err
 	}

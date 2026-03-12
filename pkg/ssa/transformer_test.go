@@ -691,18 +691,9 @@ func TestTransformer_MultipleVariables(t *testing.T) {
 			3: {
 				ID: 3,
 				Instructions: []ir.IRInstruction{
-					&ir.Assign{
-						Dest:   ir.Variable{Name: "x", Type: ir.IntType{Width: ir.Size8, Signed: true}},
-						Source: ir.ConstantExpr{Value: ir.IntConstant{Value: 10, Width: ir.Size8, Signed: true}},
-					},
-					&ir.Assign{
-						Dest:   ir.Variable{Name: "y", Type: ir.IntType{Width: ir.Size8, Signed: true}},
-						Source: ir.ConstantExpr{Value: ir.IntConstant{Value: 20, Width: ir.Size8, Signed: true}},
-					},
-					&ir.Assign{
-						Dest:   ir.Variable{Name: "z", Type: ir.IntType{Width: ir.Size8, Signed: true}},
-						Source: ir.ConstantExpr{Value: ir.IntConstant{Value: 30, Width: ir.Size8, Signed: true}},
-					},
+					&ir.Assign{Dest: ir.Variable{Name: "x", Type: ir.IntType{Width: ir.Size8, Signed: true}}, Source: ir.BinaryOp{Op: ir.BinOpAdd, Left: ir.VariableExpr{Var: ir.Variable{Name: "x", Type: ir.IntType{Width: ir.Size8, Signed: true}}}, Right: ir.ConstantExpr{Value: ir.IntConstant{Value: 1, Width: ir.Size8, Signed: true}}}},
+					&ir.Assign{Dest: ir.Variable{Name: "y", Type: ir.IntType{Width: ir.Size8, Signed: true}}, Source: ir.BinaryOp{Op: ir.BinOpAdd, Left: ir.VariableExpr{Var: ir.Variable{Name: "y", Type: ir.IntType{Width: ir.Size8, Signed: true}}}, Right: ir.ConstantExpr{Value: ir.IntConstant{Value: 1, Width: ir.Size8, Signed: true}}}},
+					&ir.Assign{Dest: ir.Variable{Name: "z", Type: ir.IntType{Width: ir.Size8, Signed: true}}, Source: ir.BinaryOp{Op: ir.BinOpAdd, Left: ir.VariableExpr{Var: ir.Variable{Name: "z", Type: ir.IntType{Width: ir.Size8, Signed: true}}}, Right: ir.ConstantExpr{Value: ir.IntConstant{Value: 1, Width: ir.Size8, Signed: true}}}},
 				},
 				Predecessors: []ir.BlockID{1},
 				Successors:   []ir.BlockID{4},

@@ -14,7 +14,7 @@ import (
 // buildMemorySSAForLoop creates a loop with memory operations for testing
 // loop structure: entry → header ↔ body → exit
 // body contains store and load to exercise memory def-use chains
-func buildMemorySSAForLoop(t *testing.T) (*MemorySSAInfo, *ir.Function) {
+func buildMemorySSAForLoop(t *testing.T) *MemorySSAInfo {
 	t.Helper()
 
 	cfgGraph := &cfg.CFG{
@@ -83,13 +83,13 @@ func buildMemorySSAForLoop(t *testing.T) (*MemorySSAInfo, *ir.Function) {
 		t.Fatalf("BuildMemorySSA failed: %v", err)
 	}
 
-	return memInfo, fn
+	return memInfo
 }
 
 // TestMemorySSA_DefUseChains verifies that def-use chains are correctly built
 // after memory ssa construction.
 func TestMemorySSA_DefUseChains(t *testing.T) {
-	memInfo, _ := buildMemorySSAForLoop(t)
+	memInfo := buildMemorySSAForLoop(t)
 
 	// body block (2) has 1 store (def) and 1 load (use)
 	defs := memInfo.GetMemoryDefsInBlock(2)
@@ -126,7 +126,7 @@ func TestMemorySSA_DefUseChains(t *testing.T) {
 // TestMemorySSA_BlockExitVersions verifies that block exit memory versions
 // are correctly tracked for each block.
 func TestMemorySSA_BlockExitVersions(t *testing.T) {
-	memInfo, _ := buildMemorySSAForLoop(t)
+	memInfo := buildMemorySSAForLoop(t)
 
 	// entry block (0) has no memory ops, exit version should be initial (0)
 	entryVersion, exists := memInfo.GetMemoryVersionAtBlockExit(0)
@@ -149,7 +149,7 @@ func TestMemorySSA_BlockExitVersions(t *testing.T) {
 
 // TestMemorySSA_TotalCounts verifies total counts of memory defs, uses, and phis.
 func TestMemorySSA_TotalCounts(t *testing.T) {
-	memInfo, _ := buildMemorySSAForLoop(t)
+	memInfo := buildMemorySSAForLoop(t)
 
 	// body block has 1 store → 1 def total
 	totalDefs := memInfo.GetTotalMemoryDefs()

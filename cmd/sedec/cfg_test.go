@@ -393,13 +393,12 @@ func createTestELFBinary(t *testing.T) string {
 
 	if _, writeErr := tmpFile.Write(elfData); writeErr != nil {
 		_ = tmpFile.Close()
-		//nolint:gosec // G703: test code removes temporary files
+
 		_ = os.Remove(tmpFile.Name())
 		t.Fatalf("failed to write test binary: %v", writeErr)
 	}
 
 	if closeErr := tmpFile.Close(); closeErr != nil {
-		//nolint:gosec // G703: test code removes temporary files
 		_ = os.Remove(tmpFile.Name())
 		t.Fatalf("failed to close temp file: %v", closeErr)
 	}

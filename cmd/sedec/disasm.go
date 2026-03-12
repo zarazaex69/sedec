@@ -185,15 +185,15 @@ func executeDisasm(data []byte, cfg *disasmConfig, output, stderr io.Writer) err
 	if _, writeErr := fmt.Fprintf(output, "; sedec disassembly output\n"); writeErr != nil {
 		return fmt.Errorf("failed to write output: %w", writeErr)
 	}
-	//nolint:gosec // G705: binary format string is from trusted parser, not user input
+
 	if _, writeErr := fmt.Fprintf(output, "; format: %s\n", binaryInfo.Format); writeErr != nil {
 		return fmt.Errorf("failed to write output: %w", writeErr)
 	}
-	//nolint:gosec // G705: architecture string is from trusted parser, not user input
+
 	if _, writeErr := fmt.Fprintf(output, "; architecture: %s\n", binaryInfo.Architecture); writeErr != nil {
 		return fmt.Errorf("failed to write output: %w", writeErr)
 	}
-	//nolint:gosec // G705: entry point is from trusted parser, not user input
+
 	if _, writeErr := fmt.Fprintf(output, "; entry point: 0x%x\n", binaryInfo.EntryPoint); writeErr != nil {
 		return fmt.Errorf("failed to write output: %w", writeErr)
 	}
@@ -282,11 +282,10 @@ func calculateSectionOffset(section *binfmt.Section, address disasm.Address) (ui
 
 // writeFunctionHeader writes function information header to output
 func writeFunctionHeader(output io.Writer, functionName string, address disasm.Address) error {
-	//nolint:gosec // G705: function name is from trusted symbol table or user input, not XSS context
 	if _, writeErr := fmt.Fprintf(output, "; function: %s\n", functionName); writeErr != nil {
 		return fmt.Errorf("failed to write output: %w", writeErr)
 	}
-	//nolint:gosec // G705: address is from trusted binary parser, not user input
+
 	if _, writeErr := fmt.Fprintf(output, "; address: 0x%x\n", address); writeErr != nil {
 		return fmt.Errorf("failed to write output: %w", writeErr)
 	}
@@ -345,15 +344,14 @@ func disassembleAllSections(binaryInfo *binfmt.BinaryInfo, disassembler *disasm.
 
 		executableSections++
 
-		//nolint:gosec // G705: section name is from trusted binary parser, not user input
 		if _, writeErr := fmt.Fprintf(output, "; section: %s\n", section.Name); writeErr != nil {
 			return fmt.Errorf("failed to write output: %w", writeErr)
 		}
-		//nolint:gosec // G705: address is from trusted binary parser, not user input
+
 		if _, writeErr := fmt.Fprintf(output, "; address: 0x%x\n", section.Address); writeErr != nil {
 			return fmt.Errorf("failed to write output: %w", writeErr)
 		}
-		//nolint:gosec // G705: size is from trusted binary parser, not user input
+
 		if _, writeErr := fmt.Fprintf(output, "; size: %d bytes\n", section.Size); writeErr != nil {
 			return fmt.Errorf("failed to write output: %w", writeErr)
 		}
@@ -365,7 +363,7 @@ func disassembleAllSections(binaryInfo *binfmt.BinaryInfo, disassembler *disasm.
 		instructions, err := disassembler.DisassembleBytes(section.Data, disasm.Address(section.Address))
 		if err != nil {
 			// log warning but continue with other sections
-			//nolint:errcheck,gosec // warning output is informational, section name is from trusted parser
+			//nolint:errcheck // warning output is informational, section name is from trusted parser
 			fmt.Fprintf(stderr, "warning: failed to disassemble section %s: %v\n", section.Name, err)
 			continue
 		}
@@ -407,7 +405,7 @@ func printInstructions(instructions []*disasm.Instruction, format string, output
 		instrStr := formatInstruction(instr, format)
 
 		// print line: address | bytes | instruction
-		//nolint:gosec // G705: instruction strings are from trusted disassembler, not user input
+
 		if _, writeErr := fmt.Fprintf(output, "%s  %s  %s\n", addrStr, bytesStr, instrStr); writeErr != nil {
 			return fmt.Errorf("failed to write output: %w", writeErr)
 		}

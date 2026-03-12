@@ -56,7 +56,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	case "ir":
 		return runIR(subArgs, stdin, stdout, stderr)
 	default:
-		//nolint:errcheck,gosec // error message output is informational, subcommand is from args
+		//nolint:errcheck // error message output is informational, subcommand is from args
 		fmt.Fprintf(stderr, "unknown command: %s\n\n", subcommand)
 		printUsage(stderr)
 		return fmt.Errorf("%w: %s", errUnknownCommand, subcommand)
