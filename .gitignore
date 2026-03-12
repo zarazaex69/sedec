@@ -51,7 +51,6 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
-.kiro/
 
 # debug information files
 *.dwo
@@ -274,6 +273,8 @@ trace.out
 *.swo
 *~
 .DS_Store
+.kiro/
+
 
 # Decompiler output artifacts
 *.decompiled
@@ -285,6 +286,3 @@ trace.out
 # Temporary analysis files
 *.tmp
 *.temp
-.gitignore
-zowue.sh
-zarazaex.sh
