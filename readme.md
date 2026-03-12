@@ -11,7 +11,7 @@
 sedec is a newgen free decompiler written in golang, made by zarazaex, libre [license](LICENSE)
 
 
-# Docs
+### Docs
 [NOTICES](NOTICES)
 
 [CONTRIBUTION](CONTRIBUTION)
