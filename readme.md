@@ -8,9 +8,7 @@
 
 
 ## About
-sedec is a new decompiler written in golang 
-made by zarazaex
-libre [license](/home/zarazaex/Projects/sadec/LICENSE)
+sedec is a newgen free decompiler written in golang, made by zarazaex, libre [license](LICENSE)
 
 
 # Docs
