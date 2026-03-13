@@ -894,3 +894,293 @@ func TestFlagEliminator_IsProducerEliminated(t *testing.T) {
 		t.Error("non-existent point should not be eliminated")
 	}
 }
+
+// ============================================================================
+// additional flag elimination tests (task 7.9)
+// ============================================================================
+
+// TestFlagEliminator_95PercentRate_MultiBlock verifies the 95%+ elimination
+// target on a multi-block CFG where arithmetic operations span multiple blocks
+// but only the last block's flags are consumed.
+//
+// structure: bb0 (10 adds) -> bb1 (10 adds) -> bb2 (je) -> bb3/bb4
+// only the last add in bb1 has its flags consumed by je.
+// expected: 19/20 = 95% elimination rate.
+func TestFlagEliminator_95PercentRate_MultiBlock(t *testing.T) {
+	const addsPerBlock = 10
+
+	// build bb0: 10 adds + jump to bb1
+	bb0Instrs := make([]ir.IRInstruction, 0, addsPerBlock+1)
+	for i := 0; i < addsPerBlock; i++ {
+		dest := ir.Variable{
+			Name: fmt.Sprintf("r0_%d", i),
+			Type: ir.IntType{Width: ir.Size8, Signed: false},
+		}
+		bb0Instrs = append(bb0Instrs, flagProducer(dest, "add"))
+	}
+	bb0Instrs = append(bb0Instrs, jumpInstr(1))
+
+	// build bb1: 10 adds + je (only last add's flags consumed)
+	bb1Instrs := make([]ir.IRInstruction, 0, addsPerBlock+1)
+	for i := 0; i < addsPerBlock; i++ {
+		dest := ir.Variable{
+			Name: fmt.Sprintf("r1_%d", i),
+			Type: ir.IntType{Width: ir.Size8, Signed: false},
+		}
+		bb1Instrs = append(bb1Instrs, flagProducer(dest, "add"))
+	}
+	bb1Instrs = append(bb1Instrs, flagConsumer("je", 2, 3))
+
+	fn := &ir.Function{
+		Name: "multiblock_rate",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID:           0,
+				Instructions: bb0Instrs,
+				Successors:   []ir.BlockID{1},
+			},
+			1: {
+				ID:           1,
+				Instructions: bb1Instrs,
+				Predecessors: []ir.BlockID{0},
+				Successors:   []ir.BlockID{2, 3},
+			},
+			2: {
+				ID:           2,
+				Instructions: []ir.IRInstruction{retInstr()},
+				Predecessors: []ir.BlockID{1},
+			},
+			3: {
+				ID:           3,
+				Instructions: []ir.IRInstruction{retInstr()},
+				Predecessors: []ir.BlockID{1},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := EliminateFlags(fn, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	totalExpected := addsPerBlock * 2 // 20 total producers
+	if result.TotalFlags != totalExpected {
+		t.Errorf("expected %d total flag producers, got %d", totalExpected, result.TotalFlags)
+	}
+
+	// all bb0 adds (10) + first 9 adds in bb1 = 19 eliminated
+	eliminatedExpected := totalExpected - 1
+	if result.EliminatedFlags != eliminatedExpected {
+		t.Errorf("expected %d eliminated, got %d", eliminatedExpected, result.EliminatedFlags)
+	}
+
+	if result.EliminationRate < 0.95 {
+		t.Errorf("elimination rate %.2f%% is below 95%% target", result.EliminationRate*100)
+	}
+	t.Logf("multi-block flag elimination rate: %.2f%% (%d/%d)",
+		result.EliminationRate*100, result.EliminatedFlags, result.TotalFlags)
+}
+
+// TestFlagEliminator_CmpInstruction verifies that cmp instructions are treated
+// as flag producers (cmp sets all flags but does not write a register).
+// cmp rax, rbx  (producer)
+// je target     (consumer — ZF from cmp)
+func TestFlagEliminator_CmpInstruction(t *testing.T) {
+	dest := ir.Variable{Name: "rax", Type: ir.IntType{Width: ir.Size8, Signed: false}}
+
+	fn := &ir.Function{
+		Name: "cmp_test",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					flagProducer(dest, "cmp"),
+					flagConsumer("je", 1, 2),
+				},
+				Successors: []ir.BlockID{1, 2},
+			},
+			1: {
+				ID:           1,
+				Instructions: []ir.IRInstruction{retInstr()},
+				Predecessors: []ir.BlockID{0},
+			},
+			2: {
+				ID:           2,
+				Instructions: []ir.IRInstruction{retInstr()},
+				Predecessors: []ir.BlockID{0},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := EliminateFlags(fn, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// cmp is a flag producer
+	if result.TotalFlags != 1 {
+		t.Errorf("expected 1 total flag producer (cmp), got %d", result.TotalFlags)
+	}
+
+	// cmp is live because je consumes ZF
+	if result.EliminatedFlags != 0 {
+		t.Errorf("expected 0 eliminated (cmp is live for je), got %d", result.EliminatedFlags)
+	}
+
+	// verify ZF is needed
+	producerPoint := ProgramPoint{BlockID: 0, InstrIdx: 0}
+	needed := result.GetNeededCPUFlags(producerPoint)
+	hasZF := false
+	for _, f := range needed {
+		if f == ir.FlagZF {
+			hasZF = true
+		}
+	}
+	if !hasZF {
+		t.Error("expected ZF to be needed at cmp producer for je consumer")
+	}
+}
+
+// TestFlagEliminator_TestInstruction verifies that test instructions are treated
+// as flag producers. test rax, rax sets ZF, SF, PF; clears CF, OF.
+// test rax, rax  (producer)
+// jz target      (consumer — ZF from test)
+func TestFlagEliminator_TestInstruction(t *testing.T) {
+	dest := ir.Variable{Name: "rax", Type: ir.IntType{Width: ir.Size8, Signed: false}}
+
+	fn := &ir.Function{
+		Name: "test_instr",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					flagProducer(dest, "test"),
+					flagConsumer("jz", 1, 2),
+				},
+				Successors: []ir.BlockID{1, 2},
+			},
+			1: {
+				ID:           1,
+				Instructions: []ir.IRInstruction{retInstr()},
+				Predecessors: []ir.BlockID{0},
+			},
+			2: {
+				ID:           2,
+				Instructions: []ir.IRInstruction{retInstr()},
+				Predecessors: []ir.BlockID{0},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := EliminateFlags(fn, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.TotalFlags != 1 {
+		t.Errorf("expected 1 total flag producer (test), got %d", result.TotalFlags)
+	}
+
+	// test is live because jz consumes ZF
+	if result.EliminatedFlags != 0 {
+		t.Errorf("expected 0 eliminated (test is live for jz), got %d", result.EliminatedFlags)
+	}
+}
+
+// TestFlagEliminator_OverwrittenBeforeUse_MultipleFlags verifies that when
+// a producer's flags are overwritten by a subsequent producer before any
+// consumer, the first producer is eliminated even if a consumer exists later.
+// add r0  (producer 0 — all flags)
+// sub r1  (producer 1 — all flags, overwrites producer 0)
+// je      (consumer — ZF from producer 1 only)
+// expected: producer 0 eliminated, producer 1 live
+func TestFlagEliminator_OverwrittenBeforeUse_MultipleFlags(t *testing.T) {
+	dest0 := ir.Variable{Name: "r0", Type: ir.IntType{Width: ir.Size8, Signed: false}}
+	dest1 := ir.Variable{Name: "r1", Type: ir.IntType{Width: ir.Size8, Signed: false}}
+
+	fn := &ir.Function{
+		Name: "overwritten_flags",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					flagProducer(dest0, "add"), // idx 0 — dead
+					flagProducer(dest1, "sub"), // idx 1 — live
+					flagConsumer("je", 1, 2),   // idx 2
+				},
+				Successors: []ir.BlockID{1, 2},
+			},
+			1: {
+				ID:           1,
+				Instructions: []ir.IRInstruction{retInstr()},
+				Predecessors: []ir.BlockID{0},
+			},
+			2: {
+				ID:           2,
+				Instructions: []ir.IRInstruction{retInstr()},
+				Predecessors: []ir.BlockID{0},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := EliminateFlags(fn, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.TotalFlags != 2 {
+		t.Errorf("expected 2 total flag producers, got %d", result.TotalFlags)
+	}
+
+	// producer 0 (add) is overwritten by producer 1 (sub) before je — eliminated
+	if result.EliminatedFlags != 1 {
+		t.Errorf("expected 1 eliminated (first add overwritten), got %d", result.EliminatedFlags)
+	}
+
+	p0 := ProgramPoint{BlockID: 0, InstrIdx: 0}
+	p1 := ProgramPoint{BlockID: 0, InstrIdx: 1}
+
+	if !result.IsProducerEliminated(p0) {
+		t.Error("expected first add (idx 0) to be eliminated")
+	}
+	if result.IsProducerEliminated(p1) {
+		t.Error("expected second sub (idx 1) to be live")
+	}
+}
+
+// TestFlagEliminator_NoConsumers_AllEliminated verifies that when there are
+// no flag consumers at all, all producers are eliminated (100% rate).
+func TestFlagEliminator_NoConsumers_AllEliminated(t *testing.T) {
+	const numOps = 15
+
+	instrs := make([]ir.IRInstruction, 0, numOps+1)
+	for i := 0; i < numOps; i++ {
+		dest := ir.Variable{
+			Name: fmt.Sprintf("r%d", i),
+			Type: ir.IntType{Width: ir.Size8, Signed: false},
+		}
+		instrs = append(instrs, flagProducer(dest, "add"))
+	}
+	instrs = append(instrs, retInstr())
+
+	fn := buildFlagTestFunction(instrs)
+
+	result, err := EliminateFlags(fn, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.TotalFlags != numOps {
+		t.Errorf("expected %d total flag producers, got %d", numOps, result.TotalFlags)
+	}
+	if result.EliminatedFlags != numOps {
+		t.Errorf("expected all %d producers eliminated, got %d", numOps, result.EliminatedFlags)
+	}
+	if result.EliminationRate != 1.0 {
+		t.Errorf("expected 100%% elimination rate, got %.2f%%", result.EliminationRate*100)
+	}
+}

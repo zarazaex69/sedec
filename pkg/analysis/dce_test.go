@@ -567,3 +567,342 @@ func TestDCE_IterationsConverge(t *testing.T) {
 		t.Errorf("expected convergence within 10 iterations, took %d", result.Iterations)
 	}
 }
+
+// ============================================================================
+// additional dce safety tests (task 7.9)
+// ============================================================================
+
+// TestDCE_PreservesStoreAdjacentToDeadCode verifies that a store is preserved
+// even when it is surrounded by dead assignments.
+// bb0: dead_1 = 1; store *0x2000, dead_1; dead_2 = 2; return
+// dead_1 is used by the store (so it is live), dead_2 is truly dead.
+func TestDCE_PreservesStoreAdjacentToDeadCode(t *testing.T) {
+	cfgGraph := buildDCECFG(0, map[cfg.BlockID][]cfg.BlockID{0: {}})
+
+	fn := &ir.Function{
+		Name: "store_adjacent_dead",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Assign{Dest: ssaVar("dead", 1), Source: intConst(1)},
+					&ir.Store{
+						Address: intConst(0x2000),
+						Value:   varExpr("dead", 1),
+						Size:    ir.Size8,
+					},
+					&ir.Assign{Dest: ssaVar("dead", 2), Source: intConst(2)},
+					&ir.Return{},
+				},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := EliminateDeadCode(fn, cfgGraph, nil)
+	if err != nil {
+		t.Fatalf("EliminateDeadCode failed: %v", err)
+	}
+
+	// only dead_2 should be removed (dead_1 is used by the store)
+	if result.RemovedInstructions != 1 {
+		t.Errorf("expected 1 removed instruction (dead_2), got %d", result.RemovedInstructions)
+	}
+
+	// verify the store is still present
+	storeFound := false
+	for _, instr := range fn.Blocks[0].Instructions {
+		if _, ok := instr.(*ir.Store); ok {
+			storeFound = true
+		}
+	}
+	if !storeFound {
+		t.Error("store must be preserved (side effect)")
+	}
+
+	// verify dead_2 is gone
+	for _, instr := range fn.Blocks[0].Instructions {
+		if a, ok := instr.(*ir.Assign); ok && a.Dest.Name == "dead" && a.Dest.Version == 2 {
+			t.Error("dead_2 should have been removed")
+		}
+	}
+}
+
+// TestDCE_PreservesCallWithDeadResult verifies that a call is preserved even
+// when its return value is never used.
+// bb0: result_1 = call foo(); dead_1 = result_1 + 1; return
+// result_1 is used by dead_1, but dead_1 is dead. however, the call itself
+// must be preserved (side effects). dead_1 should be removed.
+func TestDCE_PreservesCallWithDeadResult(t *testing.T) {
+	cfgGraph := buildDCECFG(0, map[cfg.BlockID][]cfg.BlockID{0: {}})
+
+	resultVar := ssaVar("result", 1)
+	fn := &ir.Function{
+		Name: "call_dead_result",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Call{
+						Dest:   &resultVar,
+						Target: ir.VariableExpr{Var: ir.Variable{Name: "foo", Type: ir.FunctionType{}}},
+					},
+					&ir.Assign{
+						Dest: ssaVar("dead", 1),
+						Source: &ir.BinaryOp{
+							Op:    ir.BinOpAdd,
+							Left:  varExpr("result", 1),
+							Right: intConst(1),
+						},
+					},
+					&ir.Return{},
+				},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := EliminateDeadCode(fn, cfgGraph, nil)
+	if err != nil {
+		t.Fatalf("EliminateDeadCode failed: %v", err)
+	}
+
+	// dead_1 should be removed (its result is never used)
+	if result.RemovedInstructions != 1 {
+		t.Errorf("expected 1 removed instruction (dead_1), got %d", result.RemovedInstructions)
+	}
+
+	// the call must still be present
+	callFound := false
+	for _, instr := range fn.Blocks[0].Instructions {
+		if _, ok := instr.(*ir.Call); ok {
+			callFound = true
+		}
+	}
+	if !callFound {
+		t.Error("call must be preserved (side effects)")
+	}
+}
+
+// TestDCE_PreservesMultipleStores verifies that multiple stores are all preserved
+// even when none of their address/value computations are used elsewhere.
+// bb0: a_1 = 1; b_1 = 2; store *a_1, b_1; store *0x3000, a_1; return
+// a_1 and b_1 are used by stores, so they must be preserved.
+func TestDCE_PreservesMultipleStores(t *testing.T) {
+	cfgGraph := buildDCECFG(0, map[cfg.BlockID][]cfg.BlockID{0: {}})
+
+	fn := &ir.Function{
+		Name: "multiple_stores",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Assign{Dest: ssaVar("a", 1), Source: intConst(1)},
+					&ir.Assign{Dest: ssaVar("b", 1), Source: intConst(2)},
+					&ir.Store{
+						Address: varExpr("a", 1),
+						Value:   varExpr("b", 1),
+						Size:    ir.Size8,
+					},
+					&ir.Store{
+						Address: intConst(0x3000),
+						Value:   varExpr("a", 1),
+						Size:    ir.Size8,
+					},
+					&ir.Return{},
+				},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := EliminateDeadCode(fn, cfgGraph, nil)
+	if err != nil {
+		t.Fatalf("EliminateDeadCode failed: %v", err)
+	}
+
+	// nothing should be removed: a_1 and b_1 are used by stores
+	if result.RemovedInstructions != 0 {
+		t.Errorf("expected 0 removed instructions, got %d", result.RemovedInstructions)
+	}
+	if len(fn.Blocks[0].Instructions) != 5 {
+		t.Errorf("expected 5 instructions, got %d", len(fn.Blocks[0].Instructions))
+	}
+}
+
+// TestDCE_SideEffectCallChain verifies that a chain of calls is fully preserved
+// even when intermediate results are not used.
+// bb0: r1 = call f1(); r2 = call f2(); r3 = call f3(); return
+// all three calls must be preserved regardless of whether r1, r2, r3 are used.
+func TestDCE_SideEffectCallChain(t *testing.T) {
+	cfgGraph := buildDCECFG(0, map[cfg.BlockID][]cfg.BlockID{0: {}})
+
+	r1 := ssaVar("r", 1)
+	r2 := ssaVar("r", 2)
+	r3 := ssaVar("r", 3)
+
+	fn := &ir.Function{
+		Name: "call_chain",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Call{
+						Dest:   &r1,
+						Target: ir.VariableExpr{Var: ir.Variable{Name: "f1", Type: ir.FunctionType{}}},
+					},
+					&ir.Call{
+						Dest:   &r2,
+						Target: ir.VariableExpr{Var: ir.Variable{Name: "f2", Type: ir.FunctionType{}}},
+					},
+					&ir.Call{
+						Dest:   &r3,
+						Target: ir.VariableExpr{Var: ir.Variable{Name: "f3", Type: ir.FunctionType{}}},
+					},
+					&ir.Return{},
+				},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := EliminateDeadCode(fn, cfgGraph, nil)
+	if err != nil {
+		t.Fatalf("EliminateDeadCode failed: %v", err)
+	}
+
+	// all calls must be preserved
+	if result.RemovedInstructions != 0 {
+		t.Errorf("expected 0 removed instructions (all calls have side effects), got %d", result.RemovedInstructions)
+	}
+
+	callCount := 0
+	for _, instr := range fn.Blocks[0].Instructions {
+		if _, ok := instr.(*ir.Call); ok {
+			callCount++
+		}
+	}
+	if callCount != 3 {
+		t.Errorf("expected 3 calls preserved, got %d", callCount)
+	}
+}
+
+// TestDCE_MixedLiveDeadWithStore verifies the critical safety property:
+// in a block with mixed live/dead code and a store, only truly dead
+// definitions are removed, and the store is always preserved.
+// bb0: live_1 = 10; dead_1 = 99; store *0x4000, live_1; return live_1
+// dead_1 is dead; live_1 is used by both store and return.
+func TestDCE_MixedLiveDeadWithStore(t *testing.T) {
+	cfgGraph := buildDCECFG(0, map[cfg.BlockID][]cfg.BlockID{0: {}})
+
+	fn := &ir.Function{
+		Name: "mixed_live_dead_store",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Assign{Dest: ssaVar("live", 1), Source: intConst(10)},
+					&ir.Assign{Dest: ssaVar("dead", 1), Source: intConst(99)},
+					&ir.Store{
+						Address: intConst(0x4000),
+						Value:   varExpr("live", 1),
+						Size:    ir.Size8,
+					},
+					&ir.Return{Value: &ir.Variable{Name: "live", Type: intType(), Version: 1}},
+				},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := EliminateDeadCode(fn, cfgGraph, nil)
+	if err != nil {
+		t.Fatalf("EliminateDeadCode failed: %v", err)
+	}
+
+	// only dead_1 should be removed
+	if result.RemovedInstructions != 1 {
+		t.Errorf("expected 1 removed instruction (dead_1), got %d", result.RemovedInstructions)
+	}
+
+	// verify store is present
+	storeFound := false
+	for _, instr := range fn.Blocks[0].Instructions {
+		if _, ok := instr.(*ir.Store); ok {
+			storeFound = true
+		}
+	}
+	if !storeFound {
+		t.Error("store must be preserved")
+	}
+
+	// verify live_1 is present
+	liveFound := false
+	for _, instr := range fn.Blocks[0].Instructions {
+		if a, ok := instr.(*ir.Assign); ok && a.Dest.Name == "live" {
+			liveFound = true
+		}
+	}
+	if !liveFound {
+		t.Error("live_1 assignment must be preserved (used by store and return)")
+	}
+}
+
+// TestDCE_BranchAlwaysPreserved verifies that branch instructions are never
+// removed even when their condition variable is dead after the branch.
+// bb0: cond_1 = 1; branch cond_1 -> bb1, bb2
+// bb1: return; bb2: return
+// cond_1 is used by the branch, so it is live. the branch itself must be preserved.
+func TestDCE_BranchAlwaysPreserved(t *testing.T) {
+	cfgGraph := buildDCECFG(0, map[cfg.BlockID][]cfg.BlockID{
+		0: {1, 2},
+		1: {},
+		2: {},
+	})
+
+	fn := &ir.Function{
+		Name: "branch_preserved",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Assign{Dest: ssaVar("cond", 1), Source: intConst(1)},
+					&ir.Branch{Condition: varExpr("cond", 1), TrueTarget: 1, FalseTarget: 2},
+				},
+				Successors: []ir.BlockID{1, 2},
+			},
+			1: {
+				ID:           1,
+				Instructions: []ir.IRInstruction{&ir.Return{}},
+				Predecessors: []ir.BlockID{0},
+			},
+			2: {
+				ID:           2,
+				Instructions: []ir.IRInstruction{&ir.Return{}},
+				Predecessors: []ir.BlockID{0},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := EliminateDeadCode(fn, cfgGraph, nil)
+	if err != nil {
+		t.Fatalf("EliminateDeadCode failed: %v", err)
+	}
+
+	// nothing should be removed: cond_1 is used by branch
+	if result.RemovedInstructions != 0 {
+		t.Errorf("expected 0 removed instructions, got %d", result.RemovedInstructions)
+	}
+
+	// branch must still be present in bb0
+	branchFound := false
+	for _, instr := range fn.Blocks[0].Instructions {
+		if _, ok := instr.(*ir.Branch); ok {
+			branchFound = true
+		}
+	}
+	if !branchFound {
+		t.Error("branch must be preserved (controls execution flow)")
+	}
+}

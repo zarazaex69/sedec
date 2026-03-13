@@ -915,3 +915,394 @@ func TestConstProp_ArithmeticRightShift(t *testing.T) {
 		t.Errorf("expected -4 (arithmetic right shift), got %d", ic.Value)
 	}
 }
+
+// ============================================================================
+// additional constant propagation correctness tests (task 7.9)
+// ============================================================================
+
+// TestConstProp_SSAChainThroughPhi verifies that constants propagate correctly
+// through an ssa chain that passes through a phi-node with identical inputs.
+// this is the canonical "phi-of-same-constant" pattern from real decompiled code.
+//
+// cfg: bb0 -> bb1, bb0 -> bb2, bb1 -> bb3, bb2 -> bb3
+// bb0: branch (always true) -> bb1, bb2
+// bb1: a_1 = 5; b_1 = a_1 * 2; jump bb3
+// bb2: a_2 = 5; b_2 = a_2 * 2; jump bb3
+// bb3: b_3 = phi(b_1, b_2); c_1 = b_3 + 1; return c_1
+// expected: b_3 = 10, c_1 = 11
+func TestConstProp_SSAChainThroughPhi(t *testing.T) {
+	cfgGraph, domTree := buildCFGAndDomTree(
+		0,
+		map[cfg.BlockID][]cfg.BlockID{
+			0: {1, 2},
+			1: {3},
+			2: {3},
+			3: {},
+		},
+		map[cfg.BlockID]cfg.BlockID{0: 0, 1: 0, 2: 0, 3: 0},
+	)
+
+	a1 := ssaVar("a", 1)
+	a2 := ssaVar("a", 2)
+	b1 := ssaVar("b", 1)
+	b2 := ssaVar("b", 2)
+	b3 := ssaVar("b", 3)
+	c1 := ssaVar("c", 1)
+
+	function := &ir.Function{
+		Name: "ssa_chain_phi",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Branch{Condition: boolConst(true), TrueTarget: 1, FalseTarget: 2},
+				},
+				Successors: []ir.BlockID{1, 2},
+			},
+			1: {
+				ID: 1,
+				Instructions: []ir.IRInstruction{
+					&ir.Assign{Dest: a1, Source: intConst(5)},
+					&ir.Assign{Dest: b1, Source: &ir.BinaryOp{
+						Op:    ir.BinOpMul,
+						Left:  &ir.VariableExpr{Var: a1},
+						Right: intConst(2),
+					}},
+					&ir.Jump{Target: 3},
+				},
+				Predecessors: []ir.BlockID{0},
+				Successors:   []ir.BlockID{3},
+			},
+			2: {
+				ID: 2,
+				Instructions: []ir.IRInstruction{
+					&ir.Assign{Dest: a2, Source: intConst(5)},
+					&ir.Assign{Dest: b2, Source: &ir.BinaryOp{
+						Op:    ir.BinOpMul,
+						Left:  &ir.VariableExpr{Var: a2},
+						Right: intConst(2),
+					}},
+					&ir.Jump{Target: 3},
+				},
+				Predecessors: []ir.BlockID{0},
+				Successors:   []ir.BlockID{3},
+			},
+			3: {
+				ID: 3,
+				Instructions: []ir.IRInstruction{
+					&ir.Phi{
+						Dest: b3,
+						Sources: []ir.PhiSource{
+							{Block: 1, Var: b1},
+							{Block: 2, Var: b2},
+						},
+					},
+					&ir.Assign{Dest: c1, Source: &ir.BinaryOp{
+						Op:    ir.BinOpAdd,
+						Left:  &ir.VariableExpr{Var: b3},
+						Right: intConst(1),
+					}},
+					&ir.Return{Value: &c1},
+				},
+				Predecessors: []ir.BlockID{1, 2},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := PropagateConstants(function, cfgGraph, domTree)
+	if err != nil {
+		t.Fatalf("PropagateConstants failed: %v", err)
+	}
+
+	// b_3 = phi(10, 10) = 10
+	if !result.IsConstant(b3) {
+		t.Error("expected b_3 to be constant (phi of 10, 10)")
+	}
+	if c := result.GetConstant(b3); c != nil {
+		if c.(ir.IntConstant).Value != 10 {
+			t.Errorf("expected b_3 = 10, got %v", c)
+		}
+	}
+
+	// c_1 = b_3 + 1 = 11
+	if !result.IsConstant(c1) {
+		t.Error("expected c_1 to be constant (10 + 1 = 11)")
+	}
+	if c := result.GetConstant(c1); c != nil {
+		if c.(ir.IntConstant).Value != 11 {
+			t.Errorf("expected c_1 = 11, got %v", c)
+		}
+	}
+}
+
+// TestConstProp_CastPropagation verifies that constants propagate correctly
+// through cast expressions in ssa chains.
+// bb0: x_1 = 255 (u8); y_1 = (i64)(x_1); z_1 = y_1 + 1
+// expected: y_1 = 255, z_1 = 256
+func TestConstProp_CastPropagation(t *testing.T) {
+	cfgGraph := buildSimpleCFG(0)
+	domTree := cfg.NewDominatorTree(cfgGraph)
+	domTree.Idom = map[cfg.BlockID]cfg.BlockID{0: 0}
+	domTree.Children = map[cfg.BlockID][]cfg.BlockID{0: {}}
+
+	x1 := ir.Variable{Name: "x", Version: 1, Type: ir.IntType{Width: ir.Size1, Signed: false}}
+	y1 := ssaVar("y", 1)
+	z1 := ssaVar("z", 1)
+
+	function := &ir.Function{
+		Name: "cast_prop",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Assign{Dest: x1, Source: ir.ConstantExpr{
+						Value: ir.IntConstant{Value: 255, Width: ir.Size1, Signed: false},
+					}},
+					&ir.Assign{Dest: y1, Source: &ir.Cast{
+						Expr:       &ir.VariableExpr{Var: x1},
+						TargetType: ir.IntType{Width: ir.Size8, Signed: true},
+					}},
+					&ir.Assign{Dest: z1, Source: &ir.BinaryOp{
+						Op:    ir.BinOpAdd,
+						Left:  &ir.VariableExpr{Var: y1},
+						Right: intConst(1),
+					}},
+					&ir.Return{Value: &z1},
+				},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := PropagateConstants(function, cfgGraph, domTree)
+	if err != nil {
+		t.Fatalf("PropagateConstants failed: %v", err)
+	}
+
+	// y_1 = (i64)(255) = 255
+	if !result.IsConstant(y1) {
+		t.Error("expected y_1 to be constant after cast propagation")
+	}
+
+	// z_1 = 255 + 1 = 256
+	if !result.IsConstant(z1) {
+		t.Error("expected z_1 to be constant (255 + 1 = 256)")
+	}
+	if c := result.GetConstant(z1); c != nil {
+		if c.(ir.IntConstant).Value != 256 {
+			t.Errorf("expected z_1 = 256, got %v", c)
+		}
+	}
+}
+
+// TestConstProp_UnreachablePhiSource verifies that phi-nodes with unreachable
+// sources are resolved correctly: only the reachable source contributes.
+// cfg: bb0 (branch always-false) -> bb1 (unreachable), bb2 (reachable)
+// bb1: x_1 = 99 (unreachable)
+// bb2: x_2 = 42 (reachable)
+// bb3: x_3 = phi(x_1, x_2)
+// expected: x_3 = 42 (only bb2 is reachable)
+func TestConstProp_UnreachablePhiSource(t *testing.T) {
+	cfgGraph, domTree := buildCFGAndDomTree(
+		0,
+		map[cfg.BlockID][]cfg.BlockID{
+			0: {1, 2},
+			1: {3},
+			2: {3},
+			3: {},
+		},
+		map[cfg.BlockID]cfg.BlockID{0: 0, 1: 0, 2: 0, 3: 0},
+	)
+
+	x1 := ssaVar("x", 1)
+	x2 := ssaVar("x", 2)
+	x3 := ssaVar("x", 3)
+
+	function := &ir.Function{
+		Name: "unreachable_phi_source",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					// branch false: only bb2 is reachable
+					&ir.Branch{Condition: boolConst(false), TrueTarget: 1, FalseTarget: 2},
+				},
+				Successors: []ir.BlockID{1, 2},
+			},
+			1: {
+				ID: 1,
+				Instructions: []ir.IRInstruction{
+					&ir.Assign{Dest: x1, Source: intConst(99)},
+					&ir.Jump{Target: 3},
+				},
+				Predecessors: []ir.BlockID{0},
+				Successors:   []ir.BlockID{3},
+			},
+			2: {
+				ID: 2,
+				Instructions: []ir.IRInstruction{
+					&ir.Assign{Dest: x2, Source: intConst(42)},
+					&ir.Jump{Target: 3},
+				},
+				Predecessors: []ir.BlockID{0},
+				Successors:   []ir.BlockID{3},
+			},
+			3: {
+				ID: 3,
+				Instructions: []ir.IRInstruction{
+					&ir.Phi{
+						Dest: x3,
+						Sources: []ir.PhiSource{
+							{Block: 1, Var: x1},
+							{Block: 2, Var: x2},
+						},
+					},
+					&ir.Return{Value: &x3},
+				},
+				Predecessors: []ir.BlockID{1, 2},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := PropagateConstants(function, cfgGraph, domTree)
+	if err != nil {
+		t.Fatalf("PropagateConstants failed: %v", err)
+	}
+
+	// x_3 should be 42 because only the false branch (bb2) is executable
+	if !result.IsConstant(x3) {
+		t.Error("expected x_3 to be constant (only false branch reachable, x_2=42)")
+	}
+	if c := result.GetConstant(x3); c != nil {
+		if c.(ir.IntConstant).Value != 42 {
+			t.Errorf("expected x_3 = 42, got %v", c)
+		}
+	}
+}
+
+// TestConstProp_BooleanShortCircuit verifies that boolean constant propagation
+// correctly handles logical operations in branch conditions.
+// bb0: a_1 = true; b_1 = false; c_1 = a_1 && b_1; branch c_1 -> bb1, bb2
+// expected: c_1 = false, only bb2 is reachable
+func TestConstProp_BooleanShortCircuit(t *testing.T) {
+	cfgGraph, domTree := buildCFGAndDomTree(
+		0,
+		map[cfg.BlockID][]cfg.BlockID{
+			0: {1, 2},
+			1: {},
+			2: {},
+		},
+		map[cfg.BlockID]cfg.BlockID{0: 0, 1: 0, 2: 0},
+	)
+
+	a1 := ir.Variable{Name: "a", Version: 1, Type: ir.BoolType{}}
+	b1 := ir.Variable{Name: "b", Version: 1, Type: ir.BoolType{}}
+	c1 := ir.Variable{Name: "c", Version: 1, Type: ir.BoolType{}}
+
+	function := &ir.Function{
+		Name: "bool_short_circuit",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Assign{Dest: a1, Source: ir.ConstantExpr{Value: ir.BoolConstant{Value: true}}},
+					&ir.Assign{Dest: b1, Source: ir.ConstantExpr{Value: ir.BoolConstant{Value: false}}},
+					&ir.Assign{Dest: c1, Source: &ir.BinaryOp{
+						Op:    ir.BinOpLogicalAnd,
+						Left:  &ir.VariableExpr{Var: a1},
+						Right: &ir.VariableExpr{Var: b1},
+					}},
+					&ir.Branch{Condition: &ir.VariableExpr{Var: c1}, TrueTarget: 1, FalseTarget: 2},
+				},
+				Successors: []ir.BlockID{1, 2},
+			},
+			1: {
+				ID:           1,
+				Instructions: []ir.IRInstruction{&ir.Return{}},
+				Predecessors: []ir.BlockID{0},
+			},
+			2: {
+				ID:           2,
+				Instructions: []ir.IRInstruction{&ir.Return{}},
+				Predecessors: []ir.BlockID{0},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := PropagateConstants(function, cfgGraph, domTree)
+	if err != nil {
+		t.Fatalf("PropagateConstants failed: %v", err)
+	}
+
+	// c_1 = true && false = false
+	if !result.IsConstant(c1) {
+		t.Error("expected c_1 to be constant (true && false = false)")
+	}
+	if c := result.GetConstant(c1); c != nil {
+		if c.(ir.BoolConstant).Value != false {
+			t.Errorf("expected c_1 = false, got %v", c)
+		}
+	}
+}
+
+// TestConstProp_MultiLevelSSAChain verifies propagation through a deep ssa chain.
+// a_1 = 1; b_1 = a_1 + 1; c_1 = b_1 * 2; d_1 = c_1 - 1; e_1 = d_1 / 3
+// expected: a=1, b=2, c=4, d=3, e=1
+func TestConstProp_MultiLevelSSAChain(t *testing.T) {
+	cfgGraph := buildSimpleCFG(0)
+	domTree := cfg.NewDominatorTree(cfgGraph)
+	domTree.Idom = map[cfg.BlockID]cfg.BlockID{0: 0}
+	domTree.Children = map[cfg.BlockID][]cfg.BlockID{0: {}}
+
+	a := ssaVar("a", 1)
+	b := ssaVar("b", 1)
+	c := ssaVar("c", 1)
+	d := ssaVar("d", 1)
+	e := ssaVar("e", 1)
+
+	function := &ir.Function{
+		Name: "deep_ssa_chain",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Assign{Dest: a, Source: intConst(1)},
+					&ir.Assign{Dest: b, Source: &ir.BinaryOp{
+						Op: ir.BinOpAdd, Left: &ir.VariableExpr{Var: a}, Right: intConst(1),
+					}},
+					&ir.Assign{Dest: c, Source: &ir.BinaryOp{
+						Op: ir.BinOpMul, Left: &ir.VariableExpr{Var: b}, Right: intConst(2),
+					}},
+					&ir.Assign{Dest: d, Source: &ir.BinaryOp{
+						Op: ir.BinOpSub, Left: &ir.VariableExpr{Var: c}, Right: intConst(1),
+					}},
+					&ir.Assign{Dest: e, Source: &ir.BinaryOp{
+						Op: ir.BinOpDiv, Left: &ir.VariableExpr{Var: d}, Right: intConst(3),
+					}},
+					&ir.Return{Value: &e},
+				},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := PropagateConstants(function, cfgGraph, domTree)
+	if err != nil {
+		t.Fatalf("PropagateConstants failed: %v", err)
+	}
+
+	expected := map[ir.Variable]int64{a: 1, b: 2, c: 4, d: 3, e: 1}
+	for v, want := range expected {
+		if !result.IsConstant(v) {
+			t.Errorf("expected %s to be constant", v.String())
+			continue
+		}
+		got := result.GetConstant(v).(ir.IntConstant).Value
+		if got != want {
+			t.Errorf("%s: expected %d, got %d", v.String(), want, got)
+		}
+	}
+}
