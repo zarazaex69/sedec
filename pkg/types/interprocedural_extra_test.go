@@ -82,12 +82,17 @@ func TestInterproceduralPropagation_ReturnChain(t *testing.T) {
 	}
 
 	// A's solution must have result_a = i64
-	aSol := solutions["A"]
-	if aSol.Types["result_a"] == nil {
-		t.Fatal("A.result_a should be i64, got nil")
+	checkReturnVarType(t, solutions["A"], "result_a", i64)
+}
+
+// checkReturnVarType is a shared assertion helper for return-type propagation tests.
+func checkReturnVarType(t *testing.T, sol *TypeSolution, varName string, want ir.Type) {
+	t.Helper()
+	if sol.Types[varName] == nil {
+		t.Fatalf("%s should be %s, got nil", varName, want)
 	}
-	if aSol.Types["result_a"].String() != i64.String() {
-		t.Errorf("A.result_a: expected %s, got %s", i64, aSol.Types["result_a"])
+	if sol.Types[varName].String() != want.String() {
+		t.Errorf("%s: expected %s, got %s", varName, want, sol.Types[varName])
 	}
 }
 
@@ -190,73 +195,51 @@ func TestInterproceduralPropagation_NilReturnVar(t *testing.T) {
 // types are seeded into float parameter slots under System V ABI.
 func TestInterproceduralPropagation_SystemVFloatParams(t *testing.T) {
 	f64 := ir.FloatType{Width: ir.Size8}
-
-	cg := NewCallGraph()
-	// function with 2 float params (indices 0 and 1 in System V float regs)
-	cg.AddFunction("FP", []ir.Type{nil, nil}, nil, CallingConventionSystemVAMD64)
-
-	// solution has xmm0=f64, xmm1=f64 but no integer register types
-	fpSol := &TypeSolution{
-		Types: map[string]ir.Type{
-			"xmm0": f64,
-			"xmm1": f64,
-		},
-	}
-	solutions := map[FunctionID]*TypeSolution{"FP": fpSol}
-
-	prop := NewInterproceduralPropagator(cg, solutions)
-	if err := prop.Propagate(cg, solutions); err != nil {
-		t.Fatalf("Propagate: %v", err)
-	}
-
-	fpSummary := prop.Summary("FP")
-	if fpSummary == nil {
-		t.Fatal("FP summary is nil")
-	}
-	if len(fpSummary.ParamTypes) < 2 {
-		t.Fatalf("expected at least 2 params, got %d", len(fpSummary.ParamTypes))
-	}
-	// xmm0 and xmm1 must seed param[0] and param[1]
-	for i := 0; i < 2; i++ {
-		if fpSummary.ParamTypes[i] == nil {
-			t.Errorf("param[%d] should be f64 from xmm%d, got nil", i, i)
-			continue
-		}
-		if fpSummary.ParamTypes[i].String() != f64.String() {
-			t.Errorf("param[%d]: expected %s, got %s", i, f64, fpSummary.ParamTypes[i])
-		}
-	}
+	checkXMMFloatParams(t, "FP", CallingConventionSystemVAMD64, f64)
 }
 
-// TestInterproceduralPropagation_SystemVReturnFromRAX verifies that the RAX
-// register type is seeded as the return type under System V ABI.
-func TestInterproceduralPropagation_SystemVReturnFromRAX(t *testing.T) {
-	i64 := ir.IntType{Width: ir.Size8, Signed: true}
+// TestInterproceduralPropagation_MicrosoftX64FloatParams verifies that XMM
+// register types are seeded into float parameter slots under Microsoft x64 ABI.
+func TestInterproceduralPropagation_MicrosoftX64FloatParams(t *testing.T) {
+	f32 := ir.FloatType{Width: ir.Size4}
+	checkXMMFloatParams(t, "H", CallingConventionMicrosoftX64, f32)
+}
+
+// checkXMMFloatParams is a shared helper for XMM float parameter seeding tests.
+func checkXMMFloatParams(t *testing.T, funcName FunctionID, conv CallingConvention, floatType ir.FloatType) {
+	t.Helper()
 
 	cg := NewCallGraph()
-	cg.AddFunction("F", nil, nil, CallingConventionSystemVAMD64)
+	cg.AddFunction(funcName, []ir.Type{nil, nil}, nil, conv)
 
-	fSol := &TypeSolution{
+	sol := &TypeSolution{
 		Types: map[string]ir.Type{
-			"rax": i64,
+			"xmm0": floatType,
+			"xmm1": floatType,
 		},
 	}
-	solutions := map[FunctionID]*TypeSolution{"F": fSol}
+	solutions := map[FunctionID]*TypeSolution{funcName: sol}
 
 	prop := NewInterproceduralPropagator(cg, solutions)
 	if err := prop.Propagate(cg, solutions); err != nil {
 		t.Fatalf("Propagate: %v", err)
 	}
 
-	fSummary := prop.Summary("F")
-	if fSummary == nil {
-		t.Fatal("F summary is nil")
+	summary := prop.Summary(funcName)
+	if summary == nil {
+		t.Fatalf("%s summary is nil", funcName)
 	}
-	if fSummary.ReturnType == nil {
-		t.Fatal("F return type should be i64 from rax, got nil")
+	if len(summary.ParamTypes) < 2 {
+		t.Fatalf("expected at least 2 params, got %d", len(summary.ParamTypes))
 	}
-	if fSummary.ReturnType.String() != i64.String() {
-		t.Errorf("F return type: expected %s, got %s", i64, fSummary.ReturnType)
+	for i := 0; i < 2; i++ {
+		if summary.ParamTypes[i] == nil {
+			t.Errorf("param[%d] should be %s from xmm%d, got nil", i, floatType, i)
+			continue
+		}
+		if summary.ParamTypes[i].String() != floatType.String() {
+			t.Errorf("param[%d]: expected %s, got %s", i, floatType, summary.ParamTypes[i])
+		}
 	}
 }
 
@@ -292,42 +275,35 @@ func TestInterproceduralPropagation_MicrosoftX64ReturnFromRAX(t *testing.T) {
 	}
 }
 
-// TestInterproceduralPropagation_MicrosoftX64FloatParams verifies that XMM
-// register types are seeded into float parameter slots under Microsoft x64 ABI.
-func TestInterproceduralPropagation_MicrosoftX64FloatParams(t *testing.T) {
-	f32 := ir.FloatType{Width: ir.Size4}
+// TestInterproceduralPropagation_SystemVReturnFromRAX verifies that the RAX
+// register type is seeded as the return type under System V ABI.
+func TestInterproceduralPropagation_SystemVReturnFromRAX(t *testing.T) {
+	i64 := ir.IntType{Width: ir.Size8, Signed: true}
 
 	cg := NewCallGraph()
-	cg.AddFunction("H", []ir.Type{nil, nil}, nil, CallingConventionMicrosoftX64)
+	cg.AddFunction("F", nil, nil, CallingConventionSystemVAMD64)
 
-	hSol := &TypeSolution{
+	fSol := &TypeSolution{
 		Types: map[string]ir.Type{
-			"xmm0": f32,
-			"xmm1": f32,
+			"rax": i64,
 		},
 	}
-	solutions := map[FunctionID]*TypeSolution{"H": hSol}
+	solutions := map[FunctionID]*TypeSolution{"F": fSol}
 
 	prop := NewInterproceduralPropagator(cg, solutions)
 	if err := prop.Propagate(cg, solutions); err != nil {
 		t.Fatalf("Propagate: %v", err)
 	}
 
-	hSummary := prop.Summary("H")
-	if hSummary == nil {
-		t.Fatal("H summary is nil")
+	fSummary := prop.Summary("F")
+	if fSummary == nil {
+		t.Fatal("F summary is nil")
 	}
-	if len(hSummary.ParamTypes) < 2 {
-		t.Fatalf("expected at least 2 params, got %d", len(hSummary.ParamTypes))
+	if fSummary.ReturnType == nil {
+		t.Fatal("F return type should be i64 from rax, got nil")
 	}
-	for i := 0; i < 2; i++ {
-		if hSummary.ParamTypes[i] == nil {
-			t.Errorf("param[%d] should be f32 from xmm%d, got nil", i, i)
-			continue
-		}
-		if hSummary.ParamTypes[i].String() != f32.String() {
-			t.Errorf("param[%d]: expected %s, got %s", i, f32, hSummary.ParamTypes[i])
-		}
+	if fSummary.ReturnType.String() != i64.String() {
+		t.Errorf("F return type: expected %s, got %s", i64, fSummary.ReturnType)
 	}
 }
 

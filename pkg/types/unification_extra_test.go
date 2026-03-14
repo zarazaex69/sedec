@@ -409,7 +409,7 @@ func TestUnify_MultipleFieldConstraintsSameOffset_Conflict(t *testing.T) {
 
 // TestUnify_OccursCheckInStruct verifies that the occurs check fires when
 // a struct field references the struct itself (circular struct type).
-func TestUnify_OccursCheckInPointerChain(t *testing.T) {
+func TestUnify_OccursCheckInPointerChain(_ *testing.T) {
 	// x ≡ *y, y ≡ *x → circular pointer chain
 	cs := []TypeConstraint{
 		ptrConstraint(tv("x"), tv("y")),
@@ -463,10 +463,10 @@ func TestTypeConstraint_String(t *testing.T) {
 
 // TestErrUnknownFunction_Error verifies the error message format.
 func TestErrUnknownFunction_Error(t *testing.T) {
-	err := &ErrUnknownFunction{ID: "my_func"}
+	err := &UnknownFunctionError{ID: "my_func"}
 	msg := err.Error()
 	if msg == "" {
-		t.Error("ErrUnknownFunction.Error() returned empty string")
+		t.Error("UnknownFunctionError.Error() returned empty string")
 	}
 	if len(msg) < 10 {
 		t.Errorf("error message too short: %q", msg)
@@ -475,10 +475,10 @@ func TestErrUnknownFunction_Error(t *testing.T) {
 
 // TestErrCyclicCallGraph_Error verifies the error message format.
 func TestErrCyclicCallGraph_Error(t *testing.T) {
-	err := &ErrCyclicCallGraph{CycleSize: 3}
+	err := &CyclicCallGraphError{CycleSize: 3}
 	msg := err.Error()
 	if msg == "" {
-		t.Error("ErrCyclicCallGraph.Error() returned empty string")
+		t.Error("CyclicCallGraphError.Error() returned empty string")
 	}
 }
 

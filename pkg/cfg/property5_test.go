@@ -1,6 +1,7 @@
 package cfg
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
@@ -246,7 +247,7 @@ func genIndirectJumpSpec(params *gopter.GenParameters, jumpIndex int) *indirectJ
 //
 // the entry block at 0x0000 falls through to the first jump block.
 // all target blocks are independent (no shared targets across jumps).
-func buildScenarioCFG(t *testing.T, scenario *feedbackScenario) (*Builder, *CFG) {
+func buildScenarioCFG(t *testing.T, scenario *feedbackScenario) *Builder {
 	t.Helper()
 
 	instrs := make([]*disasm.Instruction, 0, 64)
@@ -262,7 +263,6 @@ func buildScenarioCFG(t *testing.T, scenario *feedbackScenario) (*Builder, *CFG)
 	for i, spec := range scenario.jumps {
 		// preamble instruction before the indirect jump
 		instrs = append(instrs, &disasm.Instruction{
-			//nolint:gosec // i is small (0-3), no overflow
 			Address:  spec.jumpSite - 3,
 			Mnemonic: "mov",
 			Length:   3,
@@ -295,12 +295,11 @@ func buildScenarioCFG(t *testing.T, scenario *feedbackScenario) (*Builder, *CFG)
 	}
 
 	builder := NewCFGBuilder()
-	cfgGraph, err := builder.Build(instrs)
-	if err != nil {
+	if _, err := builder.Build(instrs); err != nil {
 		t.Fatalf("buildScenarioCFG: %v", err)
 	}
 
-	return builder, cfgGraph
+	return builder
 }
 
 // makeResolveFunc creates a resolve function for RunConvergenceLoop that
@@ -374,7 +373,7 @@ func makeResolveFunc(
 func checkConvergenceTermination(t *testing.T, scenario *feedbackScenario) bool {
 	t.Helper()
 
-	builder, _ := buildScenarioCFG(t, scenario)
+	builder := buildScenarioCFG(t, scenario)
 	ra := NewIncrementalReAnalyzer(builder, nil, scenario.maxIterations)
 
 	resolveFunc := makeResolveFunc(scenario, scenario.analysisPass)
@@ -388,7 +387,7 @@ func checkConvergenceTermination(t *testing.T, scenario *feedbackScenario) bool 
 	}
 
 	// the only acceptable errors are nil (converged) or errMaxIterationsReached
-	if err != nil && err != errMaxIterationsReached {
+	if err != nil && !errors.Is(err, errMaxIterationsReached) {
 		t.Logf("unexpected error from RunConvergenceLoop: %v (scenario: %s)", err, describeScenario(scenario))
 		return false
 	}
@@ -412,20 +411,20 @@ func checkConvergenceTermination(t *testing.T, scenario *feedbackScenario) bool 
 func checkFullResolutionConvergence(t *testing.T, scenario *feedbackScenario) bool {
 	t.Helper()
 
-	builder, _ := buildScenarioCFG(t, scenario)
+	builder := buildScenarioCFG(t, scenario)
 	ra := NewIncrementalReAnalyzer(builder, nil, scenario.maxIterations)
 
 	resolveFunc := makeResolveFunc(scenario, scenario.analysisPass)
 
 	result, err := ra.RunConvergenceLoop(resolveFunc)
-	if err != nil && err != errMaxIterationsReached {
+	if err != nil && !errors.Is(err, errMaxIterationsReached) {
 		t.Logf("unexpected error: %v (scenario: %s)", err, describeScenario(scenario))
 		return false
 	}
 
 	// for fully-resolvable scenarios (revealPerIteration==0 for all jumps),
 	// the loop must converge (not hit the iteration cap)
-	if err == errMaxIterationsReached {
+	if errors.Is(err, errMaxIterationsReached) {
 		t.Logf("fully-resolvable scenario hit iteration cap (scenario: %s)", describeScenario(scenario))
 		return false
 	}
@@ -447,13 +446,13 @@ func checkFullResolutionConvergence(t *testing.T, scenario *feedbackScenario) bo
 func checkCFGConsistencyAfterLoop(t *testing.T, scenario *feedbackScenario) bool {
 	t.Helper()
 
-	builder, _ := buildScenarioCFG(t, scenario)
+	builder := buildScenarioCFG(t, scenario)
 	ra := NewIncrementalReAnalyzer(builder, nil, scenario.maxIterations)
 
 	resolveFunc := makeResolveFunc(scenario, scenario.analysisPass)
 
 	_, err := ra.RunConvergenceLoop(resolveFunc)
-	if err != nil && err != errMaxIterationsReached {
+	if err != nil && !errors.Is(err, errMaxIterationsReached) {
 		t.Logf("unexpected error: %v", err)
 		return false
 	}
@@ -477,13 +476,13 @@ func checkCFGConsistencyAfterLoop(t *testing.T, scenario *feedbackScenario) bool
 func checkIterationCountBound(t *testing.T, scenario *feedbackScenario) bool {
 	t.Helper()
 
-	builder, _ := buildScenarioCFG(t, scenario)
+	builder := buildScenarioCFG(t, scenario)
 	ra := NewIncrementalReAnalyzer(builder, nil, scenario.maxIterations)
 
 	resolveFunc := makeResolveFunc(scenario, scenario.analysisPass)
 
 	result, err := ra.RunConvergenceLoop(resolveFunc)
-	if err != nil && err != errMaxIterationsReached {
+	if err != nil && !errors.Is(err, errMaxIterationsReached) {
 		t.Logf("unexpected error: %v", err)
 		return false
 	}
@@ -514,7 +513,7 @@ func checkIterationCountBound(t *testing.T, scenario *feedbackScenario) bool {
 func checkProvenanceRecorded(t *testing.T, scenario *feedbackScenario) bool {
 	t.Helper()
 
-	builder, _ := buildScenarioCFG(t, scenario)
+	builder := buildScenarioCFG(t, scenario)
 	ra := NewIncrementalReAnalyzer(builder, nil, scenario.maxIterations)
 
 	resolveFunc := makeResolveFunc(scenario, scenario.analysisPass)
@@ -570,7 +569,7 @@ func checkProvenanceRecorded(t *testing.T, scenario *feedbackScenario) bool {
 func checkEdgeMonotonicity(t *testing.T, scenario *feedbackScenario) bool {
 	t.Helper()
 
-	builder, _ := buildScenarioCFG(t, scenario)
+	builder := buildScenarioCFG(t, scenario)
 
 	// track edge counts at each dominator tree update (fires after each structural change)
 	edgeCounts := make([]int, 0, scenario.maxIterations+1)
@@ -586,7 +585,7 @@ func checkEdgeMonotonicity(t *testing.T, scenario *feedbackScenario) bool {
 	resolveFunc := makeResolveFunc(scenario, scenario.analysisPass)
 
 	_, err := ra.RunConvergenceLoop(resolveFunc)
-	if err != nil && err != errMaxIterationsReached {
+	if err != nil && !errors.Is(err, errMaxIterationsReached) {
 		t.Logf("unexpected error: %v", err)
 		return false
 	}
@@ -690,7 +689,6 @@ func checkVTableConvergence(t *testing.T, numMethods int) bool {
 	// virtual method implementations
 	targets := make([]disasm.Address, numMethods)
 	for i := range targets {
-		//nolint:gosec // i is small (0-7), no overflow
 		base := disasm.Address(0x5000 + i*0x10)
 		targets[i] = base
 		instrs = append(instrs,
@@ -710,7 +708,7 @@ func checkVTableConvergence(t *testing.T, numMethods int) bool {
 	called := false
 	result, err := ra.RunConvergenceLoop(func(unresolved []*UnresolvedIndirectJump) (map[disasm.Address]*ResolvedTargetSet, error) {
 		if called || len(unresolved) == 0 {
-			return nil, nil
+			return nil, nil //nolint:nilnil // nil map means no new targets; nil error means no failure
 		}
 		called = true
 		// reveal all virtual methods in one iteration (vtable fully known)
@@ -753,7 +751,6 @@ func checkHandlerTableConvergence(t *testing.T, numCases int) bool {
 
 	targets := make([]disasm.Address, numCases)
 	for i := range targets {
-		//nolint:gosec // i is small (0-7), no overflow
 		base := disasm.Address(0x7000 + i*0x10)
 		targets[i] = base
 		instrs = append(instrs,
@@ -773,7 +770,7 @@ func checkHandlerTableConvergence(t *testing.T, numCases int) bool {
 	called := false
 	result, err := ra.RunConvergenceLoop(func(unresolved []*UnresolvedIndirectJump) (map[disasm.Address]*ResolvedTargetSet, error) {
 		if called || len(unresolved) == 0 {
-			return nil, nil
+			return nil, nil //nolint:nilnil // nil map means no new targets; nil error means no failure
 		}
 		called = true
 		return map[disasm.Address]*ResolvedTargetSet{
@@ -809,9 +806,7 @@ func checkIncrementalRevealConvergence(t *testing.T, numTargets int) bool {
 	targets := make([]disasm.Address, numTargets)
 
 	for i := 0; i < numTargets; i++ {
-		//nolint:gosec // i is small (0-6), no overflow
 		jumpSite := disasm.Address(0x8000 + i*0x100)
-		//nolint:gosec // i is small (0-6), no overflow
 		target := disasm.Address(0x9000 + i*0x10)
 		jumpSites[i] = jumpSite
 		targets[i] = target
@@ -847,7 +842,7 @@ func checkIncrementalRevealConvergence(t *testing.T, numTargets int) bool {
 	// resolve one jump per iteration using the unresolved list
 	result, err := ra.RunConvergenceLoop(func(unresolved []*UnresolvedIndirectJump) (map[disasm.Address]*ResolvedTargetSet, error) {
 		if len(unresolved) == 0 {
-			return nil, nil
+			return nil, nil //nolint:nilnil // nil map means no new targets; nil error means no failure
 		}
 		// resolve the first unresolved jump in this iteration
 		jump := unresolved[0]
@@ -863,7 +858,7 @@ func checkIncrementalRevealConvergence(t *testing.T, numTargets int) bool {
 			}
 		}
 		if !found {
-			return nil, nil
+			return nil, nil //nolint:nilnil // jump site not in our list; nil error means no failure
 		}
 
 		return map[disasm.Address]*ResolvedTargetSet{

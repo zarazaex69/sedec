@@ -392,6 +392,18 @@ func (g *ConstraintGenerator) visitBinaryOp(e ir.BinaryOp, resultTV TypeVar, ori
 			Confidence: 0.9, Origin: origin + " logical result",
 		})
 
+	case ir.BinOpAdd, ir.BinOpSub, ir.BinOpMul, ir.BinOpDiv, ir.BinOpMod,
+		ir.BinOpAnd, ir.BinOpOr, ir.BinOpXor, ir.BinOpShl, ir.BinOpShr, ir.BinOpSar:
+		// arithmetic and bitwise: all three must have the same type
+		g.emit(TypeConstraint{
+			Kind: ConstraintEquality, Left: leftTV, Right: rightTV,
+			Confidence: 0.5, Origin: origin + " arith operands",
+		})
+		g.emit(TypeConstraint{
+			Kind: ConstraintEquality, Left: resultTV, Right: leftTV,
+			Confidence: 0.5, Origin: origin + " arith result",
+		})
+
 	default:
 		// arithmetic and bitwise: all three must have the same type
 		g.emit(TypeConstraint{

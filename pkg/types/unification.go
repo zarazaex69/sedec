@@ -1,10 +1,24 @@
 package typeinfer
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/zarazaex69/sedec/pkg/ir"
+)
+
+// sentinel errors for unification failures.
+var (
+	errOccursCheck              = errors.New("occurs check failed: circular type")
+	errTypeClash                = errors.New("type clash")
+	errArrayLengthMismatch      = errors.New("array length mismatch")
+	errFunctionArityMismatch    = errors.New("function arity mismatch")
+	errIncompatibleConstructors = errors.New("incompatible type constructors")
+	errFieldConstraintKind      = errors.New("field constraint on non-struct term")
+	errReturnConstraintKind     = errors.New("return type constraint on non-function term")
+	errParamConstraintKind      = errors.New("param type constraint on non-function term")
+	errCannotUnifyConcrete      = errors.New("cannot unify concrete type with constructor term")
 )
 
 // ============================================================================
@@ -83,13 +97,13 @@ func (s *TypeSolution) String() string {
 	sb.WriteString("TypeSolution{\n")
 	for name, t := range s.Types {
 		if t != nil {
-			sb.WriteString(fmt.Sprintf("  %s => %s\n", name, t.String()))
+			fmt.Fprintf(&sb, "  %s => %s\n", name, t.String())
 		} else {
-			sb.WriteString(fmt.Sprintf("  %s => <free>\n", name))
+			fmt.Fprintf(&sb, "  %s => <free>\n", name)
 		}
 	}
 	if len(s.Conflicts) > 0 {
-		sb.WriteString(fmt.Sprintf("  conflicts: %d\n", len(s.Conflicts)))
+		fmt.Fprintf(&sb, "  conflicts: %d\n", len(s.Conflicts))
 	}
 	sb.WriteString("}")
 	return sb.String()
@@ -156,30 +170,6 @@ func (u *Unifier) find(i int) int {
 		i = grandparent
 	}
 	return i
-}
-
-// union merges the equivalence classes of terms a and b using union-by-rank.
-// returns the index of the new root.
-// the caller is responsible for ensuring the merge is type-safe before calling.
-func (u *Unifier) union(a, b int) int {
-	ra, rb := u.find(a), u.find(b)
-	if ra == rb {
-		return ra
-	}
-	// union by rank: attach smaller tree under larger tree
-	switch {
-	case u.terms[ra].rank < u.terms[rb].rank:
-		u.terms[ra].parent = rb
-		return rb
-	case u.terms[ra].rank > u.terms[rb].rank:
-		u.terms[rb].parent = ra
-		return ra
-	default:
-		// equal rank: arbitrary choice, increment winner's rank
-		u.terms[rb].parent = ra
-		u.terms[ra].rank++
-		return ra
-	}
 }
 
 // ============================================================================
@@ -339,7 +329,7 @@ func (u *Unifier) unifyTerms(a, b int) error {
 	// case 1: left is a free variable - bind it to right
 	if kindA == termVar {
 		if u.occursIn(ra, rb, make(map[int]bool)) {
-			return fmt.Errorf("occurs check failed: circular type %d in %d", ra, rb)
+			return fmt.Errorf("%w: circular type %d in %d", errOccursCheck, ra, rb)
 		}
 		u.terms[ra].parent = rb
 		return nil
@@ -348,7 +338,7 @@ func (u *Unifier) unifyTerms(a, b int) error {
 	// case 2: right is a free variable - bind it to left
 	if kindB == termVar {
 		if u.occursIn(rb, ra, make(map[int]bool)) {
-			return fmt.Errorf("occurs check failed: circular type %d in %d", rb, ra)
+			return fmt.Errorf("%w: circular type %d in %d", errOccursCheck, rb, ra)
 		}
 		u.terms[rb].parent = ra
 		return nil
@@ -358,7 +348,7 @@ func (u *Unifier) unifyTerms(a, b int) error {
 	if kindA == termConcrete && kindB == termConcrete {
 		ca, cb := u.terms[ra].concrete, u.terms[rb].concrete
 		if !typesEqual(ca, cb) {
-			return fmt.Errorf("type clash: %s vs %s", ca.String(), cb.String())
+			return fmt.Errorf("%w: %s vs %s", errTypeClash, ca.String(), cb.String())
 		}
 		u.terms[ra].parent = rb
 		return nil
@@ -375,7 +365,7 @@ func (u *Unifier) unifyTerms(a, b int) error {
 	if kindA == termArray && kindB == termArray {
 		lA, lB := u.terms[ra].arrayLen, u.terms[rb].arrayLen
 		if lA != 0 && lB != 0 && lA != lB {
-			return fmt.Errorf("array length mismatch: %d vs %d", lA, lB)
+			return fmt.Errorf("%w: %d vs %d", errArrayLengthMismatch, lA, lB)
 		}
 		eA, eB := u.terms[ra].arrayElem, u.terms[rb].arrayElem
 		u.terms[ra].parent = rb
@@ -400,7 +390,7 @@ func (u *Unifier) unifyTerms(a, b int) error {
 		copy(pB, u.terms[rb].funcParams)
 		rA, rB := u.terms[ra].funcReturn, u.terms[rb].funcReturn
 		if len(pA) != len(pB) {
-			return fmt.Errorf("function arity mismatch: %d vs %d", len(pA), len(pB))
+			return fmt.Errorf("%w: %d vs %d", errFunctionArityMismatch, len(pA), len(pB))
 		}
 		u.terms[ra].parent = rb
 		for i := range pA {
@@ -421,7 +411,7 @@ func (u *Unifier) unifyTerms(a, b int) error {
 		return u.unifyConcreteWithConstructor(cb, ra)
 	}
 
-	return fmt.Errorf("incompatible type constructors: kind %d vs kind %d", kindA, kindB)
+	return fmt.Errorf("%w: kind %d vs kind %d", errIncompatibleConstructors, kindA, kindB)
 }
 
 // unifyStructFields merges two sets of struct fields by matching on byte offset.
@@ -451,7 +441,7 @@ func (u *Unifier) unifyConcreteWithConstructor(concrete ir.Type, constructorIdx 
 	switch ct := concrete.(type) {
 	case ir.PointerType:
 		if u.terms[root].kind != termPointer {
-			return fmt.Errorf("type clash: pointer vs kind %d", u.terms[root].kind)
+			return fmt.Errorf("%w: pointer vs kind %d", errTypeClash, u.terms[root].kind)
 		}
 		pointeeConstructor := u.terms[root].pointee
 		pointeeIdx := u.termForConcreteType(ct.Pointee)
@@ -459,7 +449,7 @@ func (u *Unifier) unifyConcreteWithConstructor(concrete ir.Type, constructorIdx 
 
 	case ir.ArrayType:
 		if u.terms[root].kind != termArray {
-			return fmt.Errorf("type clash: array vs kind %d", u.terms[root].kind)
+			return fmt.Errorf("%w: array vs kind %d", errTypeClash, u.terms[root].kind)
 		}
 		elemConstructor := u.terms[root].arrayElem
 		elemIdx := u.termForConcreteType(ct.Element)
@@ -467,14 +457,14 @@ func (u *Unifier) unifyConcreteWithConstructor(concrete ir.Type, constructorIdx 
 
 	case ir.FunctionType:
 		if u.terms[root].kind != termFunction {
-			return fmt.Errorf("type clash: function vs kind %d", u.terms[root].kind)
+			return fmt.Errorf("%w: function vs kind %d", errTypeClash, u.terms[root].kind)
 		}
 		existingParams := make([]int, len(u.terms[root].funcParams))
 		copy(existingParams, u.terms[root].funcParams)
 		existingRet := u.terms[root].funcReturn
 		if len(ct.Parameters) != len(existingParams) {
-			return fmt.Errorf("function arity mismatch: %d vs %d",
-				len(ct.Parameters), len(existingParams))
+			return fmt.Errorf("%w: %d vs %d",
+				errFunctionArityMismatch, len(ct.Parameters), len(existingParams))
 		}
 		for i, p := range ct.Parameters {
 			paramIdx := u.termForConcreteType(p)
@@ -486,7 +476,7 @@ func (u *Unifier) unifyConcreteWithConstructor(concrete ir.Type, constructorIdx 
 		return u.unifyTerms(existingRet, retIdx)
 
 	default:
-		return fmt.Errorf("cannot unify concrete %s with constructor term", concrete.String())
+		return fmt.Errorf("%w: %s", errCannotUnifyConcrete, concrete.String())
 	}
 }
 
@@ -528,7 +518,11 @@ func (u *Unifier) processConstraint(c TypeConstraint) {
 		// left must be a struct with a field at FieldOffset of type right
 		la := u.termForVar(c.Left)
 		rb := u.termForVar(c.Right)
-		err = u.processFieldConstraint(la, rb, uint64(c.FieldOffset))
+		offset := c.FieldOffset
+		if offset < 0 {
+			offset = 0
+		}
+		err = u.processFieldConstraint(la, rb, uint64(offset))
 
 	case ConstraintArrayElement:
 		// left must be an array with element type right
@@ -596,7 +590,7 @@ func (u *Unifier) processFieldConstraint(structTerm, fieldTerm int, offset uint6
 		return nil
 	}
 
-	return fmt.Errorf("field constraint on non-struct term (kind=%d)", u.terms[root].kind)
+	return fmt.Errorf("%w (kind=%d)", errFieldConstraintKind, u.terms[root].kind)
 }
 
 // processReturnTypeConstraint ensures that funcTerm is a function constructor
@@ -616,7 +610,7 @@ func (u *Unifier) processReturnTypeConstraint(funcTerm, retTerm int) error {
 		return u.unifyTerms(u.terms[root].funcReturn, retTerm)
 	}
 
-	return fmt.Errorf("return type constraint on non-function term (kind=%d)", u.terms[root].kind)
+	return fmt.Errorf("%w (kind=%d)", errReturnConstraintKind, u.terms[root].kind)
 }
 
 // processParamTypeConstraint ensures that funcTerm is a function constructor
@@ -633,7 +627,7 @@ func (u *Unifier) processParamTypeConstraint(funcTerm, paramTerm, paramIdx int) 
 	}
 
 	if u.terms[root].kind != termFunction {
-		return fmt.Errorf("param type constraint on non-function term (kind=%d)", u.terms[root].kind)
+		return fmt.Errorf("%w (kind=%d)", errParamConstraintKind, u.terms[root].kind)
 	}
 
 	// extend params slice with free variables up to paramIdx

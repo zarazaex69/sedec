@@ -13,6 +13,7 @@
 package smt
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -20,6 +21,14 @@ import (
 
 	"github.com/zarazaex69/sedec/pkg/smt/z3"
 	typeinfer "github.com/zarazaex69/sedec/pkg/types"
+)
+
+// sentinel errors for maxsmt failures.
+var (
+	errHardConstraintsUnsatisfiable = errors.New("maxsmt: hard constraints are unsatisfiable")
+	errNoModelAfterSat              = errors.New("maxsmt: no model available after sat result")
+	errUnknownTypeVar               = errors.New("unknown type var")
+	errUnknownConstraintKind        = errors.New("unknown constraint kind")
 )
 
 // MaxSMTResult holds the output of a MaxSMT solve pass.
@@ -168,13 +177,13 @@ func (s *Solver) SolveWithMaxSMT(constraints []typeinfer.TypeConstraint) (*MaxSM
 	if result == z3.CheckUnsat {
 		// hard constraints are unsatisfiable: this should not happen since we
 		// only assert hard constraints that are individually consistent
-		return nil, fmt.Errorf("maxsmt: hard constraints are unsatisfiable")
+		return nil, fmt.Errorf("%w", errHardConstraintsUnsatisfiable)
 	}
 
 	// extract model and determine which soft constraints were satisfied
 	model := opt.Model()
 	if model == nil {
-		return nil, fmt.Errorf("maxsmt: no model available after sat result")
+		return nil, fmt.Errorf("%w", errNoModelAfterSat)
 	}
 	defer model.Close()
 
@@ -222,11 +231,11 @@ func (s *Solver) encodeConstraint(
 ) (z3.Expr, error) {
 	leftExpr, ok := typeVarExprs[c.Left.Name]
 	if !ok {
-		return z3.Expr{}, fmt.Errorf("unknown type var: %s", c.Left.Name)
+		return z3.Expr{}, fmt.Errorf("%w: %s", errUnknownTypeVar, c.Left.Name)
 	}
 	rightExpr, ok := typeVarExprs[c.Right.Name]
 	if !ok {
-		return z3.Expr{}, fmt.Errorf("unknown type var: %s", c.Right.Name)
+		return z3.Expr{}, fmt.Errorf("%w: %s", errUnknownTypeVar, c.Right.Name)
 	}
 
 	switch c.Kind {
@@ -244,7 +253,7 @@ func (s *Solver) encodeConstraint(
 		return s.ctx.Implies(leftExpr, rightExpr), nil
 
 	default:
-		return z3.Expr{}, fmt.Errorf("unknown constraint kind: %d", c.Kind)
+		return z3.Expr{}, fmt.Errorf("%w: %d", errUnknownConstraintKind, c.Kind)
 	}
 }
 

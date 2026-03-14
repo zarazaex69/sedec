@@ -286,7 +286,7 @@ func TestGenerateConstraints_Deterministic(t *testing.T) {
 }
 
 // TestGenerateConstraints_EmptyFunction verifies no panic on empty function.
-func TestGenerateConstraints_EmptyFunction(t *testing.T) {
+func TestGenerateConstraints_EmptyFunction(_ *testing.T) {
 	fn := makeFunction("empty", nil)
 	g := NewConstraintGenerator(fn)
 	cs := g.GenerateConstraints()

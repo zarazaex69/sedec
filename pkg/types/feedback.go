@@ -430,7 +430,7 @@ func (a *FunctionPointerAnalyzer) handleArrayType(
 	}
 
 	// enforce minimum array length to reduce false positives
-	if ct.Length > 0 && int(ct.Length) < a.minArrayLen {
+	if ct.Length > 0 && int(ct.Length) < a.minArrayLen { //nolint:gosec // ct.Length is array length, bounded by practical limits
 		return FunctionPointerArray{}, false
 	}
 

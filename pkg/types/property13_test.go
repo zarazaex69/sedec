@@ -288,7 +288,7 @@ func genConflictTypeProgram() gopter.Gen {
 
 		// pick two different types
 		idxHigh := params.NextUint64() % uint64(len(types))
-		idxLow := (idxHigh + 1 + params.NextUint64()%uint64(len(types)-1)) % uint64(len(types))
+		idxLow := (idxHigh + 1 + params.NextUint64()%uint64(len(types)-1)) % uint64(len(types)) //nolint:gosec // len(types)-1 is small positive int, no overflow
 
 		// high confidence in [0.7, 1.0], low confidence in [0.1, 0.4]
 		highConf := 0.7 + float64(params.NextUint64()%31)/100.0
@@ -401,7 +401,7 @@ func checkStructTypeCompatibility(t *testing.T, prog *structTypeProgram) bool {
 	// verify that all expected field offsets are present in the inferred struct
 	expectedOffsets := make(map[uint64]bool)
 	for _, f := range prog.fields {
-		expectedOffsets[uint64(f.offset)] = true
+		expectedOffsets[uint64(f.offset)] = true //nolint:gosec // f.offset is a struct field offset, always non-negative
 	}
 
 	foundOffsets := make(map[uint64]bool)
@@ -822,10 +822,10 @@ func buildCmpTypeFunction(prog *cmpTypeProgram) *ir.Function {
 // helpers
 // ============================================================================
 
-// typeString returns the string representation of a type, or "<nil>" for nil.
+// typeString returns the string representation of a type, or nilTypeStr for nil.
 func typeString(t ir.Type) string {
 	if t == nil {
-		return "<nil>"
+		return nilTypeStr
 	}
 	return t.String()
 }

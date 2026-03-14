@@ -13,6 +13,9 @@ type FunctionID string
 // CallingConvention identifies the ABI used by a function.
 type CallingConvention int
 
+// callingConventionUnknownStr is the string representation of an unknown calling convention.
+const callingConventionUnknownStr = "unknown"
+
 const (
 	// CallingConventionUnknown means the ABI has not been determined.
 	CallingConventionUnknown CallingConvention = iota
@@ -33,12 +36,14 @@ const (
 // String returns a human-readable name for the calling convention.
 func (c CallingConvention) String() string {
 	switch c {
+	case CallingConventionUnknown:
+		return callingConventionUnknownStr
 	case CallingConventionSystemVAMD64:
 		return "sysv_amd64"
 	case CallingConventionMicrosoftX64:
 		return "ms_x64"
 	default:
-		return "unknown"
+		return callingConventionUnknownStr
 	}
 }
 
@@ -131,10 +136,10 @@ func (g *CallGraph) AddFunction(id FunctionID, params []ir.Type, ret ir.Type, co
 // returns ErrUnknownFunction if either endpoint is missing.
 func (g *CallGraph) AddCallEdge(caller, callee FunctionID, site CallSite) error {
 	if _, ok := g.nodes[caller]; !ok {
-		return &ErrUnknownFunction{ID: caller}
+		return &UnknownFunctionError{ID: caller}
 	}
 	if _, ok := g.nodes[callee]; !ok {
-		return &ErrUnknownFunction{ID: callee}
+		return &UnknownFunctionError{ID: callee}
 	}
 	edge := &CallGraphEdge{
 		CallerID: caller,
@@ -234,7 +239,7 @@ func (g *CallGraph) TopologicalOrder() ([]FunctionID, error) {
 		// reverse the acyclic prefix for bottom-up order, then append cyclic nodes
 		reverseIDs(result)
 		result = append(result, remaining...)
-		return result, &ErrCyclicCallGraph{CycleSize: len(remaining)}
+		return result, &CyclicCallGraphError{CycleSize: len(remaining)}
 	}
 
 	// reverse for bottom-up order: leaves (callees) first, callers last
@@ -326,21 +331,21 @@ func (g *CallGraph) SCCs() [][]FunctionID {
 // error types
 // ============================================================================
 
-// ErrUnknownFunction is returned when a call edge references an unregistered function.
-type ErrUnknownFunction struct {
+// UnknownFunctionError is returned when a call edge references an unregistered function.
+type UnknownFunctionError struct {
 	ID FunctionID
 }
 
-func (e *ErrUnknownFunction) Error() string {
+func (e *UnknownFunctionError) Error() string {
 	return fmt.Sprintf("call graph: unknown function %q", e.ID)
 }
 
-// ErrCyclicCallGraph is returned by TopologicalOrder when cycles are detected.
-type ErrCyclicCallGraph struct {
+// CyclicCallGraphError is returned by TopologicalOrder when cycles are detected.
+type CyclicCallGraphError struct {
 	CycleSize int
 }
 
-func (e *ErrCyclicCallGraph) Error() string {
+func (e *CyclicCallGraphError) Error() string {
 	return fmt.Sprintf("call graph: cycle detected (%d nodes in cycles)", e.CycleSize)
 }
 

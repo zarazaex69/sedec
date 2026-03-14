@@ -269,8 +269,8 @@ func (p *InterproceduralPropagator) mergeConstraints(existing []TypeConstraint, 
 	}
 
 	seen := make(map[constraintKey]int, len(existing))
-	result := make([]TypeConstraint, len(existing))
-	copy(result, existing)
+	result := make([]TypeConstraint, 0, len(existing)+len(incoming))
+	result = append(result, existing...)
 
 	for i, c := range result {
 		seen[keyOf(c)] = i
@@ -314,6 +314,8 @@ func (p *InterproceduralPropagator) seedFromCallingConvention(id FunctionID) {
 	}
 
 	switch node.Convention {
+	case CallingConventionUnknown:
+		// no register-based seeding for unknown convention
 	case CallingConventionSystemVAMD64:
 		p.seedSystemVParams(summary, sol)
 	case CallingConventionMicrosoftX64:

@@ -7,6 +7,12 @@ import (
 	"github.com/zarazaex69/sedec/pkg/disasm"
 )
 
+// errTestSSAFailed is a sentinel error for testing hook error propagation.
+var errTestSSAFailed = errors.New("ssa failed")
+
+// vsaPassName is the canonical string for the VSA analysis pass used in tests.
+const vsaPassName = "vsa"
+
 // buildIndirectJumpCFG constructs a minimal CFG with one indirect jump for testing.
 // layout:
 //
@@ -16,7 +22,7 @@ import (
 //	0x1008: ret
 //	0x100a: sub  (potential target B)
 //	0x100d: ret
-func buildIndirectJumpCFG(t *testing.T) (*Builder, *CFG) {
+func buildIndirectJumpCFG(t *testing.T) *Builder {
 	t.Helper()
 
 	instructions := []*disasm.Instruction{
@@ -35,12 +41,11 @@ func buildIndirectJumpCFG(t *testing.T) (*Builder, *CFG) {
 	}
 
 	builder := NewCFGBuilder()
-	cfgGraph, err := builder.Build(instructions)
-	if err != nil {
+	if _, err := builder.Build(instructions); err != nil {
 		t.Fatalf("build cfg: %v", err)
 	}
 
-	return builder, cfgGraph
+	return builder
 }
 
 // TestReAnalysisPass_String verifies the string representation of pass masks.
@@ -87,7 +92,7 @@ func TestNewIncrementalReAnalyzer_Defaults(t *testing.T) {
 // TestAddResolvedTargets_SingleTarget verifies that a single resolved target
 // adds the correct edge and records provenance.
 func TestAddResolvedTargets_SingleTarget(t *testing.T) {
-	builder, _ := buildIndirectJumpCFG(t)
+	builder := buildIndirectJumpCFG(t)
 
 	domTreeUpdated := false
 	ssaCalled := false
@@ -149,7 +154,7 @@ func TestAddResolvedTargets_SingleTarget(t *testing.T) {
 // TestAddResolvedTargets_MultipleTargets verifies that multiple targets for a
 // single jump site (e.g., switch table) are all added.
 func TestAddResolvedTargets_MultipleTargets(t *testing.T) {
-	builder, _ := buildIndirectJumpCFG(t)
+	builder := buildIndirectJumpCFG(t)
 
 	ra := NewIncrementalReAnalyzer(builder, nil, 5)
 
@@ -167,7 +172,7 @@ func TestAddResolvedTargets_MultipleTargets(t *testing.T) {
 // TestAddResolvedTargets_DuplicateTargetNotCounted verifies that adding the same
 // target twice does not double-count edges.
 func TestAddResolvedTargets_DuplicateTargetNotCounted(t *testing.T) {
-	builder, _ := buildIndirectJumpCFG(t)
+	builder := buildIndirectJumpCFG(t)
 
 	ra := NewIncrementalReAnalyzer(builder, nil, 5)
 
@@ -194,7 +199,7 @@ func TestAddResolvedTargets_DuplicateTargetNotCounted(t *testing.T) {
 // TestAddResolvedTargets_InvalidJumpSite verifies that an unknown jump site
 // returns an error without panicking.
 func TestAddResolvedTargets_InvalidJumpSite(t *testing.T) {
-	builder, _ := buildIndirectJumpCFG(t)
+	builder := buildIndirectJumpCFG(t)
 
 	ra := NewIncrementalReAnalyzer(builder, nil, 5)
 
@@ -207,7 +212,7 @@ func TestAddResolvedTargets_InvalidJumpSite(t *testing.T) {
 // TestAddResolvedTargets_InvalidTarget verifies that an unknown target address
 // returns an error without panicking.
 func TestAddResolvedTargets_InvalidTarget(t *testing.T) {
-	builder, _ := buildIndirectJumpCFG(t)
+	builder := buildIndirectJumpCFG(t)
 
 	ra := NewIncrementalReAnalyzer(builder, nil, 5)
 
@@ -219,9 +224,9 @@ func TestAddResolvedTargets_InvalidTarget(t *testing.T) {
 
 // TestAddResolvedTargets_HookError verifies that a hook error is propagated.
 func TestAddResolvedTargets_HookError(t *testing.T) {
-	builder, _ := buildIndirectJumpCFG(t)
+	builder := buildIndirectJumpCFG(t)
 
-	hookErr := errors.New("ssa failed")
+	hookErr := errTestSSAFailed
 	hooks := &ReAnalysisHooks{
 		OnSSARequired: func(_ *CFG, _ *DominatorTree) error {
 			return hookErr
@@ -257,7 +262,7 @@ func TestRunConvergenceLoop_ImmediateConvergence(t *testing.T) {
 	callCount := 0
 	result, err := ra.RunConvergenceLoop(func(_ []*UnresolvedIndirectJump) (map[disasm.Address]*ResolvedTargetSet, error) {
 		callCount++
-		return nil, nil
+		return nil, nil //nolint:nilnil // nil map means no new targets; nil error means no failure
 	})
 
 	if err != nil {
@@ -274,12 +279,12 @@ func TestRunConvergenceLoop_ImmediateConvergence(t *testing.T) {
 
 // TestRunConvergenceLoop_SingleIteration verifies convergence after one iteration.
 func TestRunConvergenceLoop_SingleIteration(t *testing.T) {
-	builder, _ := buildIndirectJumpCFG(t)
+	builder := buildIndirectJumpCFG(t)
 
 	ra := NewIncrementalReAnalyzer(builder, nil, 10)
 
 	iterations := 0
-	result, err := ra.RunConvergenceLoop(func(unresolved []*UnresolvedIndirectJump) (map[disasm.Address]*ResolvedTargetSet, error) {
+	result, err := ra.RunConvergenceLoop(func(_ []*UnresolvedIndirectJump) (map[disasm.Address]*ResolvedTargetSet, error) {
 		iterations++
 		if iterations == 1 {
 			// resolve the indirect jump on first iteration
@@ -289,7 +294,7 @@ func TestRunConvergenceLoop_SingleIteration(t *testing.T) {
 			return resolved, nil
 		}
 		// second iteration: nothing new
-		return nil, nil
+		return nil, nil //nolint:nilnil // nil map means no new targets; nil error means no failure
 	})
 
 	if err != nil {
@@ -305,7 +310,7 @@ func TestRunConvergenceLoop_SingleIteration(t *testing.T) {
 
 // TestRunConvergenceLoop_MaxIterations verifies that the loop terminates at the cap.
 func TestRunConvergenceLoop_MaxIterations(t *testing.T) {
-	builder, _ := buildIndirectJumpCFG(t)
+	builder := buildIndirectJumpCFG(t)
 
 	ra := NewIncrementalReAnalyzer(builder, nil, 3)
 
@@ -313,18 +318,18 @@ func TestRunConvergenceLoop_MaxIterations(t *testing.T) {
 	// already exists so no new edges are added - however the unresolved list is
 	// not cleared, so the loop keeps running until the cap)
 	callCount := 0
-	result, err := ra.RunConvergenceLoop(func(unresolved []*UnresolvedIndirectJump) (map[disasm.Address]*ResolvedTargetSet, error) {
+	result, err := ra.RunConvergenceLoop(func(_ []*UnresolvedIndirectJump) (map[disasm.Address]*ResolvedTargetSet, error) {
 		callCount++
 		// always claim to have resolved something to prevent early convergence
 		// but use an invalid target so AddIndirectTargetWithProvenance fails
 		// instead, return empty to trigger convergence on second call
 		if callCount == 1 {
 			return map[disasm.Address]*ResolvedTargetSet{
-				0x1003: NewResolvedTargetSet("vsa", 0.7, []disasm.Address{0x1005}),
+				0x1003: NewResolvedTargetSet(vsaPassName, 0.7, []disasm.Address{0x1005}),
 			}, nil
 		}
 		// subsequent calls: no new targets → convergence
-		return nil, nil
+		return nil, nil //nolint:nilnil // nil map means no new targets; nil error means no failure
 	})
 
 	// should converge on second call (empty return)
@@ -374,7 +379,7 @@ func TestRunConvergenceLoop_MaxIterationsExceeded(t *testing.T) {
 	_, err := ra.RunConvergenceLoop(func(unresolved []*UnresolvedIndirectJump) (map[disasm.Address]*ResolvedTargetSet, error) {
 		callCount++
 		if len(unresolved) == 0 {
-			return nil, nil
+			return nil, nil //nolint:nilnil // nil map means no new targets; nil error means no failure
 		}
 		// resolve the first unresolved jump each time
 		jump := unresolved[0]
@@ -390,12 +395,12 @@ func TestRunConvergenceLoop_MaxIterationsExceeded(t *testing.T) {
 
 // TestGetProvenanceForJump verifies provenance lookup by jump site.
 func TestGetProvenanceForJump(t *testing.T) {
-	builder, _ := buildIndirectJumpCFG(t)
+	builder := buildIndirectJumpCFG(t)
 
 	ra := NewIncrementalReAnalyzer(builder, nil, 5)
 
 	prov := &EdgeProvenance{
-		AnalysisPass: "vsa",
+		AnalysisPass: vsaPassName,
 		Confidence:   0.8,
 		Metadata:     map[string]any{"method": "strided_interval"},
 	}
@@ -408,8 +413,8 @@ func TestGetProvenanceForJump(t *testing.T) {
 	if rec == nil {
 		t.Fatal("GetProvenanceForJump returned nil for known jump site")
 	}
-	if rec.Provenance.AnalysisPass != "vsa" {
-		t.Errorf("AnalysisPass: got %q, want %q", rec.Provenance.AnalysisPass, "vsa")
+	if rec.Provenance.AnalysisPass != vsaPassName {
+		t.Errorf("AnalysisPass: got %q, want %q", rec.Provenance.AnalysisPass, vsaPassName)
 	}
 	if rec.Provenance.Confidence != 0.8 {
 		t.Errorf("Confidence: got %f, want 0.8", rec.Provenance.Confidence)
@@ -423,7 +428,7 @@ func TestGetProvenanceForJump(t *testing.T) {
 
 // TestGetResolutionHistory_Copy verifies that the returned slice is a copy.
 func TestGetResolutionHistory_Copy(t *testing.T) {
-	builder, _ := buildIndirectJumpCFG(t)
+	builder := buildIndirectJumpCFG(t)
 
 	ra := NewIncrementalReAnalyzer(builder, nil, 5)
 
@@ -448,7 +453,7 @@ func TestGetResolutionHistory_Copy(t *testing.T) {
 
 // TestConsistencyCheck_ValidCFG verifies that a correctly built CFG passes.
 func TestConsistencyCheck_ValidCFG(t *testing.T) {
-	builder, _ := buildIndirectJumpCFG(t)
+	builder := buildIndirectJumpCFG(t)
 
 	violations := builder.ConsistencyCheck()
 	if len(violations) != 0 {
@@ -458,7 +463,7 @@ func TestConsistencyCheck_ValidCFG(t *testing.T) {
 
 // TestConsistencyCheck_AfterResolution verifies consistency after adding an edge.
 func TestConsistencyCheck_AfterResolution(t *testing.T) {
-	builder, _ := buildIndirectJumpCFG(t)
+	builder := buildIndirectJumpCFG(t)
 
 	ra := NewIncrementalReAnalyzer(builder, nil, 5)
 
@@ -516,7 +521,7 @@ func TestNewResolvedTargetSet(t *testing.T) {
 
 // TestGetStats verifies that GetStats returns a consistent snapshot.
 func TestGetStats(t *testing.T) {
-	builder, _ := buildIndirectJumpCFG(t)
+	builder := buildIndirectJumpCFG(t)
 
 	ra := NewIncrementalReAnalyzer(builder, nil, 5)
 
@@ -538,7 +543,7 @@ func TestGetStats(t *testing.T) {
 // TestDominatorTreeCachedAfterUpdate verifies that the builder's cached dominator
 // tree is updated after a structural CFG change.
 func TestDominatorTreeCachedAfterUpdate(t *testing.T) {
-	builder, _ := buildIndirectJumpCFG(t)
+	builder := buildIndirectJumpCFG(t)
 
 	var capturedTree *DominatorTree
 	hooks := &ReAnalysisHooks{
@@ -565,7 +570,7 @@ func TestDominatorTreeCachedAfterUpdate(t *testing.T) {
 // TestAllHooksCalled verifies that all registered hooks are invoked when
 // a structural change occurs.
 func TestAllHooksCalled(t *testing.T) {
-	builder, _ := buildIndirectJumpCFG(t)
+	builder := buildIndirectJumpCFG(t)
 
 	called := map[string]bool{}
 	hooks := &ReAnalysisHooks{

@@ -1,6 +1,7 @@
 package typeinfer
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
@@ -8,6 +9,9 @@ import (
 	"github.com/zarazaex69/sedec/pkg/disasm"
 	"github.com/zarazaex69/sedec/pkg/ir"
 )
+
+// errMockBuilderFail is a sentinel error for mock builder failures.
+var errMockBuilderFail = errors.New("mock builder error")
 
 // ============================================================================
 // mock implementations
@@ -32,7 +36,7 @@ func (m *mockCFGBuilder) AddIndirectTargetWithProvenance(
 ) error {
 	m.callCount++
 	if m.failOnCall > 0 && m.callCount == m.failOnCall {
-		return fmt.Errorf("mock error on call %d", m.callCount)
+		return fmt.Errorf("%w on call %d", errMockBuilderFail, m.callCount)
 	}
 	m.calls = append(m.calls, mockAddCall{jumpSite: jumpSite, target: target, provenance: provenance})
 	return nil
@@ -235,7 +239,7 @@ type infiniteUniqueDiscoverer struct {
 
 func (d *infiniteUniqueDiscoverer) DiscoverFunctionPointers(_ *TypeSolution) []FunctionPointerArray {
 	d.counter++
-	target := d.baseAddr + ir.Address(d.counter*0x100)
+	target := d.baseAddr + ir.Address(d.counter)*0x100 //nolint:gosec // counter is small, no overflow
 	return []FunctionPointerArray{
 		makeFuncPtrArray(0x5000, []ir.Address{target}, ArrayKindHandlerTable),
 	}

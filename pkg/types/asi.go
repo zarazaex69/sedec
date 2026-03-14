@@ -10,6 +10,7 @@ import (
 // AccessSize encodes the byte width of a single memory access.
 type AccessSize int64
 
+// access size constants for common memory widths.
 const (
 	AccessSize1 AccessSize = 1 // 8-bit
 	AccessSize2 AccessSize = 2 // 16-bit

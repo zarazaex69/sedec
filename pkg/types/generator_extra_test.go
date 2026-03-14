@@ -265,7 +265,7 @@ func TestGenerateConstraints_MultipleBlocks(t *testing.T) {
 
 // TestGenerateConstraints_Jump verifies that a Jump instruction produces no
 // type constraints (it has no type-bearing operands).
-func TestGenerateConstraints_Jump(t *testing.T) {
+func TestGenerateConstraints_Jump(_ *testing.T) {
 	jump := ir.Jump{Target: 1}
 	fn := makeFunction("f", []ir.IRInstruction{jump})
 	g := NewConstraintGenerator(fn)

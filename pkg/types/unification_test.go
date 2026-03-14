@@ -11,6 +11,9 @@ import (
 // helpers
 // ============================================================================
 
+// nilTypeStr is the canonical string representation of a nil ir.Type.
+const nilTypeStr = "<nil>"
+
 // tv creates a TypeVar with no concrete type (free variable).
 func tv(name string) TypeVar {
 	return TypeVar{Name: name}
@@ -471,8 +474,8 @@ func TestUnify_Idempotent(t *testing.T) {
 
 	for name, t1 := range sol1.Types {
 		t2 := sol2.Types[name]
-		s1 := "<nil>"
-		s2 := "<nil>"
+		s1 := nilTypeStr
+		s2 := nilTypeStr
 		if t1 != nil {
 			s1 = t1.String()
 		}

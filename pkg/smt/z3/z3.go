@@ -73,6 +73,8 @@ func (r CheckResult) String() string {
 		return "sat"
 	case CheckUnsat:
 		return "unsat"
+	case CheckUnknown:
+		return "unknown"
 	default:
 		return "unknown"
 	}
@@ -362,7 +364,7 @@ func (m *Model) Close() {
 func (m *Model) EvalBool(e Expr) (bool, bool) {
 	var result C.Z3_ast
 	// use c helper to avoid _Bool conversion issues in cgo
-	ok := C.model_eval_complete(m.ctx.ctx, m.model, e.ast, &result)
+	ok := C.model_eval_complete(m.ctx.ctx, m.model, e.ast, &result) //nolint:gocritic // cgo call, not a dupSubExpr
 	if !bool(ok) {
 		return false, false
 	}
@@ -387,13 +389,13 @@ func (m *Model) String() string {
 // Error handling
 // ============================================================================
 
-// ErrZ3 represents a Z3 API error.
-type ErrZ3 struct {
+// Error represents a Z3 API error.
+type Error struct {
 	Code    int
 	Message string
 }
 
-func (e *ErrZ3) Error() string {
+func (e *Error) Error() string {
 	return fmt.Sprintf("z3 error %d: %s", e.Code, e.Message)
 }
 
@@ -404,7 +406,7 @@ func checkError(ctx C.Z3_context) error {
 		return nil
 	}
 	msg := C.GoString(C.Z3_get_error_msg(ctx, code))
-	return &ErrZ3{Code: int(code), Message: msg}
+	return &Error{Code: int(code), Message: msg}
 }
 
 // ContextError returns the last error from the context, or nil if no error.

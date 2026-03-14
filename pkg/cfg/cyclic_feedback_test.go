@@ -155,17 +155,19 @@ func TestVTableDiscovery_SingleMethod(t *testing.T) {
 	// verify edge type is indirect
 	found := false
 	for _, edge := range cfgGraph.Edges {
-		if edge.Type == EdgeTypeIndirect && edge.Provenance != nil {
-			if edge.Provenance.AnalysisPass == "type_inference_iter_1_vtable" {
-				found = true
-				if edge.Provenance.Confidence != 0.95 {
-					t.Errorf("confidence: got %f, want 0.95", edge.Provenance.Confidence)
-				}
-				kindVal, ok := edge.Provenance.Metadata["array_kind"]
-				if !ok || kindVal != "vtable" {
-					t.Errorf("metadata array_kind: got %v, want vtable", kindVal)
-				}
-			}
+		if edge.Type != EdgeTypeIndirect || edge.Provenance == nil {
+			continue
+		}
+		if edge.Provenance.AnalysisPass != "type_inference_iter_1_vtable" {
+			continue
+		}
+		found = true
+		if edge.Provenance.Confidence != 0.95 {
+			t.Errorf("confidence: got %f, want 0.95", edge.Provenance.Confidence)
+		}
+		kindVal, ok := edge.Provenance.Metadata["array_kind"]
+		if !ok || kindVal != "vtable" {
+			t.Errorf("metadata array_kind: got %v, want vtable", kindVal)
 		}
 	}
 	if !found {
@@ -295,18 +297,20 @@ func TestVTableDiscovery_ProvenanceIterationTagging(t *testing.T) {
 
 	// find the edge and verify provenance
 	for _, edge := range cfgGraph.Edges {
-		if edge.Type == EdgeTypeIndirect && edge.Provenance != nil {
-			if edge.Provenance.AnalysisPass == "type_inference_iter_3_vtable" {
-				iterVal, ok := edge.Provenance.Metadata["iteration"]
-				if !ok {
-					t.Error("iteration metadata missing from provenance")
-				}
-				if iterVal != 3 {
-					t.Errorf("iteration: got %v, want 3", iterVal)
-				}
-				return
-			}
+		if edge.Type != EdgeTypeIndirect || edge.Provenance == nil {
+			continue
 		}
+		if edge.Provenance.AnalysisPass != "type_inference_iter_3_vtable" {
+			continue
+		}
+		iterVal, ok := edge.Provenance.Metadata["iteration"]
+		if !ok {
+			t.Error("iteration metadata missing from provenance")
+		}
+		if iterVal != 3 {
+			t.Errorf("iteration: got %v, want 3", iterVal)
+		}
+		return
 	}
 	t.Error("edge with iteration-tagged provenance not found")
 }
@@ -459,7 +463,7 @@ func TestConvergence_NoUnresolvedJumps(t *testing.T) {
 	resolveCalled := false
 	result, err := ra.RunConvergenceLoop(func(_ []*UnresolvedIndirectJump) (map[disasm.Address]*ResolvedTargetSet, error) {
 		resolveCalled = true
-		return nil, nil
+		return nil, nil //nolint:nilnil // nil map means no new targets; nil error means no failure
 	})
 
 	if err != nil {
@@ -484,7 +488,7 @@ func TestConvergence_SingleIterationVTable(t *testing.T) {
 	ra := NewIncrementalReAnalyzer(builder, nil, 10)
 
 	iterCount := 0
-	result, err := ra.RunConvergenceLoop(func(unresolved []*UnresolvedIndirectJump) (map[disasm.Address]*ResolvedTargetSet, error) {
+	result, err := ra.RunConvergenceLoop(func(_ []*UnresolvedIndirectJump) (map[disasm.Address]*ResolvedTargetSet, error) {
 		iterCount++
 		if iterCount == 1 {
 			// resolve vtable dispatch on first iteration
@@ -493,7 +497,7 @@ func TestConvergence_SingleIterationVTable(t *testing.T) {
 			}, nil
 		}
 		// second iteration: nothing new
-		return nil, nil
+		return nil, nil //nolint:nilnil // nil map means no new targets; nil error means no failure
 	})
 
 	if err != nil {
@@ -529,7 +533,7 @@ func TestConvergence_MultipleIterationsHandlerTable(t *testing.T) {
 				0x5005: NewResolvedTargetSet("type_inference_handler", 0.75, allCases),
 			}, nil
 		}
-		return nil, nil
+		return nil, nil //nolint:nilnil // nil map means no new targets; nil error means no failure
 	})
 
 	if err != nil {
@@ -558,7 +562,7 @@ func TestConvergence_IterationLimitEnforced(t *testing.T) {
 	_, err := ra.RunConvergenceLoop(func(unresolved []*UnresolvedIndirectJump) (map[disasm.Address]*ResolvedTargetSet, error) {
 		callCount++
 		if len(unresolved) == 0 {
-			return nil, nil
+			return nil, nil //nolint:nilnil // nil map means no new targets; nil error means no failure
 		}
 		// keep returning the same resolution to prevent convergence
 		// (unresolved list is cleared by MarkIndirectJumpResolved, so
@@ -613,7 +617,7 @@ func TestConvergence_IterationLimitWithMultipleJumps(t *testing.T) {
 	// always return a resolution to prevent convergence
 	_, err := ra.RunConvergenceLoop(func(unresolved []*UnresolvedIndirectJump) (map[disasm.Address]*ResolvedTargetSet, error) {
 		if len(unresolved) == 0 {
-			return nil, nil
+			return nil, nil //nolint:nilnil // nil map means no new targets; nil error means no failure
 		}
 		// resolve first unresolved jump each time
 		jump := unresolved[0]
@@ -638,6 +642,9 @@ func TestConvergence_DefaultMaxIterations(t *testing.T) {
 	}
 }
 
+// errTestTypeInferenceFailed is a sentinel error for testing error propagation.
+var errTestTypeInferenceFailed = errors.New("type inference failed")
+
 // TestConvergence_ResolveErrorPropagated verifies that an error from the
 // resolve function is propagated and terminates the loop.
 func TestConvergence_ResolveErrorPropagated(t *testing.T) {
@@ -645,12 +652,11 @@ func TestConvergence_ResolveErrorPropagated(t *testing.T) {
 
 	ra := NewIncrementalReAnalyzer(builder, nil, 10)
 
-	resolveErr := errors.New("type inference failed")
 	_, err := ra.RunConvergenceLoop(func(_ []*UnresolvedIndirectJump) (map[disasm.Address]*ResolvedTargetSet, error) {
-		return nil, resolveErr
+		return nil, errTestTypeInferenceFailed
 	})
 
-	if !errors.Is(err, resolveErr) {
+	if !errors.Is(err, errTestTypeInferenceFailed) {
 		t.Errorf("expected resolve error to propagate, got %v", err)
 	}
 }

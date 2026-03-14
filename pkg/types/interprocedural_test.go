@@ -10,15 +10,6 @@ import (
 // helpers
 // ============================================================================
 
-// makeIntSolution creates a TypeSolution with a single variable mapped to an IntType.
-func makeIntSolution(varName string, t ir.Type) *TypeSolution {
-	return &TypeSolution{
-		Types: map[string]ir.Type{
-			varName: t,
-		},
-	}
-}
-
 // emptySolution creates an empty TypeSolution.
 func emptySolution() *TypeSolution {
 	return &TypeSolution{Types: make(map[string]ir.Type)}
@@ -112,13 +103,7 @@ func TestInterproceduralPropagation_ReturnType(t *testing.T) {
 	}
 
 	// A's solution must have "result" = i64
-	aSol := solutions["A"]
-	if aSol.Types["result"] == nil {
-		t.Fatal("A.result should be i64, got nil")
-	}
-	if aSol.Types["result"].String() != i64.String() {
-		t.Errorf("A.result: expected %s, got %s", i64, aSol.Types["result"])
-	}
+	checkReturnVarType(t, solutions["A"], "result", i64)
 }
 
 // ============================================================================
@@ -129,39 +114,43 @@ func TestInterproceduralPropagation_ReturnType(t *testing.T) {
 func TestInterproceduralPropagation_CallingConventionSeed(t *testing.T) {
 	i64 := ir.IntType{Width: ir.Size8, Signed: true}
 	i32 := ir.IntType{Width: ir.Size4, Signed: true}
+	checkIntParamSeeding(t, "F", CallingConventionSystemVAMD64,
+		map[string]ir.Type{"rdi": i64, "rsi": i32}, i64, i32)
+}
+
+// checkIntParamSeeding is a shared helper for integer register parameter seeding tests.
+func checkIntParamSeeding(
+	t *testing.T,
+	funcName FunctionID,
+	conv CallingConvention,
+	regTypes map[string]ir.Type,
+	wantParam0, wantParam1 ir.Type,
+) {
+	t.Helper()
 
 	cg := NewCallGraph()
-	// function F has 2 params, System V ABI
-	cg.AddFunction("F", []ir.Type{nil, nil}, nil, CallingConventionSystemVAMD64)
+	cg.AddFunction(funcName, []ir.Type{nil, nil}, nil, conv)
 
-	// F's solution has RDI=i64, RSI=i32 (from intraprocedural analysis)
-	fSol := &TypeSolution{
-		Types: map[string]ir.Type{
-			"rdi": i64,
-			"rsi": i32,
-		},
-	}
-	solutions := map[FunctionID]*TypeSolution{
-		"F": fSol,
-	}
+	sol := &TypeSolution{Types: regTypes}
+	solutions := map[FunctionID]*TypeSolution{funcName: sol}
 
 	prop := NewInterproceduralPropagator(cg, solutions)
 	if err := prop.Propagate(cg, solutions); err != nil {
 		t.Fatalf("Propagate: %v", err)
 	}
 
-	fSummary := prop.Summary("F")
-	if fSummary == nil {
-		t.Fatal("F summary is nil")
+	summary := prop.Summary(funcName)
+	if summary == nil {
+		t.Fatalf("%s summary is nil", funcName)
 	}
-	if len(fSummary.ParamTypes) < 2 {
-		t.Fatalf("expected at least 2 params, got %d", len(fSummary.ParamTypes))
+	if len(summary.ParamTypes) < 2 {
+		t.Fatalf("expected at least 2 params, got %d", len(summary.ParamTypes))
 	}
-	if fSummary.ParamTypes[0] == nil || fSummary.ParamTypes[0].String() != i64.String() {
-		t.Errorf("param[0] (RDI): expected %s, got %v", i64, fSummary.ParamTypes[0])
+	if summary.ParamTypes[0] == nil || summary.ParamTypes[0].String() != wantParam0.String() {
+		t.Errorf("param[0]: expected %s, got %v", wantParam0, summary.ParamTypes[0])
 	}
-	if fSummary.ParamTypes[1] == nil || fSummary.ParamTypes[1].String() != i32.String() {
-		t.Errorf("param[1] (RSI): expected %s, got %v", i32, fSummary.ParamTypes[1])
+	if summary.ParamTypes[1] == nil || summary.ParamTypes[1].String() != wantParam1.String() {
+		t.Errorf("param[1]: expected %s, got %v", wantParam1, summary.ParamTypes[1])
 	}
 }
 
@@ -550,34 +539,6 @@ func TestApplySummaries(t *testing.T) {
 func TestCallingConvention_MicrosoftX64(t *testing.T) {
 	i64 := ir.IntType{Width: ir.Size8, Signed: true}
 	i32 := ir.IntType{Width: ir.Size4, Signed: true}
-
-	cg := NewCallGraph()
-	cg.AddFunction("G", []ir.Type{nil, nil}, nil, CallingConventionMicrosoftX64)
-
-	gSol := &TypeSolution{
-		Types: map[string]ir.Type{
-			"rcx": i64,
-			"rdx": i32,
-		},
-	}
-	solutions := map[FunctionID]*TypeSolution{"G": gSol}
-
-	prop := NewInterproceduralPropagator(cg, solutions)
-	if err := prop.Propagate(cg, solutions); err != nil {
-		t.Fatalf("Propagate: %v", err)
-	}
-
-	gSummary := prop.Summary("G")
-	if gSummary == nil {
-		t.Fatal("G summary is nil")
-	}
-	if len(gSummary.ParamTypes) < 2 {
-		t.Fatalf("expected at least 2 params, got %d", len(gSummary.ParamTypes))
-	}
-	if gSummary.ParamTypes[0] == nil || gSummary.ParamTypes[0].String() != i64.String() {
-		t.Errorf("param[0] (RCX): expected %s, got %v", i64, gSummary.ParamTypes[0])
-	}
-	if gSummary.ParamTypes[1] == nil || gSummary.ParamTypes[1].String() != i32.String() {
-		t.Errorf("param[1] (RDX): expected %s, got %v", i32, gSummary.ParamTypes[1])
-	}
+	checkIntParamSeeding(t, "G", CallingConventionMicrosoftX64,
+		map[string]ir.Type{"rcx": i64, "rdx": i32}, i64, i32)
 }

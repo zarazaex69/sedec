@@ -131,6 +131,10 @@ func (c TypeConstraint) String() string {
 	case ConstraintParamType:
 		return fmt.Sprintf("%s param[%d] eq %s (conf=%.2f, %s)",
 			c.Left, c.ParamIndex, c.Right, c.Confidence, c.Origin)
+	case ConstraintEquality, ConstraintSubtype, ConstraintPointerTo,
+		ConstraintArrayElement, ConstraintReturnType:
+		return fmt.Sprintf("%s %s %s (conf=%.2f, %s)",
+			c.Left, c.Kind, c.Right, c.Confidence, c.Origin)
 	default:
 		return fmt.Sprintf("%s %s %s (conf=%.2f, %s)",
 			c.Left, c.Kind, c.Right, c.Confidence, c.Origin)

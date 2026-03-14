@@ -11,8 +11,6 @@ import (
 var (
 	// errMaxIterationsReached indicates the feedback loop hit the iteration cap.
 	errMaxIterationsReached = errors.New("incremental re-analysis: max iterations reached without convergence")
-	// errNilFunction indicates a nil ir function was provided.
-	errNilFunction = errors.New("incremental re-analysis: ir function must not be nil")
 )
 
 // ReAnalysisPass identifies which analysis passes must be re-run after a CFG update.

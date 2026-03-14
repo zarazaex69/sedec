@@ -169,7 +169,7 @@ func TestSolveWithMaxSMT_ParamTypeConstraint(t *testing.T) {
 
 // TestSolveWithMaxSMT_SolverClose verifies that calling Close twice on a
 // solver does not panic.
-func TestSolveWithMaxSMT_SolverClose(t *testing.T) {
+func TestSolveWithMaxSMT_SolverClose(_ *testing.T) {
 	solver := smt.NewSolver()
 	solver.Close()
 	// second close must not panic
