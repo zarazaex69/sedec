@@ -55,8 +55,8 @@ func constExpr(c ir.Constant) ir.Expression {
 
 func TestFoldConstants_NilFunction(t *testing.T) {
 	result, err := FoldConstants(nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil {
+		t.Fatal("expected error for nil function")
 	}
 	if result != nil {
 		t.Fatal("expected nil result for nil function")
