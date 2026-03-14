@@ -33,6 +33,8 @@ import (
 
 // TestProperty12 verifies lazy flag elimination achieves >= 95% elimination rate.
 // runs 100+ iterations with gopter-generated ir programs.
+//
+//nolint:dupl // similar test property structure to others
 func TestProperty12(t *testing.T) {
 	params := gopter.DefaultTestParameters()
 	params.MinSuccessfulTests = 100
@@ -246,6 +248,7 @@ func genMultiBlockFlagProgram() gopter.Gen {
 // are consumed. all N-1 preceding ops are eliminated.
 // elimination rate = (N-1)/N. for N >= 20, this is >= 95%.
 func checkFlagEliminationRate(t *testing.T, prog *flagProgram) bool {
+	t.Helper()
 	fn := buildFlagProgramFunction(prog)
 
 	result, err := EliminateFlags(fn, nil, nil)
@@ -283,6 +286,7 @@ func checkFlagEliminationRate(t *testing.T, prog *flagProgram) bool {
 // this is the semantic correctness guarantee: we never eliminate a flag
 // computation that is actually needed.
 func checkSurvivingProducersHaveConsumers(t *testing.T, prog *flagProgram) bool {
+	t.Helper()
 	fn := buildFlagProgramFunction(prog)
 
 	result, err := EliminateFlags(fn, nil, nil)
@@ -311,6 +315,7 @@ func checkSurvivingProducersHaveConsumers(t *testing.T, prog *flagProgram) bool 
 // for example: je only needs ZF, not SF/CF/OF/PF/AF.
 // this validates requirement 10.5.6: selective materialization.
 func checkSelectiveMaterialization(t *testing.T, prog *selectiveFlagProgram) bool {
+	t.Helper()
 	fn := buildSelectiveFlagFunction(prog)
 
 	result, err := EliminateFlags(fn, nil, nil)
@@ -374,6 +379,7 @@ func checkSelectiveMaterialization(t *testing.T, prog *selectiveFlagProgram) boo
 // elimination rate = (N*M - 1) / (N*M).
 // the generator guarantees N*M >= 21, so elimination rate >= 20/21 = 95.2%.
 func checkMultiBlockFlagEliminationRate(t *testing.T, prog *multiBlockFlagProgram) bool {
+	t.Helper()
 	fn := buildMultiBlockFlagFunction(prog)
 
 	result, err := EliminateFlags(fn, nil, nil)
@@ -514,7 +520,9 @@ func buildMultiBlockFlagFunction(prog *multiBlockFlagProgram) *ir.Function {
 	blocks := make(map[ir.BlockID]*ir.BasicBlock)
 
 	// exit blocks: id = numBlocks and numBlocks+1
+	//nolint:gosec // intentional for generating test block IDs
 	exitTrue := ir.BlockID(prog.numBlocks)
+	//nolint:gosec // intentional for generating test block IDs
 	exitFalse := ir.BlockID(prog.numBlocks + 1)
 
 	blocks[exitTrue] = &ir.BasicBlock{
@@ -601,14 +609,6 @@ func describeFlagProgram(prog *flagProgram) string {
 	)
 }
 
-// min returns the minimum of two integers.
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // ============================================================================
 // TestProperty12_AverageEliminationRate reports the average elimination rate
 // across 100 iterations for documentation purposes.
@@ -635,7 +635,7 @@ func TestProperty12_AverageEliminationRate(t *testing.T) {
 	for i := 0; i < iterations; i++ {
 		genParams := gopter.DefaultGenParameters().WithSize(10)
 		result := gen(genParams)
-		prog := result.Result.(*flagProgram)
+		prog := result.Result.(*flagProgram) //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 
 		fn := buildFlagProgramFunction(prog)
 		elimResult, err := EliminateFlags(fn, nil, nil)

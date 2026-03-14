@@ -8,24 +8,18 @@ import (
 )
 
 // buildDCECFG creates a cfg.CFG from block connectivity for dce tests.
-func buildDCECFG(entry cfg.BlockID, blocks map[cfg.BlockID][]cfg.BlockID) *cfg.CFG {
-	return buildLiveCFG(entry, blocks)
+func buildDCECFG(blocks map[cfg.BlockID][]cfg.BlockID) *cfg.CFG {
+	return buildLiveCFG(0, blocks)
 }
 
-// countInstructions returns the total number of instructions across all blocks.
-func countInstructions(fn *ir.Function) int {
-	total := 0
-	for _, block := range fn.Blocks {
-		total += len(block.Instructions)
-	}
-	return total
-}
+// deadVarName is the variable name used for dead (unused) assignments in tests.
+const deadVarName = "dead"
 
 // TestDCE_RemovesDeadAssignment verifies that a dead assignment is removed.
 // bb0: dead_1 = 99; x_1 = 1; return x_1
 // dead_1 is never used, so it must be eliminated.
 func TestDCE_RemovesDeadAssignment(t *testing.T) {
-	cfgGraph := buildDCECFG(0, map[cfg.BlockID][]cfg.BlockID{0: {}})
+	cfgGraph := buildDCECFG(map[cfg.BlockID][]cfg.BlockID{0: {}})
 
 	fn := &ir.Function{
 		Name: "dead_assign",
@@ -33,7 +27,7 @@ func TestDCE_RemovesDeadAssignment(t *testing.T) {
 			0: {
 				ID: 0,
 				Instructions: []ir.IRInstruction{
-					&ir.Assign{Dest: ssaVar("dead", 1), Source: intConst(99)},
+					&ir.Assign{Dest: ssaVar(deadVarName, 1), Source: intConst(99)},
 					&ir.Assign{Dest: ssaVar("x", 1), Source: intConst(1)},
 					&ir.Return{Value: &ir.Variable{Name: "x", Type: intType(), Version: 1}},
 				},
@@ -59,7 +53,7 @@ func TestDCE_RemovesDeadAssignment(t *testing.T) {
 	// verify dead_1 assignment is gone
 	for _, instr := range block.Instructions {
 		if a, ok := instr.(*ir.Assign); ok {
-			if a.Dest.Name == "dead" {
+			if a.Dest.Name == deadVarName {
 				t.Error("dead_1 assignment should have been removed")
 			}
 		}
@@ -70,7 +64,7 @@ func TestDCE_RemovesDeadAssignment(t *testing.T) {
 // the stored value is not used elsewhere.
 // bb0: x_1 = 42; store *0x1000, x_1; return
 func TestDCE_PreservesStore(t *testing.T) {
-	cfgGraph := buildDCECFG(0, map[cfg.BlockID][]cfg.BlockID{0: {}})
+	cfgGraph := buildDCECFG(map[cfg.BlockID][]cfg.BlockID{0: {}})
 
 	fn := &ir.Function{
 		Name: "preserve_store",
@@ -109,7 +103,7 @@ func TestDCE_PreservesStore(t *testing.T) {
 // TestDCE_PreservesCall verifies that calls are never removed.
 // bb0: call foo(); return
 func TestDCE_PreservesCall(t *testing.T) {
-	cfgGraph := buildDCECFG(0, map[cfg.BlockID][]cfg.BlockID{0: {}})
+	cfgGraph := buildDCECFG(map[cfg.BlockID][]cfg.BlockID{0: {}})
 
 	fn := &ir.Function{
 		Name: "preserve_call",
@@ -141,7 +135,7 @@ func TestDCE_PreservesCall(t *testing.T) {
 // bb0: x_1 = load *0x1000; return
 // x_1 is never used after the load.
 func TestDCE_RemovesDeadLoad(t *testing.T) {
-	cfgGraph := buildDCECFG(0, map[cfg.BlockID][]cfg.BlockID{0: {}})
+	cfgGraph := buildDCECFG(map[cfg.BlockID][]cfg.BlockID{0: {}})
 
 	fn := &ir.Function{
 		Name: "dead_load",
@@ -176,7 +170,7 @@ func TestDCE_RemovesDeadLoad(t *testing.T) {
 // bb1: x_1 = 1; return x_1   (unreachable)
 // bb2: return
 func TestDCE_RemovesUnreachableBlock(t *testing.T) {
-	cfgGraph := buildDCECFG(0, map[cfg.BlockID][]cfg.BlockID{
+	cfgGraph := buildDCECFG(map[cfg.BlockID][]cfg.BlockID{
 		0: {2},
 		1: {},
 		2: {},
@@ -231,7 +225,7 @@ func TestDCE_RemovesUnreachableBlock(t *testing.T) {
 // bb0: a_1 = 1; b_1 = a_1 + 2; return
 // b_1 is dead → removed. then a_1 is dead (b_1 was its only use) → removed.
 func TestDCE_ChainedDeadCode(t *testing.T) {
-	cfgGraph := buildDCECFG(0, map[cfg.BlockID][]cfg.BlockID{0: {}})
+	cfgGraph := buildDCECFG(map[cfg.BlockID][]cfg.BlockID{0: {}})
 
 	fn := &ir.Function{
 		Name: "chained_dead",
@@ -270,7 +264,7 @@ func TestDCE_ChainedDeadCode(t *testing.T) {
 // bb0: x_1 = 1; y_1 = x_1 + 2; return y_1
 // all instructions are live.
 func TestDCE_PreservesLiveCode(t *testing.T) {
-	cfgGraph := buildDCECFG(0, map[cfg.BlockID][]cfg.BlockID{0: {}})
+	cfgGraph := buildDCECFG(map[cfg.BlockID][]cfg.BlockID{0: {}})
 
 	fn := &ir.Function{
 		Name: "all_live",
@@ -309,7 +303,7 @@ func TestDCE_PreservesLiveCode(t *testing.T) {
 // bb2: x_3 = phi(x_1 from bb0, x_2 from bb1); return
 // after removing bb1, the phi has one source and x_3 is dead.
 func TestDCE_DeadPhiNode(t *testing.T) {
-	cfgGraph := buildDCECFG(0, map[cfg.BlockID][]cfg.BlockID{
+	cfgGraph := buildDCECFG(map[cfg.BlockID][]cfg.BlockID{
 		0: {2},
 		1: {2},
 		2: {},
@@ -397,7 +391,7 @@ func TestDCE_EmptyFunction(t *testing.T) {
 // bb3: x_3 = phi(x_1, x_2); return x_3
 // dead_0 is never used → removed.
 func TestDCE_IfThenElse(t *testing.T) {
-	cfgGraph := buildDCECFG(0, map[cfg.BlockID][]cfg.BlockID{
+	cfgGraph := buildDCECFG(map[cfg.BlockID][]cfg.BlockID{
 		0: {1, 2},
 		1: {3},
 		2: {3},
@@ -411,7 +405,7 @@ func TestDCE_IfThenElse(t *testing.T) {
 				ID: 0,
 				Instructions: []ir.IRInstruction{
 					&ir.Assign{Dest: ssaVar("cond", 1), Source: intConst(1)},
-					&ir.Assign{Dest: ssaVar("dead", 0), Source: intConst(99)},
+					&ir.Assign{Dest: ssaVar(deadVarName, 0), Source: intConst(99)},
 					&ir.Branch{Condition: varExpr("cond", 1), TrueTarget: 1, FalseTarget: 2},
 				},
 				Successors: []ir.BlockID{1, 2},
@@ -463,7 +457,7 @@ func TestDCE_IfThenElse(t *testing.T) {
 
 	// verify dead_0 is gone from bb0
 	for _, instr := range fn.Blocks[0].Instructions {
-		if a, ok := instr.(*ir.Assign); ok && a.Dest.Name == "dead" {
+		if a, ok := instr.(*ir.Assign); ok && a.Dest.Name == deadVarName {
 			t.Error("dead_0 should have been removed from bb0")
 		}
 	}
@@ -481,7 +475,7 @@ func TestDCE_IfThenElse(t *testing.T) {
 // bb1: jump bb2   (unreachable)
 // bb2: return     (unreachable, only reachable from bb1)
 func TestDCE_MultipleUnreachableBlocks(t *testing.T) {
-	cfgGraph := buildDCECFG(0, map[cfg.BlockID][]cfg.BlockID{
+	cfgGraph := buildDCECFG(map[cfg.BlockID][]cfg.BlockID{
 		0: {},
 		1: {2},
 		2: {},
@@ -528,7 +522,7 @@ func TestDCE_MultipleUnreachableBlocks(t *testing.T) {
 // TestDCE_IterationsConverge verifies that the fixed-point iteration terminates
 // and that the iteration count is reasonable.
 func TestDCE_IterationsConverge(t *testing.T) {
-	cfgGraph := buildDCECFG(0, map[cfg.BlockID][]cfg.BlockID{0: {}})
+	cfgGraph := buildDCECFG(map[cfg.BlockID][]cfg.BlockID{0: {}})
 
 	fn := &ir.Function{
 		Name: "converge",
@@ -577,7 +571,7 @@ func TestDCE_IterationsConverge(t *testing.T) {
 // bb0: dead_1 = 1; store *0x2000, dead_1; dead_2 = 2; return
 // dead_1 is used by the store (so it is live), dead_2 is truly dead.
 func TestDCE_PreservesStoreAdjacentToDeadCode(t *testing.T) {
-	cfgGraph := buildDCECFG(0, map[cfg.BlockID][]cfg.BlockID{0: {}})
+	cfgGraph := buildDCECFG(map[cfg.BlockID][]cfg.BlockID{0: {}})
 
 	fn := &ir.Function{
 		Name: "store_adjacent_dead",
@@ -585,13 +579,13 @@ func TestDCE_PreservesStoreAdjacentToDeadCode(t *testing.T) {
 			0: {
 				ID: 0,
 				Instructions: []ir.IRInstruction{
-					&ir.Assign{Dest: ssaVar("dead", 1), Source: intConst(1)},
+					&ir.Assign{Dest: ssaVar(deadVarName, 1), Source: intConst(1)},
 					&ir.Store{
 						Address: intConst(0x2000),
-						Value:   varExpr("dead", 1),
+						Value:   varExpr(deadVarName, 1),
 						Size:    ir.Size8,
 					},
-					&ir.Assign{Dest: ssaVar("dead", 2), Source: intConst(2)},
+					&ir.Assign{Dest: ssaVar(deadVarName, 2), Source: intConst(2)},
 					&ir.Return{},
 				},
 			},
@@ -622,7 +616,7 @@ func TestDCE_PreservesStoreAdjacentToDeadCode(t *testing.T) {
 
 	// verify dead_2 is gone
 	for _, instr := range fn.Blocks[0].Instructions {
-		if a, ok := instr.(*ir.Assign); ok && a.Dest.Name == "dead" && a.Dest.Version == 2 {
+		if a, ok := instr.(*ir.Assign); ok && a.Dest.Name == deadVarName && a.Dest.Version == 2 {
 			t.Error("dead_2 should have been removed")
 		}
 	}
@@ -634,7 +628,7 @@ func TestDCE_PreservesStoreAdjacentToDeadCode(t *testing.T) {
 // result_1 is used by dead_1, but dead_1 is dead. however, the call itself
 // must be preserved (side effects). dead_1 should be removed.
 func TestDCE_PreservesCallWithDeadResult(t *testing.T) {
-	cfgGraph := buildDCECFG(0, map[cfg.BlockID][]cfg.BlockID{0: {}})
+	cfgGraph := buildDCECFG(map[cfg.BlockID][]cfg.BlockID{0: {}})
 
 	resultVar := ssaVar("result", 1)
 	fn := &ir.Function{
@@ -648,7 +642,7 @@ func TestDCE_PreservesCallWithDeadResult(t *testing.T) {
 						Target: ir.VariableExpr{Var: ir.Variable{Name: "foo", Type: ir.FunctionType{}}},
 					},
 					&ir.Assign{
-						Dest: ssaVar("dead", 1),
+						Dest: ssaVar(deadVarName, 1),
 						Source: &ir.BinaryOp{
 							Op:    ir.BinOpAdd,
 							Left:  varExpr("result", 1),
@@ -689,7 +683,7 @@ func TestDCE_PreservesCallWithDeadResult(t *testing.T) {
 // bb0: a_1 = 1; b_1 = 2; store *a_1, b_1; store *0x3000, a_1; return
 // a_1 and b_1 are used by stores, so they must be preserved.
 func TestDCE_PreservesMultipleStores(t *testing.T) {
-	cfgGraph := buildDCECFG(0, map[cfg.BlockID][]cfg.BlockID{0: {}})
+	cfgGraph := buildDCECFG(map[cfg.BlockID][]cfg.BlockID{0: {}})
 
 	fn := &ir.Function{
 		Name: "multiple_stores",
@@ -735,7 +729,7 @@ func TestDCE_PreservesMultipleStores(t *testing.T) {
 // bb0: r1 = call f1(); r2 = call f2(); r3 = call f3(); return
 // all three calls must be preserved regardless of whether r1, r2, r3 are used.
 func TestDCE_SideEffectCallChain(t *testing.T) {
-	cfgGraph := buildDCECFG(0, map[cfg.BlockID][]cfg.BlockID{0: {}})
+	cfgGraph := buildDCECFG(map[cfg.BlockID][]cfg.BlockID{0: {}})
 
 	r1 := ssaVar("r", 1)
 	r2 := ssaVar("r", 2)
@@ -793,7 +787,7 @@ func TestDCE_SideEffectCallChain(t *testing.T) {
 // bb0: live_1 = 10; dead_1 = 99; store *0x4000, live_1; return live_1
 // dead_1 is dead; live_1 is used by both store and return.
 func TestDCE_MixedLiveDeadWithStore(t *testing.T) {
-	cfgGraph := buildDCECFG(0, map[cfg.BlockID][]cfg.BlockID{0: {}})
+	cfgGraph := buildDCECFG(map[cfg.BlockID][]cfg.BlockID{0: {}})
 
 	fn := &ir.Function{
 		Name: "mixed_live_dead_store",
@@ -802,7 +796,7 @@ func TestDCE_MixedLiveDeadWithStore(t *testing.T) {
 				ID: 0,
 				Instructions: []ir.IRInstruction{
 					&ir.Assign{Dest: ssaVar("live", 1), Source: intConst(10)},
-					&ir.Assign{Dest: ssaVar("dead", 1), Source: intConst(99)},
+					&ir.Assign{Dest: ssaVar(deadVarName, 1), Source: intConst(99)},
 					&ir.Store{
 						Address: intConst(0x4000),
 						Value:   varExpr("live", 1),
@@ -854,7 +848,7 @@ func TestDCE_MixedLiveDeadWithStore(t *testing.T) {
 // bb1: return; bb2: return
 // cond_1 is used by the branch, so it is live. the branch itself must be preserved.
 func TestDCE_BranchAlwaysPreserved(t *testing.T) {
-	cfgGraph := buildDCECFG(0, map[cfg.BlockID][]cfg.BlockID{
+	cfgGraph := buildDCECFG(map[cfg.BlockID][]cfg.BlockID{
 		0: {1, 2},
 		1: {},
 		2: {},

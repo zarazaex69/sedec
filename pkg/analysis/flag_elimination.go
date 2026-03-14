@@ -186,10 +186,10 @@ func NewFlagEliminator(
 // can be eliminated.
 func (e *FlagEliminator) Analyze() (*EliminationResult, error) {
 	if e.function == nil {
-		return nil, fmt.Errorf("flag elimination: function is nil")
+		return nil, fmt.Errorf("flag elimination: %w", ErrNilFunction)
 	}
 	if len(e.function.Blocks) == 0 {
-		return nil, fmt.Errorf("flag elimination: function %q has no blocks", e.function.Name)
+		return nil, fmt.Errorf("flag elimination: function %q: %w", e.function.Name, ErrNoBlocks)
 	}
 
 	// phase 1: scan all instructions to identify producers and consumers
@@ -467,6 +467,8 @@ func (e *FlagEliminator) buildResult() *EliminationResult {
 
 // reversePostOrder computes a reverse postorder traversal of the cfg.
 // identical to the one in LiveVarsAnalyzer — reused here for consistency.
+//
+//nolint:dupl // similar to other analyzers
 func (e *FlagEliminator) reversePostOrder() []ir.BlockID {
 	visited := make(map[ir.BlockID]bool)
 	postOrder := make([]ir.BlockID, 0, len(e.function.Blocks))
@@ -518,10 +520,10 @@ func EliminateFlags(
 	return eliminator.Analyze()
 }
 
-// GetNeededFlagsAt returns the specific flags needed at a given program point.
+// GetNeededFlagsAt returns the specific flags needed at a given program point as a bitmask.
 // returns 0 if the producer at that point is dead (all flags eliminated).
-func (r *EliminationResult) GetNeededFlagsAt(point ProgramPoint) flagSet {
-	return r.NeededFlags[point]
+func (r *EliminationResult) GetNeededFlagsAt(point ProgramPoint) uint8 {
+	return uint8(r.NeededFlags[point])
 }
 
 // IsProducerEliminated reports whether the flag producer at the given point is dead.

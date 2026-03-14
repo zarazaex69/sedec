@@ -31,6 +31,8 @@ import (
 
 // TestProperty11 verifies dce safety: side effects are always preserved.
 // runs 100+ iterations with gopter-generated ir programs.
+//
+//nolint:dupl // similar test property structure to others
 func TestProperty11(t *testing.T) {
 	params := gopter.DefaultTestParameters()
 	params.MinSuccessfulTests = 100
@@ -136,6 +138,7 @@ func genPureDCEProgram() gopter.Gen {
 // checkStoresPreserved verifies that all store instructions survive dce.
 // property: count(stores, dce(P)) == count(stores, P)
 func checkStoresPreserved(t *testing.T, prog *dceProgram) bool {
+	t.Helper()
 	fn, cfgGraph := buildDCETestFunction(prog)
 
 	storesBefore := countInstructionType(fn, func(i ir.IRInstruction) bool {
@@ -165,6 +168,7 @@ func checkStoresPreserved(t *testing.T, prog *dceProgram) bool {
 // checkCallsPreserved verifies that all call instructions survive dce.
 // property: count(calls, dce(P)) == count(calls, P)
 func checkCallsPreserved(t *testing.T, prog *dceProgram) bool {
+	t.Helper()
 	fn, cfgGraph := buildDCETestFunction(prog)
 
 	callsBefore := countInstructionType(fn, func(i ir.IRInstruction) bool {
@@ -203,6 +207,7 @@ func checkCallsPreserved(t *testing.T, prog *dceProgram) bool {
 //
 //	v is defined in dce(P)
 func checkSideEffectOperandsPreserved(t *testing.T, prog *dceProgram) bool {
+	t.Helper()
 	fn, cfgGraph := buildDCETestFunction(prog)
 
 	// collect all variables used as operands of side-effecting instructions
@@ -236,6 +241,7 @@ func checkSideEffectOperandsPreserved(t *testing.T, prog *dceProgram) bool {
 //
 //	count(assigns, dce(P)) == 0
 func checkDeadDefinitionsRemoved(t *testing.T, prog *pureDCEProgram) bool {
+	t.Helper()
 	fn, cfgGraph := buildPureDCEFunction(prog)
 
 	assignsBefore := countInstructionType(fn, func(i ir.IRInstruction) bool {
@@ -354,7 +360,7 @@ func buildDCETestFunction(prog *dceProgram) (*ir.Function, *cfg.CFG) {
 		EntryBlock: 0,
 	}
 
-	cfgGraph := buildDCECFG(0, map[cfg.BlockID][]cfg.BlockID{0: {}})
+	cfgGraph := buildDCECFG(map[cfg.BlockID][]cfg.BlockID{0: {}})
 	return fn, cfgGraph
 }
 
@@ -406,7 +412,7 @@ func buildPureDCEFunction(prog *pureDCEProgram) (*ir.Function, *cfg.CFG) {
 		EntryBlock: 0,
 	}
 
-	cfgGraph := buildDCECFG(0, map[cfg.BlockID][]cfg.BlockID{0: {}})
+	cfgGraph := buildDCECFG(map[cfg.BlockID][]cfg.BlockID{0: {}})
 	return fn, cfgGraph
 }
 

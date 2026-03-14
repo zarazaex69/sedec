@@ -1,8 +1,13 @@
 package analysis
 
 import (
+	"errors"
+
 	"github.com/zarazaex69/sedec/pkg/ir"
 )
+
+// ErrNilFunction indicates that a nil function was passed to an analysis pass.
+var ErrNilFunction = errors.New("function is nil")
 
 // FoldingResult holds statistics from a constant folding pass.
 type FoldingResult struct {
@@ -40,7 +45,7 @@ type FoldingResult struct {
 //	-(-x)  = x
 func FoldConstants(function *ir.Function) (*FoldingResult, error) {
 	if function == nil {
-		return nil, nil
+		return nil, ErrNilFunction
 	}
 
 	result := &FoldingResult{}
@@ -215,6 +220,8 @@ func (f *constantFolder) foldCastExpr(e *ir.Cast) ir.Expression {
 //	true  || x = true,  x || true  = true
 //	true  && x = x,     x && true  = x
 //	false || x = x,     x || false = x
+//
+//nolint:gocyclo // algebraic identites naturally involve many cases
 func (f *constantFolder) applyAlgebraicIdentity(
 	op ir.BinaryOperator,
 	left, right ir.Expression,
@@ -333,6 +340,9 @@ func (f *constantFolder) applyAlgebraicIdentity(
 				return right, true // false || x = x
 			}
 		}
+
+	case ir.BinOpMod, ir.BinOpUMod, ir.BinOpEq, ir.BinOpNe, ir.BinOpLt, ir.BinOpLe, ir.BinOpGt, ir.BinOpGe, ir.BinOpULt, ir.BinOpULe, ir.BinOpUGt, ir.BinOpUGe:
+		// no algebraic identities for these operators
 	}
 
 	return nil, false
@@ -371,6 +381,9 @@ func (f *constantFolder) applySameOperandIdentity(
 	case ir.BinOpAnd, ir.BinOpOr:
 		// x & x = x,  x | x = x
 		return left, true
+
+	case ir.BinOpAdd, ir.BinOpMul, ir.BinOpDiv, ir.BinOpMod, ir.BinOpUDiv, ir.BinOpUMod, ir.BinOpShl, ir.BinOpShr, ir.BinOpSar, ir.BinOpEq, ir.BinOpNe, ir.BinOpLt, ir.BinOpLe, ir.BinOpGt, ir.BinOpGe, ir.BinOpULt, ir.BinOpULe, ir.BinOpUGt, ir.BinOpUGe, ir.BinOpLogicalAnd, ir.BinOpLogicalOr:
+		// no same-operand identities for these operators
 	}
 
 	return nil, false
@@ -423,6 +436,7 @@ func isIntAllOnes(c ir.Constant) bool {
 		return false
 	}
 	mask := widthMask(ic.Width)
+	//nolint:gosec // intentional conversion for bitmask matching
 	return uint64(ic.Value)&mask == mask
 }
 

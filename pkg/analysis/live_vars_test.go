@@ -9,7 +9,7 @@ import (
 
 // buildLiveCFG is a helper that creates a cfg.CFG from block connectivity.
 // reuses the same pattern as buildCFGAndDomTree in reaching_defs_test.go.
-func buildLiveCFG(entry cfg.BlockID, blocks map[cfg.BlockID][]cfg.BlockID) *cfg.CFG {
+func buildLiveCFG(entry cfg.BlockID, blocks map[cfg.BlockID][]cfg.BlockID) *cfg.CFG { //nolint:unparam // entry is always 0 but kept for API symmetry
 	cfgGraph := cfg.NewCFG()
 	cfgGraph.Entry = entry
 
@@ -117,52 +117,7 @@ func TestLiveVars_IfThenElse(t *testing.T) {
 		3: {},
 	})
 
-	function := &ir.Function{
-		Name: "if_then_else",
-		Blocks: map[ir.BlockID]*ir.BasicBlock{
-			0: {
-				ID: 0,
-				Instructions: []ir.IRInstruction{
-					&ir.Assign{Dest: ssaVar("cond", 1), Source: intConst(1)},
-					&ir.Branch{Condition: varExpr("cond", 1), TrueTarget: 1, FalseTarget: 2},
-				},
-				Successors: []ir.BlockID{1, 2},
-			},
-			1: {
-				ID: 1,
-				Instructions: []ir.IRInstruction{
-					&ir.Assign{Dest: ssaVar("x", 1), Source: intConst(10)},
-					&ir.Jump{Target: 3},
-				},
-				Predecessors: []ir.BlockID{0},
-				Successors:   []ir.BlockID{3},
-			},
-			2: {
-				ID: 2,
-				Instructions: []ir.IRInstruction{
-					&ir.Assign{Dest: ssaVar("x", 2), Source: intConst(20)},
-					&ir.Jump{Target: 3},
-				},
-				Predecessors: []ir.BlockID{0},
-				Successors:   []ir.BlockID{3},
-			},
-			3: {
-				ID: 3,
-				Instructions: []ir.IRInstruction{
-					&ir.Phi{
-						Dest: ssaVar("x", 3),
-						Sources: []ir.PhiSource{
-							{Block: 1, Var: ssaVar("x", 1)},
-							{Block: 2, Var: ssaVar("x", 2)},
-						},
-					},
-					&ir.Return{Value: &ir.Variable{Name: "x", Type: intType(), Version: 3}},
-				},
-				Predecessors: []ir.BlockID{1, 2},
-			},
-		},
-		EntryBlock: 0,
-	}
+	function := makeIfThenElseFunction()
 
 	analyzer := NewLiveVarsAnalyzer(function, cfgGraph, nil)
 	result, err := analyzer.Compute()
@@ -217,57 +172,7 @@ func TestLiveVars_WhileLoop(t *testing.T) {
 		3: {},
 	})
 
-	function := &ir.Function{
-		Name: "while_loop",
-		Blocks: map[ir.BlockID]*ir.BasicBlock{
-			0: {
-				ID: 0,
-				Instructions: []ir.IRInstruction{
-					&ir.Assign{Dest: ssaVar("i", 1), Source: intConst(0)},
-				},
-				Successors: []ir.BlockID{1},
-			},
-			1: {
-				ID: 1,
-				Instructions: []ir.IRInstruction{
-					&ir.Phi{
-						Dest: ssaVar("i", 2),
-						Sources: []ir.PhiSource{
-							{Block: 0, Var: ssaVar("i", 1)},
-							{Block: 2, Var: ssaVar("i", 3)},
-						},
-					},
-					&ir.Branch{
-						Condition:   ir.BinaryOp{Op: ir.BinOpLt, Left: varExpr("i", 2), Right: intConst(10)},
-						TrueTarget:  2,
-						FalseTarget: 3,
-					},
-				},
-				Predecessors: []ir.BlockID{0, 2},
-				Successors:   []ir.BlockID{2, 3},
-			},
-			2: {
-				ID: 2,
-				Instructions: []ir.IRInstruction{
-					&ir.Assign{
-						Dest:   ssaVar("i", 3),
-						Source: ir.BinaryOp{Op: ir.BinOpAdd, Left: varExpr("i", 2), Right: intConst(1)},
-					},
-					&ir.Jump{Target: 1},
-				},
-				Predecessors: []ir.BlockID{1},
-				Successors:   []ir.BlockID{1},
-			},
-			3: {
-				ID: 3,
-				Instructions: []ir.IRInstruction{
-					&ir.Return{Value: &ir.Variable{Name: "i", Type: intType(), Version: 2}},
-				},
-				Predecessors: []ir.BlockID{1},
-			},
-		},
-		EntryBlock: 0,
-	}
+	function := makeWhileLoopFunction()
 
 	analyzer := NewLiveVarsAnalyzer(function, cfgGraph, nil)
 	result, err := analyzer.Compute()
@@ -778,31 +683,8 @@ func TestLiveVars_BlockLiveInOut(t *testing.T) {
 		1: {},
 	})
 
-	function := &ir.Function{
-		Name: "block_live",
-		Blocks: map[ir.BlockID]*ir.BasicBlock{
-			0: {
-				ID: 0,
-				Instructions: []ir.IRInstruction{
-					&ir.Assign{Dest: ssaVar("x", 1), Source: intConst(1)},
-					&ir.Assign{Dest: ssaVar("y", 1), Source: intConst(2)},
-				},
-				Successors: []ir.BlockID{1},
-			},
-			1: {
-				ID: 1,
-				Instructions: []ir.IRInstruction{
-					&ir.Assign{
-						Dest:   ssaVar("z", 1),
-						Source: ir.BinaryOp{Op: ir.BinOpAdd, Left: varExpr("x", 1), Right: varExpr("y", 1)},
-					},
-					&ir.Return{Value: &ir.Variable{Name: "z", Type: intType(), Version: 1}},
-				},
-				Predecessors: []ir.BlockID{0},
-			},
-		},
-		EntryBlock: 0,
-	}
+	function := makeMultiVarFunction()
+	function.Name = "block_live"
 
 	analyzer := NewLiveVarsAnalyzer(function, cfgGraph, nil)
 	result, err := analyzer.Compute()

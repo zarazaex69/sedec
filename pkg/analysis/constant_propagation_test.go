@@ -22,20 +22,11 @@ func floatConst(v float64) ir.Expression {
 }
 
 // buildSimpleCFG creates a minimal cfg.CFG for single-block functions.
-func buildSimpleCFG(entry cfg.BlockID) *cfg.CFG {
+func buildSimpleCFG() *cfg.CFG {
+	entry := cfg.BlockID(0)
 	g := cfg.NewCFG()
 	g.Entry = entry
 	g.AddBlock(&cfg.BasicBlock{ID: entry})
-	return g
-}
-
-// buildLinearCFG creates a linear cfg: entry -> next.
-func buildLinearCFG(entry, next cfg.BlockID) *cfg.CFG {
-	g := cfg.NewCFG()
-	g.Entry = entry
-	g.AddBlock(&cfg.BasicBlock{ID: entry, Successors: []cfg.BlockID{next}})
-	g.AddBlock(&cfg.BasicBlock{ID: next, Predecessors: []cfg.BlockID{entry}})
-	g.AddEdge(entry, next, cfg.EdgeTypeFallthrough)
 	return g
 }
 
@@ -172,7 +163,7 @@ func TestFoldBinaryOp_OverflowWrapping(t *testing.T) {
 	if !ok {
 		t.Fatal("expected fold to succeed")
 	}
-	ic := got.(ir.IntConstant)
+	ic := got.(ir.IntConstant) //nolint:forcetypeassert // test: value is always IntConstant here
 	if ic.Value != 0 {
 		t.Errorf("expected 0 (overflow wrap), got %d", ic.Value)
 	}
@@ -187,7 +178,7 @@ func TestFoldUnaryOp(t *testing.T) {
 		if !ok {
 			t.Fatal("expected success")
 		}
-		if got.(ir.IntConstant).Value != -42 {
+		if got.(ir.IntConstant).Value != -42 { //nolint:forcetypeassert // test: value is always IntConstant here
 			t.Errorf("expected -42, got %v", got)
 		}
 	})
@@ -198,7 +189,7 @@ func TestFoldUnaryOp(t *testing.T) {
 		if !ok {
 			t.Fatal("expected success")
 		}
-		if got.(ir.IntConstant).Value != -1 {
+		if got.(ir.IntConstant).Value != -1 { //nolint:forcetypeassert // test: value is always IntConstant here
 			t.Errorf("expected -1, got %v", got)
 		}
 	})
@@ -208,7 +199,7 @@ func TestFoldUnaryOp(t *testing.T) {
 		if !ok {
 			t.Fatal("expected success")
 		}
-		if got.(ir.BoolConstant).Value != false {
+		if got.(ir.BoolConstant).Value != false { //nolint:forcetypeassert // test: value is always BoolConstant here
 			t.Error("expected false")
 		}
 	})
@@ -218,7 +209,7 @@ func TestFoldUnaryOp(t *testing.T) {
 		if !ok {
 			t.Fatal("expected success")
 		}
-		if got.(ir.BoolConstant).Value != true {
+		if got.(ir.BoolConstant).Value != true { //nolint:forcetypeassert // test: value is always BoolConstant here
 			t.Error("expected true for !0")
 		}
 	})
@@ -233,7 +224,7 @@ func TestFoldCast(t *testing.T) {
 		if !ok {
 			t.Fatal("expected success")
 		}
-		if got.(ir.IntConstant).Value != 0xFF {
+		if got.(ir.IntConstant).Value != 0xFF { //nolint:forcetypeassert // test: value is always IntConstant here
 			t.Errorf("expected 0xFF, got %v", got)
 		}
 	})
@@ -244,7 +235,7 @@ func TestFoldCast(t *testing.T) {
 		if !ok {
 			t.Fatal("expected success")
 		}
-		if got.(ir.FloatConstant).Value != 42.0 {
+		if got.(ir.FloatConstant).Value != 42.0 { //nolint:forcetypeassert // test: value type is known at this point
 			t.Errorf("expected 42.0, got %v", got)
 		}
 	})
@@ -254,7 +245,7 @@ func TestFoldCast(t *testing.T) {
 		if !ok {
 			t.Fatal("expected success")
 		}
-		if got.(ir.IntConstant).Value != 1 {
+		if got.(ir.IntConstant).Value != 1 { //nolint:forcetypeassert // test: value type is known at this point
 			t.Errorf("expected 1, got %v", got)
 		}
 	})
@@ -268,7 +259,7 @@ func TestFoldCast(t *testing.T) {
 // bb0: x_1 = 10; y_1 = 32; z_1 = x_1 + y_1; return z_1
 // expected: z_1 = 42 (constant)
 func TestConstProp_LinearCode(t *testing.T) {
-	cfgGraph := buildSimpleCFG(0)
+	cfgGraph := buildSimpleCFG()
 	domTree := cfg.NewDominatorTree(cfgGraph)
 	domTree.Idom = map[cfg.BlockID]cfg.BlockID{0: 0}
 	domTree.Children = map[cfg.BlockID][]cfg.BlockID{0: {}}
@@ -333,6 +324,8 @@ func TestConstProp_LinearCode(t *testing.T) {
 // bb2: x_2 = 42; jump bb3
 // bb3: x_3 = phi(x_1, x_2); return x_3
 // expected: x_3 = 42
+//
+//nolint:dupl // similar test setup
 func TestConstProp_PhiAllSameConstant(t *testing.T) {
 	cfgGraph, domTree := buildCFGAndDomTree(
 		0,
@@ -411,7 +404,7 @@ func TestConstProp_PhiAllSameConstant(t *testing.T) {
 	if c == nil {
 		t.Fatal("expected non-nil constant for x_3")
 	}
-	if c.(ir.IntConstant).Value != 42 {
+	if c.(ir.IntConstant).Value != 42 { //nolint:forcetypeassert // test: value type is known at this point
 		t.Errorf("expected 42, got %v", c)
 	}
 }
@@ -503,6 +496,8 @@ func TestConstProp_PhiDifferentConstants(t *testing.T) {
 // bb2: x_2 = 99; jump bb3  (unreachable)
 // bb3: x_3 = phi(x_1, x_2)
 // expected: x_3 = 42 (only bb1 is reachable)
+//
+//nolint:dupl // similar test setup
 func TestConstProp_ConditionalConstantBranch(t *testing.T) {
 	cfgGraph, domTree := buildCFGAndDomTree(
 		0,
@@ -579,7 +574,7 @@ func TestConstProp_ConditionalConstantBranch(t *testing.T) {
 		t.Error("expected x_3 to be constant (only true branch reachable)")
 	}
 	c := result.GetConstant(x3)
-	if c != nil && c.(ir.IntConstant).Value != 42 {
+	if c != nil && c.(ir.IntConstant).Value != 42 { //nolint:forcetypeassert // test: value type is known at this point
 		t.Errorf("expected x_3 = 42, got %v", c)
 	}
 }
@@ -689,7 +684,7 @@ func TestConstProp_WhileLoopInvariant(t *testing.T) {
 // a = 2; b = a * 3; c = b + 4; d = c - 2
 // expected: a=2, b=6, c=10, d=8
 func TestConstProp_ChainedPropagation(t *testing.T) {
-	cfgGraph := buildSimpleCFG(0)
+	cfgGraph := buildSimpleCFG()
 	domTree := cfg.NewDominatorTree(cfgGraph)
 	domTree.Idom = map[cfg.BlockID]cfg.BlockID{0: 0}
 	domTree.Children = map[cfg.BlockID][]cfg.BlockID{0: {}}
@@ -739,7 +734,7 @@ func TestConstProp_ChainedPropagation(t *testing.T) {
 			t.Errorf("expected %s to be constant", v)
 			continue
 		}
-		got := result.GetConstant(v).(ir.IntConstant).Value
+		got := result.GetConstant(v).(ir.IntConstant).Value //nolint:forcetypeassert // test: value type is known at this point
 		if got != want {
 			t.Errorf("%s: expected %d, got %d", v, want, got)
 		}
@@ -749,7 +744,7 @@ func TestConstProp_ChainedPropagation(t *testing.T) {
 // TestConstProp_LoadIsBottom verifies that load results are always overdefined.
 // loads may read from memory that changes at runtime.
 func TestConstProp_LoadIsBottom(t *testing.T) {
-	cfgGraph := buildSimpleCFG(0)
+	cfgGraph := buildSimpleCFG()
 	domTree := cfg.NewDominatorTree(cfgGraph)
 	domTree.Idom = map[cfg.BlockID]cfg.BlockID{0: 0}
 	domTree.Children = map[cfg.BlockID][]cfg.BlockID{0: {}}
@@ -806,7 +801,7 @@ func TestConstProp_EmptyFunction(t *testing.T) {
 
 // TestConstProp_ReplacedCount verifies that ApplyToFunction correctly counts replacements.
 func TestConstProp_ReplacedCount(t *testing.T) {
-	cfgGraph := buildSimpleCFG(0)
+	cfgGraph := buildSimpleCFG()
 	domTree := cfg.NewDominatorTree(cfgGraph)
 	domTree.Idom = map[cfg.BlockID]cfg.BlockID{0: 0}
 	domTree.Children = map[cfg.BlockID][]cfg.BlockID{0: {}}
@@ -847,7 +842,7 @@ func TestConstProp_ReplacedCount(t *testing.T) {
 
 // TestConstProp_FloatArithmetic verifies constant propagation for float operations.
 func TestConstProp_FloatArithmetic(t *testing.T) {
-	cfgGraph := buildSimpleCFG(0)
+	cfgGraph := buildSimpleCFG()
 	domTree := cfg.NewDominatorTree(cfgGraph)
 	domTree.Idom = map[cfg.BlockID]cfg.BlockID{0: 0}
 	domTree.Children = map[cfg.BlockID][]cfg.BlockID{0: {}}
@@ -910,7 +905,7 @@ func TestConstProp_ArithmeticRightShift(t *testing.T) {
 	if !ok {
 		t.Fatal("expected fold to succeed")
 	}
-	ic := got.(ir.IntConstant)
+	ic := got.(ir.IntConstant) //nolint:forcetypeassert // test: value type is known at this point
 	if ic.Value != -4 {
 		t.Errorf("expected -4 (arithmetic right shift), got %d", ic.Value)
 	}
@@ -1020,7 +1015,7 @@ func TestConstProp_SSAChainThroughPhi(t *testing.T) {
 		t.Error("expected b_3 to be constant (phi of 10, 10)")
 	}
 	if c := result.GetConstant(b3); c != nil {
-		if c.(ir.IntConstant).Value != 10 {
+		if c.(ir.IntConstant).Value != 10 { //nolint:forcetypeassert // test: value type is known at this point
 			t.Errorf("expected b_3 = 10, got %v", c)
 		}
 	}
@@ -1030,7 +1025,7 @@ func TestConstProp_SSAChainThroughPhi(t *testing.T) {
 		t.Error("expected c_1 to be constant (10 + 1 = 11)")
 	}
 	if c := result.GetConstant(c1); c != nil {
-		if c.(ir.IntConstant).Value != 11 {
+		if c.(ir.IntConstant).Value != 11 { //nolint:forcetypeassert // test: value type is known at this point
 			t.Errorf("expected c_1 = 11, got %v", c)
 		}
 	}
@@ -1041,7 +1036,7 @@ func TestConstProp_SSAChainThroughPhi(t *testing.T) {
 // bb0: x_1 = 255 (u8); y_1 = (i64)(x_1); z_1 = y_1 + 1
 // expected: y_1 = 255, z_1 = 256
 func TestConstProp_CastPropagation(t *testing.T) {
-	cfgGraph := buildSimpleCFG(0)
+	cfgGraph := buildSimpleCFG()
 	domTree := cfg.NewDominatorTree(cfgGraph)
 	domTree.Idom = map[cfg.BlockID]cfg.BlockID{0: 0}
 	domTree.Children = map[cfg.BlockID][]cfg.BlockID{0: {}}
@@ -1090,7 +1085,7 @@ func TestConstProp_CastPropagation(t *testing.T) {
 		t.Error("expected z_1 to be constant (255 + 1 = 256)")
 	}
 	if c := result.GetConstant(z1); c != nil {
-		if c.(ir.IntConstant).Value != 256 {
+		if c.(ir.IntConstant).Value != 256 { //nolint:forcetypeassert // test: value type is known at this point
 			t.Errorf("expected z_1 = 256, got %v", c)
 		}
 	}
@@ -1103,6 +1098,8 @@ func TestConstProp_CastPropagation(t *testing.T) {
 // bb2: x_2 = 42 (reachable)
 // bb3: x_3 = phi(x_1, x_2)
 // expected: x_3 = 42 (only bb2 is reachable)
+//
+//nolint:dupl // similar test setup
 func TestConstProp_UnreachablePhiSource(t *testing.T) {
 	cfgGraph, domTree := buildCFGAndDomTree(
 		0,
@@ -1176,7 +1173,7 @@ func TestConstProp_UnreachablePhiSource(t *testing.T) {
 		t.Error("expected x_3 to be constant (only false branch reachable, x_2=42)")
 	}
 	if c := result.GetConstant(x3); c != nil {
-		if c.(ir.IntConstant).Value != 42 {
+		if c.(ir.IntConstant).Value != 42 { //nolint:forcetypeassert // test: value type is known at this point
 			t.Errorf("expected x_3 = 42, got %v", c)
 		}
 	}
@@ -1242,7 +1239,7 @@ func TestConstProp_BooleanShortCircuit(t *testing.T) {
 		t.Error("expected c_1 to be constant (true && false = false)")
 	}
 	if c := result.GetConstant(c1); c != nil {
-		if c.(ir.BoolConstant).Value != false {
+		if c.(ir.BoolConstant).Value != false { //nolint:forcetypeassert // test: value type is known at this point
 			t.Errorf("expected c_1 = false, got %v", c)
 		}
 	}
@@ -1252,7 +1249,7 @@ func TestConstProp_BooleanShortCircuit(t *testing.T) {
 // a_1 = 1; b_1 = a_1 + 1; c_1 = b_1 * 2; d_1 = c_1 - 1; e_1 = d_1 / 3
 // expected: a=1, b=2, c=4, d=3, e=1
 func TestConstProp_MultiLevelSSAChain(t *testing.T) {
-	cfgGraph := buildSimpleCFG(0)
+	cfgGraph := buildSimpleCFG()
 	domTree := cfg.NewDominatorTree(cfgGraph)
 	domTree.Idom = map[cfg.BlockID]cfg.BlockID{0: 0}
 	domTree.Children = map[cfg.BlockID][]cfg.BlockID{0: {}}
@@ -1300,7 +1297,7 @@ func TestConstProp_MultiLevelSSAChain(t *testing.T) {
 			t.Errorf("expected %s to be constant", v.String())
 			continue
 		}
-		got := result.GetConstant(v).(ir.IntConstant).Value
+		got := result.GetConstant(v).(ir.IntConstant).Value //nolint:forcetypeassert // test: value type is known at this point
 		if got != want {
 			t.Errorf("%s: expected %d, got %d", v.String(), want, got)
 		}

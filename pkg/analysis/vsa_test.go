@@ -724,7 +724,7 @@ func TestVSA_Soundness_ArithmeticNeverExcludesPossibleValues(t *testing.T) {
 		for av := int64(2); av <= 5; av++ {
 			for bv := int64(3); bv <= 7; bv++ {
 				sum := av + bv
-				if !si.Contains(sum) && !(sum >= si.Lo && sum <= si.Hi) {
+				if !si.Contains(sum) && (sum < si.Lo || sum > si.Hi) {
 					t.Errorf("add result %s does not contain %d+%d=%d", si.String(), av, bv, sum)
 				}
 			}
@@ -803,12 +803,12 @@ func TestVSA_StridedInterval_Soundness(t *testing.T) {
 		joined := a.Join(b)
 
 		for v := int64(0); v <= 5; v++ {
-			if !joined.Contains(v) && !(v >= joined.Lo && v <= joined.Hi) {
+			if !joined.Contains(v) && (v < joined.Lo || v > joined.Hi) {
 				t.Errorf("join result %s does not contain value %d from a", joined.String(), v)
 			}
 		}
 		for v := int64(3); v <= 10; v++ {
-			if !joined.Contains(v) && !(v >= joined.Lo && v <= joined.Hi) {
+			if !joined.Contains(v) && (v < joined.Lo || v > joined.Hi) {
 				t.Errorf("join result %s does not contain value %d from b", joined.String(), v)
 			}
 		}

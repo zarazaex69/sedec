@@ -24,16 +24,6 @@ func copyPropFn(instrs ...ir.IRInstruction) *ir.Function {
 	}
 }
 
-// firstAssignSource returns the Source of the first *ir.Assign in block 0.
-func firstAssignSource(fn *ir.Function) ir.Expression {
-	for _, instr := range fn.Blocks[0].Instructions {
-		if a, ok := instr.(*ir.Assign); ok {
-			return a.Source
-		}
-	}
-	return nil
-}
-
 // ============================================================================
 // simple copy propagation: x = y; use x  ->  use y
 // ============================================================================
@@ -71,7 +61,7 @@ func TestCopyProp_SimpleCopy(t *testing.T) {
 	}
 
 	// verify z_1 = y_1 + 1 (x_1 replaced by y_1)
-	assign := fn.Blocks[0].Instructions[1].(*ir.Assign)
+	assign := fn.Blocks[0].Instructions[1].(*ir.Assign) //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 	binop, ok := assign.Source.(*ir.BinaryOp)
 	if !ok {
 		t.Fatalf("expected BinaryOp source, got %T", assign.Source)
@@ -105,7 +95,7 @@ func TestCopyProp_CopyInReturn(t *testing.T) {
 		t.Errorf("expected at least 1 replacement, got %d", result.ReplacedCount)
 	}
 
-	ret := fn.Blocks[0].Instructions[1].(*ir.Return)
+	ret := fn.Blocks[0].Instructions[1].(*ir.Return) //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 	if ret.Value == nil {
 		t.Fatal("return value must not be nil")
 	}
@@ -150,9 +140,9 @@ func TestCopyProp_CopyChain(t *testing.T) {
 	}
 
 	// w_1 = z_1 + 2 should become w_1 = y_1 + 2
-	assign := fn.Blocks[0].Instructions[2].(*ir.Assign)
-	binop := assign.Source.(*ir.BinaryOp)
-	leftVar := binop.Left.(*ir.VariableExpr)
+	assign := fn.Blocks[0].Instructions[2].(*ir.Assign) //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
+	binop := assign.Source.(*ir.BinaryOp)               //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
+	leftVar := binop.Left.(*ir.VariableExpr)            //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 	if leftVar.Var.Name != "y" || leftVar.Var.Version != 1 {
 		t.Errorf("expected y_1 after chain propagation, got %s", leftVar.Var.String())
 	}
@@ -182,7 +172,7 @@ func TestCopyProp_LongChain(t *testing.T) {
 	}
 
 	// r = e should become r = b after full chain resolution
-	lastAssign := fn.Blocks[0].Instructions[4].(*ir.Assign)
+	lastAssign := fn.Blocks[0].Instructions[4].(*ir.Assign) //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 	srcVar, ok := lastAssign.Source.(*ir.VariableExpr)
 	if !ok {
 		t.Fatalf("expected VariableExpr, got %T", lastAssign.Source)
@@ -288,15 +278,15 @@ func TestCopyProp_NoPropThroughPhiSources(t *testing.T) {
 
 	// w_1 = z_1 + 5 should become w_1 = x_3 + 5
 	block3 := fn.Blocks[3]
-	wAssign := block3.Instructions[2].(*ir.Assign)
-	binop := wAssign.Source.(*ir.BinaryOp)
-	leftVar := binop.Left.(*ir.VariableExpr)
+	wAssign := block3.Instructions[2].(*ir.Assign) //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
+	binop := wAssign.Source.(*ir.BinaryOp)         //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
+	leftVar := binop.Left.(*ir.VariableExpr)       //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 	if leftVar.Var.Name != "x" || leftVar.Var.Version != 3 {
 		t.Errorf("expected x_3 after propagation of z_1, got %s", leftVar.Var.String())
 	}
 
 	// phi sources must NOT be rewritten: x_3 phi sources remain x_1 and x_2
-	phi := block3.Instructions[0].(*ir.Phi)
+	phi := block3.Instructions[0].(*ir.Phi) //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 	if phi.Sources[0].Var.Name != "x" || phi.Sources[0].Var.Version != 1 {
 		t.Errorf("phi source 0 must remain x_1, got %s", phi.Sources[0].Var.String())
 	}
@@ -336,16 +326,16 @@ func TestCopyProp_PreservesStore(t *testing.T) {
 		t.Errorf("expected 2 instructions (copy + store), got %d", len(fn.Blocks[0].Instructions))
 	}
 
-	store := fn.Blocks[0].Instructions[1].(*ir.Store)
+	store := fn.Blocks[0].Instructions[1].(*ir.Store) //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 
 	// address should now be y_1
-	addrVar := store.Address.(*ir.VariableExpr)
+	addrVar := store.Address.(*ir.VariableExpr) //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 	if addrVar.Var.Name != "y" || addrVar.Var.Version != 1 {
 		t.Errorf("expected store address y_1, got %s", addrVar.Var.String())
 	}
 
 	// value should now be y_1
-	valVar := store.Value.(*ir.VariableExpr)
+	valVar := store.Value.(*ir.VariableExpr) //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 	if valVar.Var.Name != "y" || valVar.Var.Version != 1 {
 		t.Errorf("expected store value y_1, got %s", valVar.Var.String())
 	}
@@ -377,7 +367,7 @@ func TestCopyProp_PreservesCall(t *testing.T) {
 	}
 
 	// call must still be present
-	call := fn.Blocks[0].Instructions[1].(*ir.Call)
+	call := fn.Blocks[0].Instructions[1].(*ir.Call) //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 	if len(call.Args) != 1 {
 		t.Fatalf("expected 1 call argument, got %d", len(call.Args))
 	}
@@ -459,7 +449,7 @@ func TestCopyProp_CopyDestNotRewritten(t *testing.T) {
 	}
 
 	// the copy instruction itself: destination must remain x_1
-	assign := fn.Blocks[0].Instructions[0].(*ir.Assign)
+	assign := fn.Blocks[0].Instructions[0].(*ir.Assign) //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 	if assign.Dest.Name != "x" || assign.Dest.Version != 1 {
 		t.Errorf("copy destination must not be rewritten, got %s", assign.Dest.String())
 	}
@@ -496,15 +486,15 @@ func TestCopyProp_MultipleUsesReplaced(t *testing.T) {
 		t.Errorf("expected at least 2 replacements, got %d", result.ReplacedCount)
 	}
 
-	assign := fn.Blocks[0].Instructions[1].(*ir.Assign)
-	binop := assign.Source.(*ir.BinaryOp)
+	assign := fn.Blocks[0].Instructions[1].(*ir.Assign) //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
+	binop := assign.Source.(*ir.BinaryOp)               //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 
-	leftVar := binop.Left.(*ir.VariableExpr)
+	leftVar := binop.Left.(*ir.VariableExpr) //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 	if leftVar.Var.Name != "y" || leftVar.Var.Version != 1 {
 		t.Errorf("expected left y_1, got %s", leftVar.Var.String())
 	}
 
-	rightVar := binop.Right.(*ir.VariableExpr)
+	rightVar := binop.Right.(*ir.VariableExpr) //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 	if rightVar.Var.Name != "y" || rightVar.Var.Version != 1 {
 		t.Errorf("expected right y_1, got %s", rightVar.Var.String())
 	}
@@ -555,8 +545,8 @@ func TestCopyProp_BranchConditionReplaced(t *testing.T) {
 		t.Errorf("expected at least 1 replacement, got %d", result.ReplacedCount)
 	}
 
-	branch := fn.Blocks[0].Instructions[1].(*ir.Branch)
-	condVar := branch.Condition.(*ir.VariableExpr)
+	branch := fn.Blocks[0].Instructions[1].(*ir.Branch) //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
+	condVar := branch.Condition.(*ir.VariableExpr)      //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 	if condVar.Var.Name != "y" || condVar.Var.Version != 1 {
 		t.Errorf("expected branch condition y_1, got %s", condVar.Var.String())
 	}

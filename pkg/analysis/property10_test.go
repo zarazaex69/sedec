@@ -135,7 +135,7 @@ func genConstProgram() gopter.Gen {
 		for i := range steps {
 			op := safeOps[params.NextUint64()%uint64(len(safeOps))]
 			// generate operand in range [0, mask] to avoid overflow in generator itself
-			operand := int64(params.NextUint64() & mask)
+			operand := int64(params.NextUint64() & mask) //nolint:gosec // intentional uint64->int64 conversion
 			steps[i] = constStep{op: op, operand: operand}
 		}
 
@@ -198,7 +198,7 @@ func genOverflowProgram() gopter.Gen {
 		mask := widthMask(width)
 
 		// base: near the maximum value for this width
-		base := int64(mask - params.NextUint64()%4)
+		base := int64(mask - params.NextUint64()%4) //nolint:gosec // intentional uint64->int64 conversion
 		// delta: small positive value that causes overflow
 		delta := int64(params.NextUint64()%8) + 1
 
@@ -220,6 +220,7 @@ func genOverflowProgram() gopter.Gen {
 // concretely, then runs constant propagation+folding and executes again.
 // returns true iff both executions produce the same final value.
 func checkSemanticEquivalence(t *testing.T, prog *constProgram) bool {
+	t.Helper()
 	fn, expectedResult := buildConstChainFunction(prog)
 	if fn == nil {
 		// degenerate program: skip
@@ -240,7 +241,7 @@ func checkSemanticEquivalence(t *testing.T, prog *constProgram) bool {
 	}
 
 	// run constant propagation
-	cfgGraph := buildSimpleCFG(0)
+	cfgGraph := buildSimpleCFG()
 	domTree := cfg.NewDominatorTree(cfgGraph)
 	domTree.Idom = map[cfg.BlockID]cfg.BlockID{0: 0}
 	domTree.Children = map[cfg.BlockID][]cfg.BlockID{0: {}}
@@ -281,6 +282,7 @@ func checkSemanticEquivalence(t *testing.T, prog *constProgram) bool {
 // checkIdentitySemantics verifies that algebraic identity simplifications
 // preserve the value of the variable operand.
 func checkIdentitySemantics(t *testing.T, prog *identityProgram) bool {
+	t.Helper()
 	fn := buildIdentityFunction(prog)
 
 	// execute original
@@ -329,13 +331,14 @@ func checkIdentitySemantics(t *testing.T, prog *identityProgram) bool {
 
 // checkOverflowSemantics verifies that overflow wrapping is preserved after folding.
 func checkOverflowSemantics(t *testing.T, prog *overflowProgram) bool {
+	t.Helper()
 	fn := buildOverflowFunction(prog)
 
 	// compute expected result with correct wrapping
 	mask := widthMask(prog.width)
-	lu := uint64(prog.base) & mask
-	ru := uint64(prog.delta) & mask
-	expectedWrapped := int64((lu + ru) & mask)
+	lu := uint64(prog.base) & mask             //nolint:gosec // intentional int64->uint64 conversion
+	ru := uint64(prog.delta) & mask            //nolint:gosec // intentional int64->uint64 conversion
+	expectedWrapped := int64((lu + ru) & mask) //nolint:gosec // intentional uint64->int64 conversion
 
 	// execute original
 	origResult, ok := interpretFunction(fn)
@@ -417,8 +420,8 @@ func buildConstChainFunction(prog *constProgram) (*ir.Function, int64) {
 		})
 
 		// compute reference result
-		ru := uint64(step.operand) & mask
-		switch step.op {
+		ru := uint64(step.operand) & mask //nolint:gosec // intentional int64->uint64 conversion
+		switch step.op {                  //nolint:exhaustive // only safe arithmetic ops are generated
 		case ir.BinOpAdd:
 			current = (current + ru) & mask
 		case ir.BinOpSub:
@@ -426,13 +429,13 @@ func buildConstChainFunction(prog *constProgram) (*ir.Function, int64) {
 		case ir.BinOpMul:
 			current = (current * ru) & mask
 		case ir.BinOpAnd:
-			current = (current & ru) & mask
+			current &= ru & mask
 		case ir.BinOpOr:
 			current = (current | ru) & mask
 		case ir.BinOpXor:
 			current = (current ^ ru) & mask
 		default:
-			current = current & mask
+			current &= mask
 		}
 
 		prevVar = nextVar
@@ -458,7 +461,7 @@ func buildConstChainFunction(prog *constProgram) (*ir.Function, int64) {
 	if prog.signed {
 		finalVal = signExtend(current, prog.width)
 	} else {
-		finalVal = int64(current)
+		finalVal = int64(current) //nolint:gosec // intentional uint64->int64 conversion
 	}
 	return fn, finalVal
 }
@@ -625,7 +628,7 @@ func extractReturnConstant(fn *ir.Function) (int64, bool) {
 
 	// find the assign for that variable and check if source is a constant
 	for _, instr := range block.Instructions {
-		if assign, ok := instr.(*ir.Assign); ok {
+		if assign, ok := instr.(*ir.Assign); ok { //nolint:nestif // nested type assertions are unavoidable here
 			if assign.Dest.String() == retVarKey {
 				if ce, ok := assign.Source.(*ir.ConstantExpr); ok {
 					if ic, ok := ce.Value.(ir.IntConstant); ok {
@@ -715,38 +718,38 @@ func evalBinaryOp(op ir.BinaryOperator, left, right ir.Expression, env map[strin
 	// determine width from left operand type for masking
 	width := inferWidth(left)
 	mask := widthMask(width)
-	lu := uint64(lv) & mask
-	ru := uint64(rv) & mask
+	lu := uint64(lv) & mask //nolint:gosec // intentional int64->uint64 conversion
+	ru := uint64(rv) & mask //nolint:gosec // intentional int64->uint64 conversion
 
-	switch op {
+	switch op { //nolint:exhaustive // unsupported ops return (0, false) via default
 	case ir.BinOpAdd:
-		return int64((lu + ru) & mask), true
+		return int64((lu + ru) & mask), true //nolint:gosec // intentional uint64->int64 conversion
 	case ir.BinOpSub:
-		return int64((lu - ru) & mask), true
+		return int64((lu - ru) & mask), true //nolint:gosec // intentional uint64->int64 conversion
 	case ir.BinOpMul:
-		return int64((lu * ru) & mask), true
+		return int64((lu * ru) & mask), true //nolint:gosec // intentional uint64->int64 conversion
 	case ir.BinOpDiv:
 		if rv == 0 {
 			return 0, false
 		}
-		return int64((lu / ru) & mask), true
+		return int64((lu / ru) & mask), true //nolint:gosec // intentional uint64->int64 conversion
 	case ir.BinOpMod:
 		if rv == 0 {
 			return 0, false
 		}
-		return int64((lu % ru) & mask), true
+		return int64((lu % ru) & mask), true //nolint:gosec // intentional uint64->int64 conversion
 	case ir.BinOpAnd:
-		return int64((lu & ru) & mask), true
+		return int64((lu & ru) & mask), true //nolint:gosec // intentional bitwise narrowing
 	case ir.BinOpOr:
-		return int64((lu | ru) & mask), true
+		return int64((lu | ru) & mask), true //nolint:gosec // intentional bitwise narrowing
 	case ir.BinOpXor:
-		return int64((lu ^ ru) & mask), true
+		return int64((lu ^ ru) & mask), true //nolint:gosec // intentional bitwise narrowing
 	case ir.BinOpShl:
 		shift := ru & 63
-		return int64((lu << shift) & mask), true
+		return int64((lu << shift) & mask), true //nolint:gosec // intentional bitwise narrowing
 	case ir.BinOpShr:
 		shift := ru & 63
-		return int64((lu >> shift) & mask), true
+		return int64((lu >> shift) & mask), true //nolint:gosec // intentional bitwise narrowing
 	case ir.BinOpLogicalAnd:
 		if lv != 0 && rv != 0 {
 			return 1, true
@@ -772,9 +775,9 @@ func evalUnaryOp(op ir.UnaryOperator, operand ir.Expression, env map[string]int6
 
 	switch op {
 	case ir.UnOpNeg:
-		return int64((^uint64(v) + 1) & mask), true
+		return int64((^uint64(v) + 1) & mask), true //nolint:gosec // intentional int64->uint64 conversion for two's complement
 	case ir.UnOpNot:
-		return int64((^uint64(v)) & mask), true
+		return int64((^uint64(v)) & mask), true //nolint:gosec // intentional int64->uint64 conversion for bitwise not
 	case ir.UnOpLogicalNot:
 		if v == 0 {
 			return 1, true
@@ -815,7 +818,7 @@ func applySignExtend(v int64, t ir.Type) int64 {
 	if !ok || !it.Signed {
 		return v
 	}
-	return signExtend(uint64(v)&widthMask(it.Width), it.Width)
+	return signExtend(uint64(v)&widthMask(it.Width), it.Width) //nolint:gosec // intentional int64->uint64 for sign extension
 }
 
 // describeConstProgram returns a human-readable description of a constProgram

@@ -50,10 +50,10 @@ func NewCopyPropagator(
 // Propagate runs copy propagation and rewrites the function ir in place.
 func (p *CopyPropagator) Propagate() (*CopyPropResult, error) {
 	if p.function == nil {
-		return nil, fmt.Errorf("copy propagation: function is nil")
+		return nil, fmt.Errorf("copy propagation: %w", ErrNilFunction)
 	}
 	if len(p.function.Blocks) == 0 {
-		return nil, fmt.Errorf("copy propagation: function %q has no blocks", p.function.Name)
+		return nil, fmt.Errorf("copy propagation: function %q: %w", p.function.Name, ErrNoBlocks)
 	}
 
 	// phase 1: collect all copy instructions and build the raw copy map.

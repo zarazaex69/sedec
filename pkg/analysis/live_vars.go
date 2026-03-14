@@ -88,7 +88,7 @@ func (vs *VarSet) Union(other *VarSet) *VarSet {
 	result := &VarSet{vars: make([]ir.Variable, 0, len(vs.vars)+len(other.vars))}
 	i, j := 0, 0
 	for i < len(vs.vars) && j < len(other.vars) {
-		if varEqual(vs.vars[i], other.vars[j]) {
+		if varEqual(vs.vars[i], other.vars[j]) { //nolint:gocritic // merge-sorted union: if-else chain is intentional
 			result.vars = append(result.vars, vs.vars[i])
 			i++
 			j++
@@ -266,10 +266,10 @@ func NewLiveVarsAnalyzer(
 //  3. propagate block-level results to per-instruction program points
 func (a *LiveVarsAnalyzer) Compute() (*LiveVarsResult, error) {
 	if a.function == nil {
-		return nil, fmt.Errorf("live variable analysis: function is nil")
+		return nil, fmt.Errorf("live variable analysis: %w", ErrNilFunction)
 	}
 	if len(a.function.Blocks) == 0 {
-		return nil, fmt.Errorf("live variable analysis: function %q has no blocks", a.function.Name)
+		return nil, fmt.Errorf("live variable analysis: function %q: %w", a.function.Name, ErrNoBlocks)
 	}
 
 	result := &LiveVarsResult{
@@ -414,6 +414,8 @@ func (a *LiveVarsAnalyzer) computeInstructionLiveness(result *LiveVarsResult, rp
 
 // reversePostOrder computes a reverse postorder traversal of the cfg.
 // identical to the one in ReachingDefsAnalyzer — reused here for consistency.
+//
+//nolint:dupl // similar to other analyzers
 func (a *LiveVarsAnalyzer) reversePostOrder() []ir.BlockID {
 	visited := make(map[ir.BlockID]bool)
 	postOrder := make([]ir.BlockID, 0, len(a.function.Blocks))

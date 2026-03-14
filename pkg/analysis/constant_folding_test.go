@@ -99,12 +99,12 @@ func TestFoldConstants_BothOperandsConst(t *testing.T) {
 		t.Errorf("expected 1 fold, got %d", result.FoldedCount)
 	}
 
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source //nolint:forcetypeassert // test: type is known
 	ce, ok := src.(*ir.ConstantExpr)
 	if !ok {
 		t.Fatalf("expected ConstantExpr after fold, got %T", src)
 	}
-	if ce.Value.(ir.IntConstant).Value != 7 {
+	if ce.Value.(ir.IntConstant).Value != 7 { //nolint:forcetypeassert // test: type is known
 		t.Errorf("expected 7, got %v", ce.Value)
 	}
 }
@@ -127,12 +127,12 @@ func TestFoldConstants_NestedConstExpr(t *testing.T) {
 		t.Errorf("expected >= 3 folds, got %d", result.FoldedCount)
 	}
 
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source //nolint:forcetypeassert // test: type is known
 	ce, ok := src.(*ir.ConstantExpr)
 	if !ok {
 		t.Fatalf("expected ConstantExpr, got %T", src)
 	}
-	if ce.Value.(ir.IntConstant).Value != 12 {
+	if ce.Value.(ir.IntConstant).Value != 12 { //nolint:forcetypeassert // test: type is known
 		t.Errorf("expected 12, got %v", ce.Value)
 	}
 }
@@ -153,9 +153,9 @@ func TestFoldConstants_OverflowWraps_U8(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
-	ce := src.(*ir.ConstantExpr)
-	if ce.Value.(ir.IntConstant).Value != 0 {
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source //nolint:forcetypeassert // test: type is known
+	ce := src.(*ir.ConstantExpr)                            //nolint:forcetypeassert // test: type is known
+	if ce.Value.(ir.IntConstant).Value != 0 {               //nolint:forcetypeassert // test: type is known
 		t.Errorf("expected 0 (u8 overflow wrap), got %v", ce.Value)
 	}
 }
@@ -174,9 +174,9 @@ func TestFoldConstants_SignedOverflow_I8(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
-	ce := src.(*ir.ConstantExpr)
-	if ce.Value.(ir.IntConstant).Value != -128 {
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source //nolint:forcetypeassert // test: type is known
+	ce := src.(*ir.ConstantExpr)                            //nolint:forcetypeassert // test: type is known
+	if ce.Value.(ir.IntConstant).Value != -128 {            //nolint:forcetypeassert // test: type is known
 		t.Errorf("expected -128 (i8 overflow wrap), got %v", ce.Value)
 	}
 }
@@ -200,7 +200,7 @@ func TestFoldConstants_AddZeroRight(t *testing.T) {
 		t.Errorf("expected 1 simplification, got %d", result.SimplifiedCount)
 	}
 
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 	ve, ok := src.(*ir.VariableExpr)
 	if !ok {
 		t.Fatalf("expected VariableExpr after x+0 simplification, got %T", src)
@@ -245,7 +245,7 @@ func TestFoldConstants_MulOneRight(t *testing.T) {
 		t.Errorf("expected 1 simplification, got %d", result.SimplifiedCount)
 	}
 
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 	if _, ok := src.(*ir.VariableExpr); !ok {
 		t.Fatalf("expected VariableExpr after x*1, got %T", src)
 	}
@@ -286,12 +286,12 @@ func TestFoldConstants_MulZeroRight(t *testing.T) {
 		t.Errorf("expected 1 simplification, got %d", result.SimplifiedCount)
 	}
 
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 	ce, ok := src.(*ir.ConstantExpr)
 	if !ok {
 		t.Fatalf("expected ConstantExpr (zero) after x*0, got %T", src)
 	}
-	if ce.Value.(ir.IntConstant).Value != 0 {
+	if ce.Value.(ir.IntConstant).Value != 0 { //nolint:forcetypeassert // test: value is always IntConstant here
 		t.Errorf("expected 0, got %v", ce.Value)
 	}
 }
@@ -331,12 +331,12 @@ func TestFoldConstants_SubSelf(t *testing.T) {
 		t.Errorf("expected 1 simplification, got %d", result.SimplifiedCount)
 	}
 
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 	ce, ok := src.(*ir.ConstantExpr)
 	if !ok {
 		t.Fatalf("expected ConstantExpr (zero) after x-x, got %T", src)
 	}
-	if ce.Value.(ir.IntConstant).Value != 0 {
+	if ce.Value.(ir.IntConstant).Value != 0 { //nolint:forcetypeassert // test: value is always IntConstant here
 		t.Errorf("expected 0, got %v", ce.Value)
 	}
 }
@@ -373,7 +373,7 @@ func TestFoldConstants_AndSelf(t *testing.T) {
 	}
 
 	// result should be x itself
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 	if _, ok := src.(*ir.VariableExpr); !ok {
 		t.Fatalf("expected VariableExpr after x&x, got %T", src)
 	}
@@ -399,7 +399,7 @@ func TestFoldConstants_DoubleNeg(t *testing.T) {
 		t.Errorf("expected 1 simplification, got %d", result.SimplifiedCount)
 	}
 
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 	if _, ok := src.(*ir.VariableExpr); !ok {
 		t.Fatalf("expected VariableExpr after -(-x), got %T", src)
 	}
@@ -455,9 +455,9 @@ func TestFoldConstants_UnaryNegConst(t *testing.T) {
 		t.Errorf("expected 1 fold, got %d", result.FoldedCount)
 	}
 
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
-	ce := src.(*ir.ConstantExpr)
-	if ce.Value.(ir.IntConstant).Value != -42 {
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
+	ce := src.(*ir.ConstantExpr)                            //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
+	if ce.Value.(ir.IntConstant).Value != -42 {             //nolint:forcetypeassert // test: value is always IntConstant here
 		t.Errorf("expected -42, got %v", ce.Value)
 	}
 }
@@ -472,9 +472,9 @@ func TestFoldConstants_UnaryNotConst(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
-	ce := src.(*ir.ConstantExpr)
-	if ce.Value.(ir.IntConstant).Value != -1 {
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
+	ce := src.(*ir.ConstantExpr)                            //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
+	if ce.Value.(ir.IntConstant).Value != -1 {              //nolint:forcetypeassert // test: value is always IntConstant here
 		t.Errorf("expected -1, got %v", ce.Value)
 	}
 }
@@ -499,9 +499,9 @@ func TestFoldConstants_CastConstTruncates(t *testing.T) {
 		t.Errorf("expected 1 fold, got %d", result.FoldedCount)
 	}
 
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
-	ce := src.(*ir.ConstantExpr)
-	if ce.Value.(ir.IntConstant).Value != 0xFF {
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
+	ce := src.(*ir.ConstantExpr)                            //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
+	if ce.Value.(ir.IntConstant).Value != 0xFF {            //nolint:forcetypeassert // test: value is always IntConstant here
 		t.Errorf("expected 0xFF, got %v", ce.Value)
 	}
 }
@@ -580,12 +580,12 @@ func TestFoldConstants_LogicalAndFalse(t *testing.T) {
 		t.Errorf("expected 1 simplification, got %d", result.SimplifiedCount)
 	}
 
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 	ce, ok := src.(*ir.ConstantExpr)
 	if !ok {
 		t.Fatalf("expected ConstantExpr, got %T", src)
 	}
-	if ce.Value.(ir.BoolConstant).Value != false {
+	if ce.Value.(ir.BoolConstant).Value != false { //nolint:forcetypeassert // test: value is always BoolConstant here
 		t.Error("expected false")
 	}
 }
@@ -656,7 +656,7 @@ func TestFoldConstants_DivByZeroNotFolded(t *testing.T) {
 	}
 
 	// expression must remain a BinaryOp, not a ConstantExpr
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 	if _, ok := src.(*ir.ConstantExpr); ok {
 		t.Fatal("div-by-zero must not be folded to a constant")
 	}
@@ -693,19 +693,19 @@ func TestFoldConstants_StoreAddressAndValue(t *testing.T) {
 		t.Errorf("expected 2 folds (address + value), got %d", result.FoldedCount)
 	}
 
-	store := fn.Blocks[0].Instructions[0].(*ir.Store)
+	store := fn.Blocks[0].Instructions[0].(*ir.Store) //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 	addrCE, ok := store.Address.(*ir.ConstantExpr)
 	if !ok {
 		t.Fatalf("expected ConstantExpr for address, got %T", store.Address)
 	}
-	if addrCE.Value.(ir.IntConstant).Value != 1008 {
+	if addrCE.Value.(ir.IntConstant).Value != 1008 { //nolint:forcetypeassert // test: value is always IntConstant here
 		t.Errorf("expected address 1008, got %v", addrCE.Value)
 	}
 	valCE, ok := store.Value.(*ir.ConstantExpr)
 	if !ok {
 		t.Fatalf("expected ConstantExpr for value, got %T", store.Value)
 	}
-	if valCE.Value.(ir.IntConstant).Value != 6 {
+	if valCE.Value.(ir.IntConstant).Value != 6 { //nolint:forcetypeassert // test: value is always IntConstant here
 		t.Errorf("expected value 6, got %v", valCE.Value)
 	}
 }
@@ -737,12 +737,12 @@ func TestFoldConstants_BranchCondition(t *testing.T) {
 		t.Errorf("expected 1 fold, got %d", result.FoldedCount)
 	}
 
-	branch := fn.Blocks[0].Instructions[0].(*ir.Branch)
+	branch := fn.Blocks[0].Instructions[0].(*ir.Branch) //nolint:forcetypeassert // test: panicking on wrong type is correct behavior
 	ce, ok := branch.Condition.(*ir.ConstantExpr)
 	if !ok {
 		t.Fatalf("expected ConstantExpr for condition, got %T", branch.Condition)
 	}
-	if ce.Value.(ir.BoolConstant).Value != true {
+	if ce.Value.(ir.BoolConstant).Value != true { //nolint:forcetypeassert // test: value is always BoolConstant here
 		t.Error("expected true condition after 3==3 fold")
 	}
 }

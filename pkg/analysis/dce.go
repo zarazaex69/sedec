@@ -56,10 +56,10 @@ func NewDeadCodeEliminator(
 // returns statistics about what was removed.
 func (e *DeadCodeEliminator) Eliminate() (*DCEResult, error) {
 	if e.function == nil {
-		return nil, fmt.Errorf("dead code elimination: function is nil")
+		return nil, fmt.Errorf("dead code elimination: %w", ErrNilFunction)
 	}
 	if len(e.function.Blocks) == 0 {
-		return nil, fmt.Errorf("dead code elimination: function %q has no blocks", e.function.Name)
+		return nil, fmt.Errorf("dead code elimination: function %q: %w", e.function.Name, ErrNoBlocks)
 	}
 
 	result := &DCEResult{}

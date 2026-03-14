@@ -2,12 +2,15 @@
 package analysis
 
 import (
+	"errors"
 	"fmt"
-	"math/bits"
 
 	"github.com/zarazaex69/sedec/pkg/cfg"
 	"github.com/zarazaex69/sedec/pkg/ir"
 )
+
+// ErrNoBlocks indicates that a function has no basic blocks.
+var ErrNoBlocks = errors.New("function has no blocks")
 
 // latticeValue represents an element in the constant propagation lattice.
 // the lattice has three levels:
@@ -39,7 +42,8 @@ const (
 func (lv latticeValue) String() string {
 	switch lv.kind {
 	case latticeTop:
-		return "top"
+		const top = "top"
+		return top
 	case latticeConstant:
 		return fmt.Sprintf("const(%s)", lv.constant.String())
 	case latticeBottom:
@@ -191,10 +195,10 @@ func NewConstPropAnalyzer(
 // the function ir is NOT modified; call ApplyToFunction to rewrite constants.
 func (a *ConstPropAnalyzer) Compute() (*ConstPropResult, error) {
 	if a.function == nil {
-		return nil, fmt.Errorf("constant propagation: function is nil")
+		return nil, ErrNilFunction
 	}
 	if len(a.function.Blocks) == 0 {
-		return nil, fmt.Errorf("constant propagation: function %q has no blocks", a.function.Name)
+		return nil, fmt.Errorf("constant propagation: function %q: %w", a.function.Name, ErrNoBlocks)
 	}
 
 	// phase 1: build def-use chains and initialize lattice to top
@@ -327,7 +331,7 @@ func (a *ConstPropAnalyzer) evaluatePhi(phi *ir.Phi, point ProgramPoint) {
 		edge := cfgEdge{from: src.Block, to: point.BlockID}
 		if !a.executableEdges[edge] && src.Block != point.BlockID {
 			// check if this is the entry self-edge
-			if !(src.Block == a.function.EntryBlock && point.BlockID == a.function.EntryBlock) {
+			if src.Block != a.function.EntryBlock || point.BlockID != a.function.EntryBlock {
 				continue
 			}
 		}
@@ -345,7 +349,7 @@ func (a *ConstPropAnalyzer) evaluatePhi(phi *ir.Phi, point ProgramPoint) {
 }
 
 // evaluateAssign evaluates an assignment instruction.
-func (a *ConstPropAnalyzer) evaluateAssign(assign *ir.Assign, point ProgramPoint) {
+func (a *ConstPropAnalyzer) evaluateAssign(assign *ir.Assign, _ ProgramPoint) {
 	lv := a.evaluateExpression(assign.Source)
 	a.updateLattice(assign.Dest.String(), lv)
 }
@@ -400,9 +404,7 @@ func (a *ConstPropAnalyzer) updateLattice(key string, newLV latticeValue) {
 	a.lattice[key] = newLV
 
 	// propagate change to all uses via ssa def-use chains
-	for _, usePoint := range a.defUseChains[key] {
-		a.ssaWorklist = append(a.ssaWorklist, usePoint)
-	}
+	a.ssaWorklist = append(a.ssaWorklist, a.defUseChains[key]...)
 }
 
 // latticeStrictlyLower reports whether b is strictly lower than a in the lattice.
@@ -695,9 +697,13 @@ func foldBinaryOp(op ir.BinaryOperator, left, right ir.Constant) (ir.Constant, b
 }
 
 // foldIntBinaryOp folds integer binary operations with correct overflow semantics.
+//
+//nolint:gocyclo // extensive dispatch per logic op
 func foldIntBinaryOp(op ir.BinaryOperator, l, r ir.IntConstant) (ir.Constant, bool) {
 	// use unsigned arithmetic for overflow-correct wrapping
+	//nolint:gosec // intentional
 	lu := uint64(l.Value)
+	//nolint:gosec // intentional
 	ru := uint64(r.Value)
 
 	// mask to the actual bit width to simulate hardware truncation
@@ -719,6 +725,7 @@ func foldIntBinaryOp(op ir.BinaryOperator, l, r ir.IntConstant) (ir.Constant, bo
 			return nil, false // division by zero
 		}
 		if l.Signed {
+			//nolint:gosec // intentional
 			result = uint64(l.Value/r.Value) & mask
 		} else {
 			result = (lu / ru) & mask
@@ -728,6 +735,7 @@ func foldIntBinaryOp(op ir.BinaryOperator, l, r ir.IntConstant) (ir.Constant, bo
 			return nil, false
 		}
 		if l.Signed {
+			//nolint:gosec // intentional
 			result = uint64(l.Value%r.Value) & mask
 		} else {
 			result = (lu % ru) & mask
@@ -758,6 +766,7 @@ func foldIntBinaryOp(op ir.BinaryOperator, l, r ir.IntConstant) (ir.Constant, bo
 		// arithmetic right shift: sign-extend then shift
 		shift := ru & 63
 		signedVal := signExtend(lu, l.Width)
+		//nolint:gosec // intentional
 		result = uint64(signedVal>>shift) & mask
 	// comparison operators return bool
 	case ir.BinOpEq:
@@ -780,6 +789,10 @@ func foldIntBinaryOp(op ir.BinaryOperator, l, r ir.IntConstant) (ir.Constant, bo
 		isBool, boolResult = true, lu > ru
 	case ir.BinOpUGe:
 		isBool, boolResult = true, lu >= ru
+	case ir.BinOpLogicalAnd:
+		isBool, boolResult = true, l.Value != 0 && r.Value != 0
+	case ir.BinOpLogicalOr:
+		isBool, boolResult = true, l.Value != 0 || r.Value != 0
 	default:
 		return nil, false
 	}
@@ -829,6 +842,8 @@ func foldFloatBinaryOp(op ir.BinaryOperator, l, r ir.FloatConstant) (ir.Constant
 		return ir.BoolConstant{Value: l.Value > r.Value}, true
 	case ir.BinOpGe:
 		return ir.BoolConstant{Value: l.Value >= r.Value}, true
+	case ir.BinOpMod, ir.BinOpUDiv, ir.BinOpUMod, ir.BinOpAnd, ir.BinOpOr, ir.BinOpXor, ir.BinOpShl, ir.BinOpShr, ir.BinOpSar, ir.BinOpULt, ir.BinOpULe, ir.BinOpUGt, ir.BinOpUGe, ir.BinOpLogicalAnd, ir.BinOpLogicalOr:
+		return nil, false
 	default:
 		return nil, false
 	}
@@ -845,6 +860,8 @@ func foldBoolBinaryOp(op ir.BinaryOperator, l, r ir.BoolConstant) (ir.Constant, 
 		return ir.BoolConstant{Value: l.Value == r.Value}, true
 	case ir.BinOpNe:
 		return ir.BoolConstant{Value: l.Value != r.Value}, true
+	case ir.BinOpAdd, ir.BinOpSub, ir.BinOpMul, ir.BinOpDiv, ir.BinOpMod, ir.BinOpUDiv, ir.BinOpUMod, ir.BinOpAnd, ir.BinOpOr, ir.BinOpXor, ir.BinOpShl, ir.BinOpShr, ir.BinOpSar, ir.BinOpLt, ir.BinOpLe, ir.BinOpGt, ir.BinOpGe, ir.BinOpULt, ir.BinOpULe, ir.BinOpUGt, ir.BinOpUGe:
+		return nil, false
 	default:
 		return nil, false
 	}
@@ -857,10 +874,12 @@ func foldUnaryOp(op ir.UnaryOperator, operand ir.Constant) (ir.Constant, bool) {
 		switch c := operand.(type) {
 		case ir.IntConstant:
 			mask := widthMask(c.Width)
+			//nolint:gosec // intentional int64->uint64 conversion
 			result := (^uint64(c.Value) + 1) & mask
 			if c.Signed {
 				return ir.IntConstant{Value: signExtend(result, c.Width), Width: c.Width, Signed: true}, true
 			}
+			//nolint:gosec // intentional
 			return ir.IntConstant{Value: int64(result), Width: c.Width, Signed: false}, true
 		case ir.FloatConstant:
 			return ir.FloatConstant{Value: -c.Value, Width: c.Width}, true
@@ -868,10 +887,12 @@ func foldUnaryOp(op ir.UnaryOperator, operand ir.Constant) (ir.Constant, bool) {
 	case ir.UnOpNot:
 		if c, ok := operand.(ir.IntConstant); ok {
 			mask := widthMask(c.Width)
+			//nolint:gosec // intentional int64->uint64 conversion
 			result := (^uint64(c.Value)) & mask
 			if c.Signed {
 				return ir.IntConstant{Value: signExtend(result, c.Width), Width: c.Width, Signed: true}, true
 			}
+			//nolint:gosec // intentional
 			return ir.IntConstant{Value: int64(result), Width: c.Width, Signed: false}, true
 		}
 	case ir.UnOpLogicalNot:
@@ -892,10 +913,12 @@ func foldCast(operand ir.Constant, targetType ir.Type) (ir.Constant, bool) {
 		switch c := operand.(type) {
 		case ir.IntConstant:
 			mask := widthMask(tt.Width)
+			//nolint:gosec // intentional int64->uint64 conversion
 			result := uint64(c.Value) & mask
 			if tt.Signed {
 				return ir.IntConstant{Value: signExtend(result, tt.Width), Width: tt.Width, Signed: true}, true
 			}
+			//nolint:gosec // intentional
 			return ir.IntConstant{Value: int64(result), Width: tt.Width, Signed: false}, true
 		case ir.BoolConstant:
 			val := int64(0)
@@ -937,14 +960,17 @@ func widthMask(width ir.Size) uint64 {
 func signExtend(value uint64, width ir.Size) int64 {
 	bits64 := uint(width) * 8
 	if bits64 == 0 || bits64 >= 64 {
+		//nolint:gosec // intentional
 		return int64(value)
 	}
 	// check sign bit
 	signBit := uint64(1) << (bits64 - 1)
 	if value&signBit != 0 {
 		// sign bit set: fill upper bits with 1s
+		//nolint:gosec // intentional
 		return int64(value | (^uint64(0) << bits64))
 	}
+	//nolint:gosec // intentional
 	return int64(value)
 }
 
@@ -965,10 +991,4 @@ func PropagateConstants(
 
 	analyzer.ApplyToFunction(result)
 	return result, nil
-}
-
-// countLeadingZeros is used to verify bit width computations in tests.
-// exported for use in property tests.
-func countLeadingZeros(v uint64) int {
-	return bits.LeadingZeros64(v)
 }

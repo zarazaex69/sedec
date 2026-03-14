@@ -28,6 +28,7 @@ const (
 
 // String returns a human-readable name for the memory region kind.
 func (k MemoryRegionKind) String() string {
+	const unknownRegion = "unknown"
 	switch k {
 	case RegionGlobal:
 		return "global"
@@ -37,8 +38,10 @@ func (k MemoryRegionKind) String() string {
 		return "heap"
 	case RegionCode:
 		return "code"
+	case RegionUnknown:
+		return unknownRegion
 	default:
-		return "unknown"
+		return unknownRegion
 	}
 }
 
@@ -446,8 +449,8 @@ func (si StridedInterval) Shr(shift StridedInterval) StridedInterval {
 		return topStridedInterval
 	}
 	// logical right shift: treat as unsigned
-	newLo := int64(uint64(si.Lo) >> uint(s))
-	newHi := int64(uint64(si.Hi) >> uint(s))
+	newLo := int64(uint64(si.Lo) >> uint(s)) //nolint:gosec // intentional int64->uint64->int64 for logical shift
+	newHi := int64(uint64(si.Hi) >> uint(s)) //nolint:gosec // intentional int64->uint64->int64 for logical shift
 	if newLo > newHi {
 		newLo, newHi = newHi, newLo
 	}
@@ -947,10 +950,10 @@ func (a *VSAAnalyzer) SetWideningThreshold(n int) {
 // the function IR is not modified.
 func (a *VSAAnalyzer) Compute() (*VSAResult, error) {
 	if a.function == nil {
-		return nil, fmt.Errorf("vsa: function is nil")
+		return nil, fmt.Errorf("vsa: %w", ErrNilFunction)
 	}
 	if len(a.function.Blocks) == 0 {
-		return nil, fmt.Errorf("vsa: function %q has no blocks", a.function.Name)
+		return nil, fmt.Errorf("vsa: function %q: %w", a.function.Name, ErrNoBlocks)
 	}
 
 	result := &VSAResult{
@@ -1269,6 +1272,8 @@ func (a *VSAAnalyzer) evalUnaryOp(
 }
 
 // reversePostOrder computes a reverse postorder traversal of the cfg.
+//
+//nolint:dupl // similar to other analyzers
 func (a *VSAAnalyzer) reversePostOrder() []ir.BlockID {
 	visited := make(map[ir.BlockID]bool)
 	postOrder := make([]ir.BlockID, 0, len(a.function.Blocks))

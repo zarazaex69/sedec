@@ -102,7 +102,7 @@ func (ds *DefinitionSet) Union(other *DefinitionSet) *DefinitionSet {
 	result.defs = make([]Definition, 0, len(ds.defs)+len(other.defs))
 	i, j := 0, 0
 	for i < len(ds.defs) && j < len(other.defs) {
-		if defEqual(ds.defs[i], other.defs[j]) {
+		if defEqual(ds.defs[i], other.defs[j]) { //nolint:gocritic // merge-sorted union: if-else chain is intentional
 			result.defs = append(result.defs, ds.defs[i])
 			i++
 			j++
@@ -230,10 +230,10 @@ func NewReachingDefsAnalyzer(
 //	BlockReachOut(B) = ReachOut(last instruction in B)
 func (a *ReachingDefsAnalyzer) Compute() (*ReachingDefsResult, error) {
 	if a.function == nil {
-		return nil, fmt.Errorf("function is nil")
+		return nil, ErrNilFunction
 	}
 	if len(a.function.Blocks) == 0 {
-		return nil, fmt.Errorf("function has no blocks")
+		return nil, ErrNoBlocks
 	}
 
 	result := &ReachingDefsResult{
@@ -376,6 +376,8 @@ func (a *ReachingDefsAnalyzer) killDefinitions(ds *DefinitionSet, varName string
 // reversePostOrder computes a reverse postorder traversal of the cfg.
 // this ordering ensures that (in reducible cfgs) all predecessors of a block
 // are processed before the block itself, except for loop back-edges.
+//
+//nolint:dupl // similar to other analyzers
 func (a *ReachingDefsAnalyzer) reversePostOrder() []ir.BlockID {
 	visited := make(map[ir.BlockID]bool)
 	postOrder := make([]ir.BlockID, 0, len(a.function.Blocks))
