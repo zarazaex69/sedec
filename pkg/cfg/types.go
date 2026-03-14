@@ -152,8 +152,17 @@ func (cfg *CFG) AddEdge(from, to BlockID, edgeType EdgeType) {
 	cfg.AddEdgeWithProvenance(from, to, edgeType, nil)
 }
 
-// AddEdgeWithProvenance adds a control flow edge with provenance tracking
+// AddEdgeWithProvenance adds a control flow edge with provenance tracking.
+// duplicate edges (same from, to, type) are silently ignored to keep the
+// cfg structurally consistent during incremental updates.
 func (cfg *CFG) AddEdgeWithProvenance(from, to BlockID, edgeType EdgeType, provenance *EdgeProvenance) {
+	// deduplicate: skip if an edge with the same endpoints and type already exists
+	for _, existing := range cfg.Edges {
+		if existing.From == from && existing.To == to && existing.Type == edgeType {
+			return
+		}
+	}
+
 	edge := &Edge{
 		From:       from,
 		To:         to,

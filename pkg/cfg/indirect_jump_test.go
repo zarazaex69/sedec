@@ -226,10 +226,13 @@ func TestAddIndirectTargets(t *testing.T) {
 			},
 			Length: 3,
 		},
+		// each case is a separate block (terminated by ret)
 		{Address: 0x4003, Mnemonic: "nop", Length: 1, Operands: []disasm.Operand{}}, // case 0
-		{Address: 0x4004, Mnemonic: "nop", Length: 1, Operands: []disasm.Operand{}}, // case 1
-		{Address: 0x4005, Mnemonic: "nop", Length: 1, Operands: []disasm.Operand{}}, // case 2
-		{Address: 0x4006, Mnemonic: "ret", Length: 1, Operands: []disasm.Operand{}},
+		{Address: 0x4004, Mnemonic: "ret", Length: 1, Operands: []disasm.Operand{}}, // end case 0
+		{Address: 0x4005, Mnemonic: "nop", Length: 1, Operands: []disasm.Operand{}}, // case 1
+		{Address: 0x4006, Mnemonic: "ret", Length: 1, Operands: []disasm.Operand{}}, // end case 1
+		{Address: 0x4007, Mnemonic: "nop", Length: 1, Operands: []disasm.Operand{}}, // case 2
+		{Address: 0x4008, Mnemonic: "ret", Length: 1, Operands: []disasm.Operand{}}, // end case 2
 	}
 
 	builder := NewCFGBuilder()
@@ -238,8 +241,8 @@ func TestAddIndirectTargets(t *testing.T) {
 		t.Fatalf("failed to build cfg: %v", err)
 	}
 
-	// add multiple targets (switch table)
-	targets := []disasm.Address{0x4003, 0x4004, 0x4005}
+	// add multiple targets (switch table) - each points to a distinct block
+	targets := []disasm.Address{0x4003, 0x4005, 0x4007}
 	provenance := &EdgeProvenance{
 		AnalysisPass: "vsa",
 		Confidence:   0.95,

@@ -80,13 +80,20 @@ func TestApplyResolveIndirect(t *testing.T) {
 		},
 		{
 			Address:  0x1003,
-			Bytes:    []byte{0x90}, // nop (target 2)
-			Mnemonic: "nop",
+			Bytes:    []byte{0xc3}, // ret - ends block at 0x1002
+			Mnemonic: "ret",
 			Operands: []disasm.Operand{},
 			Length:   1,
 		},
 		{
 			Address:  0x1004,
+			Bytes:    []byte{0x90}, // nop (target 2 - separate block)
+			Mnemonic: "nop",
+			Operands: []disasm.Operand{},
+			Length:   1,
+		},
+		{
+			Address:  0x1005,
 			Bytes:    []byte{0xc3}, // ret
 			Mnemonic: "ret",
 			Operands: []disasm.Operand{},
@@ -102,11 +109,11 @@ func TestApplyResolveIndirect(t *testing.T) {
 
 	initialEdgeCount := cfg.EdgeCount()
 
-	// create update to resolve indirect jump
+	// create update to resolve indirect jump with two distinct target blocks
 	update := &IncrementalUpdate{
 		UpdateType: UpdateTypeResolveIndirect,
 		JumpSite:   0x1000,
-		Targets:    []disasm.Address{0x1002, 0x1003},
+		Targets:    []disasm.Address{0x1002, 0x1004},
 		Provenance: &EdgeProvenance{
 			AnalysisPass: "type_inference",
 			Confidence:   0.9,
@@ -119,7 +126,7 @@ func TestApplyResolveIndirect(t *testing.T) {
 		t.Fatalf("failed to apply update: %v", err)
 	}
 
-	// verify edges were added
+	// verify edges were added (two distinct target blocks → two new edges)
 	if cfg.EdgeCount() != initialEdgeCount+2 {
 		t.Errorf("expected %d edges after update, got %d", initialEdgeCount+2, cfg.EdgeCount())
 	}
