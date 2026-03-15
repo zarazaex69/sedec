@@ -44,6 +44,8 @@ func NewAnalyzer(convention CallingConvention) (Analyzer, error) {
 	switch convention {
 	case CallingConventionSystemVAMD64:
 		return NewSystemVAnalyzer(), nil
+	case CallingConventionMicrosoftX64:
+		return NewMicrosoftX64Analyzer(), nil
 	default:
 		return nil, &ErrUnsupportedConvention{Convention: convention}
 	}
