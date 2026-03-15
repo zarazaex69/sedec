@@ -35,6 +35,8 @@ func TestMicrosoftX64Analyzer_TrackStackPointer_StackAlignment(t *testing.T) {
 
 // TestMicrosoftX64Analyzer_TrackStackPointer_AlignmentOnSymbolic tests and rsp, -16
 // applied to a symbolic offset — exercises the SymbolicOffset branch.
+//
+//nolint:dupl // intentionally tests microsoft x64 analyzer with similar pattern
 func TestMicrosoftX64Analyzer_TrackStackPointer_AlignmentOnSymbolic(t *testing.T) {
 	insns := []*disasm.Instruction{
 		buildInsn(0x1000, "sub", reg("rsp", disasm.Size64), imm(8, disasm.Size64)),

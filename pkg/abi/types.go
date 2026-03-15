@@ -21,6 +21,8 @@ const (
 
 func (c CallingConvention) String() string {
 	switch c {
+	case CallingConventionUnknown:
+		return unknownStr
 	case CallingConventionSystemVAMD64:
 		return "SystemV_AMD64"
 	case CallingConventionMicrosoftX64:
@@ -28,7 +30,7 @@ func (c CallingConvention) String() string {
 	case CallingConventionCustom:
 		return "Custom"
 	default:
-		return "Unknown"
+		return unknownStr
 	}
 }
 
@@ -121,7 +123,9 @@ type ConcreteOffset struct {
 	Value int64
 }
 
-func (ConcreteOffset) isStackOffset()      {}
+func (ConcreteOffset) isStackOffset() {}
+
+// BaseOffset returns the concrete offset value.
 func (c ConcreteOffset) BaseOffset() int64 { return c.Value }
 
 // SymbolicOffset is an RSP offset with a dynamic (unknown) component.
@@ -133,7 +137,9 @@ type SymbolicOffset struct {
 	VarName string
 }
 
-func (SymbolicOffset) isStackOffset()      {}
+func (SymbolicOffset) isStackOffset() {}
+
+// BaseOffset returns the statically-known component of the symbolic offset.
 func (s SymbolicOffset) BaseOffset() int64 { return s.Base }
 
 // SymbolicStackTracker tracks RSP/RBP offsets throughout a function.

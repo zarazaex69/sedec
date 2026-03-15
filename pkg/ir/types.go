@@ -45,6 +45,16 @@ const (
 	KeywordBool = "bool"
 )
 
+// string constants for ir representation
+const (
+	strStruct   = "struct"
+	strEllipsis = "..."
+	strTrue     = "true"
+	strFalse    = "false"
+	strNull     = "null"
+	strReturn   = "return"
+)
+
 // Type represents the type of a value in IR
 type Type interface {
 	isType()
@@ -170,9 +180,9 @@ type StructType struct {
 func (StructType) isType() {}
 func (t StructType) String() string {
 	if t.Name != "" {
-		return fmt.Sprintf("struct %s", t.Name)
+		return fmt.Sprintf("%s %s", strStruct, t.Name)
 	}
-	return "struct"
+	return strStruct
 }
 
 // Size returns the size in bytes (computed from last field, capped at 255)
@@ -209,7 +219,7 @@ func (t FunctionType) String() string {
 		if len(t.Parameters) > 0 {
 			params += ", "
 		}
-		params += "..."
+		params += strEllipsis
 	}
 	return fmt.Sprintf("func(%s) %s", params, t.ReturnType.String())
 }
@@ -292,9 +302,9 @@ func (BoolConstant) Type() Type {
 }
 func (c BoolConstant) String() string {
 	if c.Value {
-		return "true"
+		return strTrue
 	}
-	return "false"
+	return strFalse
 }
 
 // NullConstant represents a null pointer
@@ -309,7 +319,7 @@ func (c NullConstant) Type() Type {
 	return c.PointerType
 }
 func (NullConstant) String() string {
-	return "null"
+	return strNull
 }
 
 // ============================================================================
@@ -679,9 +689,9 @@ type Return struct {
 func (Return) isIRInstruction() {}
 func (r Return) String() string {
 	if r.Value != nil {
-		return fmt.Sprintf("return %s", r.Value.String())
+		return fmt.Sprintf("%s %s", strReturn, r.Value.String())
 	}
-	return "return"
+	return strReturn
 }
 
 // PhiSource represents a single source in a phi node

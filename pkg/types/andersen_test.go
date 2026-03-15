@@ -146,7 +146,7 @@ func TestAndersen_Load_MultipleTargets(t *testing.T) {
 
 // TestAndersen_Load_UnknownPointer verifies that loading through an
 // uninitialized pointer does not panic and produces a non-empty result.
-func TestAndersen_Load_UnknownPointer(t *testing.T) {
+func TestAndersen_Load_UnknownPointer(_ *testing.T) {
 	a := NewAndersenAnalyzer()
 	// x = *y where y has no known target yet
 	a.processAndersenLoad("x", "y")

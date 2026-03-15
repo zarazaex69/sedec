@@ -19,6 +19,41 @@ package ir
 // - phi-nodes can merge lazy flag values from different paths
 // - def-use chains track flag consumers for elimination analysis
 
+// x86_64 conditional jump mnemonic constants
+const (
+	mnemonicJe   = "je"
+	mnemonicJz   = "jz"
+	mnemonicJne  = "jne"
+	mnemonicJnz  = "jnz"
+	mnemonicJl   = "jl"
+	mnemonicJnge = "jnge"
+	mnemonicJge  = "jge"
+	mnemonicJnl  = "jnl"
+	mnemonicJle  = "jle"
+	mnemonicJng  = "jng"
+	mnemonicJg   = "jg"
+	mnemonicJnle = "jnle"
+	mnemonicJb   = "jb"
+	mnemonicJnae = "jnae"
+	mnemonicJc   = "jc"
+	mnemonicJae  = "jae"
+	mnemonicJnb  = "jnb"
+	mnemonicJnc  = "jnc"
+	mnemonicJbe  = "jbe"
+	mnemonicJna  = "jna"
+	mnemonicJa   = "ja"
+	mnemonicJnbe = "jnbe"
+	mnemonicJs   = "js"
+	mnemonicJns  = "jns"
+	mnemonicJo   = "jo"
+	mnemonicJno  = "jno"
+	mnemonicJp   = "jp"
+	mnemonicJpe  = "jpe"
+	mnemonicJnp  = "jnp"
+	mnemonicJpo  = "jpo"
+	mnemonicAdd  = "add"
+)
+
 // CPUFlag represents individual x86_64 cpu flags
 type CPUFlag int
 
@@ -259,7 +294,6 @@ func (lf *LazyFlags) materializeArithmeticFlag(flag CPUFlag) Expression {
 
 			// detect operation type from result expression
 			if binOp, ok := result.(BinaryOp); ok {
-				//nolint:exhaustive // only relevant arithmetic ops are checked
 				switch binOp.Op {
 				case BinOpAdd:
 					// add: cf = (result < left)
@@ -318,7 +352,6 @@ func (lf *LazyFlags) materializeArithmeticFlag(flag CPUFlag) Expression {
 
 			// detect operation type
 			if binOp, ok := result.(BinaryOp); ok {
-				//nolint:exhaustive // only relevant arithmetic ops are checked
 				switch binOp.Op {
 				case BinOpAdd:
 					// add: of = (sign(left) == sign(right)) && (sign(result) != sign(left))
@@ -493,35 +526,35 @@ func (lf *LazyFlags) materializeMultiplyFlag(flag CPUFlag) Expression {
 // returns: slice of flags that must be materialized for this condition
 func GetRequiredFlags(mnemonic string) []CPUFlag {
 	switch mnemonic {
-	case "je", "jz", "jne", "jnz":
+	case mnemonicJe, mnemonicJz, mnemonicJne, mnemonicJnz:
 		// equal/not equal: only zf
 		return []CPUFlag{FlagZF}
 
-	case "jl", "jnge", "jge", "jnl":
+	case mnemonicJl, mnemonicJnge, mnemonicJge, mnemonicJnl:
 		// less/greater or equal (signed): sf, of
 		return []CPUFlag{FlagSF, FlagOF}
 
-	case "jle", "jng", "jg", "jnle":
+	case mnemonicJle, mnemonicJng, mnemonicJg, mnemonicJnle:
 		// less or equal/greater (signed): zf, sf, of
 		return []CPUFlag{FlagZF, FlagSF, FlagOF}
 
-	case "jb", "jnae", "jc", "jae", "jnb", "jnc":
+	case mnemonicJb, mnemonicJnae, mnemonicJc, mnemonicJae, mnemonicJnb, mnemonicJnc:
 		// below/above or equal (unsigned): cf
 		return []CPUFlag{FlagCF}
 
-	case "jbe", "jna", "ja", "jnbe":
+	case mnemonicJbe, mnemonicJna, mnemonicJa, mnemonicJnbe:
 		// below or equal/above (unsigned): cf, zf
 		return []CPUFlag{FlagCF, FlagZF}
 
-	case "js", "jns":
+	case mnemonicJs, mnemonicJns:
 		// sign: sf
 		return []CPUFlag{FlagSF}
 
-	case "jo", "jno":
+	case mnemonicJo, mnemonicJno:
 		// overflow: of
 		return []CPUFlag{FlagOF}
 
-	case "jp", "jpe", "jnp", "jpo":
+	case mnemonicJp, mnemonicJpe, mnemonicJnp, mnemonicJpo:
 		// parity: pf
 		return []CPUFlag{FlagPF}
 

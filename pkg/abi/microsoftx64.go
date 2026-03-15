@@ -83,7 +83,7 @@ func (a *MicrosoftX64Analyzer) IdentifyParameters(insns []*disasm.Instruction) [
 		mnemonic := strings.ToLower(insn.Mnemonic)
 
 		// stop at first call or ret — only prologue reads matter
-		if mnemonic == "call" || mnemonic == "ret" || mnemonic == "retn" {
+		if mnemonic == mnemonicCall || mnemonic == mnemonicRet || mnemonic == mnemonicRetn {
 			break
 		}
 
@@ -97,88 +97,83 @@ func (a *MicrosoftX64Analyzer) IdentifyParameters(insns []*disasm.Instruction) [
 
 				isSource := opIdx > 0 || len(insn.Operands) == 1 || rmw
 				isWrite := opIdx == 0 && len(insn.Operands) > 1 &&
-					mnemonic != "test" && mnemonic != "cmp"
+					mnemonic != mnemonicTest && mnemonic != mnemonicCmp
 
 				if isSource {
-					// check integer parameter registers (rcx, rdx, r8, r9)
-					for slotIdx, paramReg := range msX64IntParamRegs {
-						if canonical == paramReg &&
-							!intRegWritten[paramReg] &&
-							!intParamSeen[paramReg] &&
-							!slotUsed[slotIdx] {
-							params = append(params, Parameter{
-								Name:     fmt.Sprintf("arg%d", slotIdx),
-								Type:     ir.IntType{Width: ir.Size8, Signed: false},
-								Register: paramReg,
-								Location: ParameterLocationRegister,
-								Index:    slotIdx,
-							})
-							intParamSeen[paramReg] = true
-							slotUsed[slotIdx] = true
-						}
-					}
-					// check float parameter registers (xmm0–xmm3)
-					for slotIdx, paramReg := range msX64FloatParamRegs {
-						if canonical == paramReg &&
-							!floatRegWritten[paramReg] &&
-							!floatParamSeen[paramReg] &&
-							!slotUsed[slotIdx] {
-							params = append(params, Parameter{
-								Name:     fmt.Sprintf("farg%d", slotIdx),
-								Type:     ir.FloatType{Width: ir.Size8},
-								Register: paramReg,
-								Location: ParameterLocationRegister,
-								Index:    slotIdx,
-							})
-							floatParamSeen[paramReg] = true
-							slotUsed[slotIdx] = true
-						}
-					}
+					a.matchMsIntParam(canonical, slotUsed, intRegWritten, intParamSeen, &params)
+					a.matchMsFloatParam(canonical, slotUsed, floatRegWritten, floatParamSeen, &params)
 				}
 
 				if isWrite {
-					for _, paramReg := range msX64IntParamRegs {
-						if canonical == paramReg {
-							intRegWritten[paramReg] = true
-						}
-					}
-					for _, paramReg := range msX64FloatParamRegs {
-						if canonical == paramReg {
-							floatRegWritten[paramReg] = true
-						}
-					}
+					markRegWritten(canonical, msX64IntParamRegs, intRegWritten)
+					markRegWritten(canonical, msX64FloatParamRegs, floatRegWritten)
 				}
 
 			case disasm.MemoryOperand:
-				// detect stack parameter reads: [rsp + disp] where disp >= msX64FirstStackArgOffset.
-				// layout at callee entry (before any frame modification):
-				//   [rsp+0]  = return address
-				//   [rsp+8]  = shadow rcx  (home space)
-				//   [rsp+16] = shadow rdx  (home space)
-				//   [rsp+24] = shadow r8   (home space)
-				//   [rsp+32] = shadow r9   (home space)
-				//   [rsp+40] = 5th argument (first stack param)
 				base := strings.ToLower(typedOp.Base)
-				if base == "rsp" && typedOp.Disp >= msX64FirstStackArgOffset {
-					if !stackParamsSeen[typedOp.Disp] {
-						stackParamsSeen[typedOp.Disp] = true
-						// slot index for stack params starts at 4 (after 4 register slots)
-						slotIdx := 4 + stackParamIdx
-						params = append(params, Parameter{
-							Name:        fmt.Sprintf("arg%d", slotIdx),
-							Type:        ir.IntType{Width: ir.Size8, Signed: false},
-							Location:    ParameterLocationStack,
-							StackOffset: typedOp.Disp,
-							Index:       slotIdx,
-						})
-						stackParamIdx++
-					}
+				if base == regRsp && typedOp.Disp >= msX64FirstStackArgOffset && !stackParamsSeen[typedOp.Disp] {
+					stackParamsSeen[typedOp.Disp] = true
+					slotIdx := 4 + stackParamIdx
+					params = append(params, Parameter{
+						Name:        fmt.Sprintf("arg%d", slotIdx),
+						Type:        ir.IntType{Width: ir.Size8, Signed: false},
+						Location:    ParameterLocationStack,
+						StackOffset: typedOp.Disp,
+						Index:       slotIdx,
+					})
+					stackParamIdx++
 				}
 			}
 		}
 	}
 
 	return params
+}
+
+// matchMsIntParam checks if canonical matches a microsoft x64 integer parameter register
+// and appends the parameter if the slot is unclaimed.
+func (a *MicrosoftX64Analyzer) matchMsIntParam(
+	canonical string,
+	slotUsed map[int]bool,
+	written, seen map[string]bool,
+	params *[]Parameter,
+) {
+	for slotIdx, paramReg := range msX64IntParamRegs {
+		if canonical == paramReg && !written[paramReg] && !seen[paramReg] && !slotUsed[slotIdx] {
+			*params = append(*params, Parameter{
+				Name:     fmt.Sprintf("arg%d", slotIdx),
+				Type:     ir.IntType{Width: ir.Size8, Signed: false},
+				Register: paramReg,
+				Location: ParameterLocationRegister,
+				Index:    slotIdx,
+			})
+			seen[paramReg] = true
+			slotUsed[slotIdx] = true
+		}
+	}
+}
+
+// matchMsFloatParam checks if canonical matches a microsoft x64 float parameter register
+// and appends the parameter if the slot is unclaimed.
+func (a *MicrosoftX64Analyzer) matchMsFloatParam(
+	canonical string,
+	slotUsed map[int]bool,
+	written, seen map[string]bool,
+	params *[]Parameter,
+) {
+	for slotIdx, paramReg := range msX64FloatParamRegs {
+		if canonical == paramReg && !written[paramReg] && !seen[paramReg] && !slotUsed[slotIdx] {
+			*params = append(*params, Parameter{
+				Name:     fmt.Sprintf("farg%d", slotIdx),
+				Type:     ir.FloatType{Width: ir.Size8},
+				Register: paramReg,
+				Location: ParameterLocationRegister,
+				Index:    slotIdx,
+			})
+			seen[paramReg] = true
+			slotUsed[slotIdx] = true
+		}
+	}
 }
 
 // IdentifyReturnValues determines what the function returns.
@@ -196,7 +191,7 @@ func (a *MicrosoftX64Analyzer) IdentifyReturnValues(insns []*disasm.Instruction)
 	retIdx := -1
 	for i := len(insns) - 1; i >= 0; i-- {
 		mnemonic := strings.ToLower(insns[i].Mnemonic)
-		if mnemonic == "ret" || mnemonic == "retn" {
+		if mnemonic == mnemonicRet || mnemonic == mnemonicRetn {
 			retIdx = i
 			break
 		}
@@ -210,8 +205,7 @@ func (a *MicrosoftX64Analyzer) IdentifyReturnValues(insns []*disasm.Instruction)
 		insn := insns[i]
 		mnemonic := strings.ToLower(insn.Mnemonic)
 
-		// stop at call — return value must be set after last call
-		if mnemonic == "call" {
+		if mnemonic == mnemonicCall {
 			break
 		}
 
@@ -226,9 +220,9 @@ func (a *MicrosoftX64Analyzer) IdentifyReturnValues(insns []*disasm.Instruction)
 		canonical := canonicalizeRegister(strings.ToLower(destOp.Name))
 
 		switch canonical {
-		case "rax":
+		case regRax:
 			raxWritten = true
-		case "xmm0":
+		case regXmm0:
 			xmm0Written = true
 		}
 	}
@@ -238,12 +232,12 @@ func (a *MicrosoftX64Analyzer) IdentifyReturnValues(insns []*disasm.Instruction)
 	if xmm0Written {
 		retVals = append(retVals, ReturnValue{
 			Type:     ir.FloatType{Width: ir.Size8},
-			Register: "xmm0",
+			Register: regXmm0,
 		})
 	} else if raxWritten {
 		retVals = append(retVals, ReturnValue{
 			Type:     ir.IntType{Width: ir.Size8, Signed: false},
-			Register: "rax",
+			Register: regRax,
 		})
 	}
 
@@ -260,104 +254,7 @@ func (a *MicrosoftX64Analyzer) IdentifyReturnValues(insns []*disasm.Instruction)
 // Note: RDI and RSI are callee-saved in Microsoft x64 (unlike System V where they
 // are parameter registers). This is a critical difference between the two ABIs.
 func (a *MicrosoftX64Analyzer) VerifyCalleeSavedRegisters(insns []*disasm.Instruction) []CalleeSavedRegisterStatus {
-	type saveInfo struct {
-		saveAddr    disasm.Address
-		restoreAddr disasm.Address
-		saved       bool
-		restored    bool
-		modified    bool
-	}
-
-	regInfo := make(map[string]*saveInfo, len(msX64CalleeSavedInt))
-	for _, r := range msX64CalleeSavedInt {
-		regInfo[r] = &saveInfo{}
-	}
-
-	for _, insn := range insns {
-		mnemonic := strings.ToLower(insn.Mnemonic)
-
-		switch mnemonic {
-		case "push":
-			if len(insn.Operands) == 1 {
-				if regOp, ok := insn.Operands[0].(disasm.RegisterOperand); ok {
-					canonical := canonicalizeRegister(strings.ToLower(regOp.Name))
-					if info, isCSR := regInfo[canonical]; isCSR && !info.saved {
-						info.saved = true
-						info.saveAddr = insn.Address
-					}
-				}
-			}
-
-		case "pop":
-			if len(insn.Operands) == 1 {
-				if regOp, ok := insn.Operands[0].(disasm.RegisterOperand); ok {
-					canonical := canonicalizeRegister(strings.ToLower(regOp.Name))
-					if info, isCSR := regInfo[canonical]; isCSR && info.saved {
-						info.restored = true
-						info.restoreAddr = insn.Address
-					}
-				}
-			}
-
-		case "mov":
-			if len(insn.Operands) != 2 {
-				continue
-			}
-			dest := insn.Operands[0]
-			src := insn.Operands[1]
-
-			// mov [mem], reg — spill to stack (save)
-			if _, destIsMem := dest.(disasm.MemoryOperand); destIsMem {
-				if regOp, srcIsReg := src.(disasm.RegisterOperand); srcIsReg {
-					canonical := canonicalizeRegister(strings.ToLower(regOp.Name))
-					if info, isCSR := regInfo[canonical]; isCSR && !info.saved {
-						info.saved = true
-						info.saveAddr = insn.Address
-					}
-				}
-			}
-
-			// mov reg, [mem] — reload from stack (restore)
-			if regOp, destIsReg := dest.(disasm.RegisterOperand); destIsReg {
-				canonical := canonicalizeRegister(strings.ToLower(regOp.Name))
-				if info, isCSR := regInfo[canonical]; isCSR {
-					if _, srcIsMem := src.(disasm.MemoryOperand); srcIsMem && info.saved {
-						info.restored = true
-						info.restoreAddr = insn.Address
-					} else {
-						info.modified = true
-					}
-				}
-			}
-
-		default:
-			if len(insn.Operands) == 0 {
-				continue
-			}
-			if regOp, ok := insn.Operands[0].(disasm.RegisterOperand); ok {
-				canonical := canonicalizeRegister(strings.ToLower(regOp.Name))
-				if info, isCSR := regInfo[canonical]; isCSR {
-					info.modified = true
-				}
-			}
-		}
-	}
-
-	statuses := make([]CalleeSavedRegisterStatus, 0, len(msX64CalleeSavedInt))
-	for _, r := range msX64CalleeSavedInt {
-		info := regInfo[r]
-		neverTouched := !info.saved && !info.modified
-		properlyPreserved := info.saved && info.restored
-		preserved := neverTouched || properlyPreserved
-		statuses = append(statuses, CalleeSavedRegisterStatus{
-			Register:    r,
-			Preserved:   preserved,
-			SaveSite:    info.saveAddr,
-			RestoreSite: info.restoreAddr,
-		})
-	}
-
-	return statuses
+	return verifyCalleeSavedRegistersCommon(insns, msX64CalleeSavedInt)
 }
 
 // TrackStackPointer performs symbolic stack pointer tracking throughout the function.
@@ -380,7 +277,7 @@ func (a *MicrosoftX64Analyzer) TrackStackPointer(insns []*disasm.Instruction) *S
 		mnemonic := strings.ToLower(insn.Mnemonic)
 
 		switch mnemonic {
-		case "push":
+		case mnemonicPush:
 			size := int64(8)
 			if len(insn.Operands) == 1 {
 				if regOp, ok := insn.Operands[0].(disasm.RegisterOperand); ok {
@@ -391,7 +288,7 @@ func (a *MicrosoftX64Analyzer) TrackStackPointer(insns []*disasm.Instruction) *S
 			}
 			currentOffset = adjustOffset(currentOffset, -size)
 
-		case "pop":
+		case mnemonicPop:
 			size := int64(8)
 			if len(insn.Operands) == 1 {
 				if regOp, ok := insn.Operands[0].(disasm.RegisterOperand); ok {
@@ -402,30 +299,17 @@ func (a *MicrosoftX64Analyzer) TrackStackPointer(insns []*disasm.Instruction) *S
 			}
 			currentOffset = adjustOffset(currentOffset, size)
 
-		case "sub":
+		case mnemonicSub:
 			currentOffset = a.handleSubInstruction(insn, currentOffset, tracker)
 
-		case "add":
+		case mnemonicAdd:
 			currentOffset = a.handleAddInstruction(insn, currentOffset)
 
-		case "and":
+		case mnemonicAnd:
 			currentOffset = a.handleAndInstruction(insn, currentOffset)
 
-		case "mov":
-			// detect frame pointer setup: mov rbp, rsp
-			if len(insn.Operands) == 2 {
-				destReg, destIsReg := insn.Operands[0].(disasm.RegisterOperand)
-				srcReg, srcIsReg := insn.Operands[1].(disasm.RegisterOperand)
-				if destIsReg && srcIsReg {
-					destName := strings.ToLower(destReg.Name)
-					srcName := strings.ToLower(srcReg.Name)
-					if destName == "rbp" && srcName == "rsp" {
-						if concrete, ok := currentOffset.(ConcreteOffset); ok {
-							tracker.SetFramePointer(concrete.Value)
-						}
-					}
-				}
-			}
+		case mnemonicMov:
+			detectFramePointerSetup(insn, currentOffset, tracker)
 		}
 	}
 
@@ -442,7 +326,7 @@ func (a *MicrosoftX64Analyzer) handleSubInstruction(
 		return current
 	}
 	destReg, destIsReg := insn.Operands[0].(disasm.RegisterOperand)
-	if !destIsReg || strings.ToLower(destReg.Name) != "rsp" {
+	if !destIsReg || strings.ToLower(destReg.Name) != regRsp {
 		return current
 	}
 	if immOp, ok := insn.Operands[1].(disasm.ImmediateOperand); ok {
@@ -464,7 +348,7 @@ func (a *MicrosoftX64Analyzer) handleAddInstruction(
 		return current
 	}
 	destReg, destIsReg := insn.Operands[0].(disasm.RegisterOperand)
-	if !destIsReg || strings.ToLower(destReg.Name) != "rsp" {
+	if !destIsReg || strings.ToLower(destReg.Name) != regRsp {
 		return current
 	}
 	if immOp, ok := insn.Operands[1].(disasm.ImmediateOperand); ok {
@@ -482,7 +366,7 @@ func (a *MicrosoftX64Analyzer) handleAndInstruction(
 		return current
 	}
 	destReg, destIsReg := insn.Operands[0].(disasm.RegisterOperand)
-	if !destIsReg || strings.ToLower(destReg.Name) != "rsp" {
+	if !destIsReg || strings.ToLower(destReg.Name) != regRsp {
 		return current
 	}
 	if immOp, ok := insn.Operands[1].(disasm.ImmediateOperand); ok {
@@ -512,123 +396,7 @@ func (a *MicrosoftX64Analyzer) handleAndInstruction(
 //	[rsp-N]  = local variables (after sub rsp, N in prologue)
 func (a *MicrosoftX64Analyzer) AnalyzeStackFrame(insns []*disasm.Instruction) *StackFrame {
 	tracker := a.TrackStackPointer(insns)
-
-	frame := &StackFrame{
-		HasFramePointer: tracker.HasFramePointer(),
-		LocalVariables:  make([]LocalVariable, 0),
-		SpillSlots:      make([]SpillSlot, 0),
-	}
-
-	if fpOffset, ok := tracker.FramePointerRSPOffset(); ok {
-		frame.FramePointerOffset = fpOffset
-	}
-
-	type stackAccess struct {
-		offset   int64
-		size     disasm.Size
-		isSpill  bool
-		spillReg string
-	}
-	accessMap := make(map[int64]stackAccess)
-
-	for _, insn := range insns {
-		mnemonic := strings.ToLower(insn.Mnemonic)
-
-		rspOff, hasOff := tracker.GetOffset(insn.Address)
-		if !hasOff {
-			continue
-		}
-		concreteRSP, isConcreteRSP := rspOff.(ConcreteOffset)
-
-		for opIdx, op := range insn.Operands {
-			memOp, ok := op.(disasm.MemoryOperand)
-			if !ok {
-				continue
-			}
-
-			base := strings.ToLower(memOp.Base)
-			var frameOffset int64
-			var resolved bool
-
-			if base == "rsp" && isConcreteRSP {
-				frameOffset = concreteRSP.Value + memOp.Disp
-				resolved = true
-			} else if base == "rbp" && tracker.HasFramePointer() {
-				frameOffset = memOp.Disp
-				resolved = true
-			}
-
-			if !resolved {
-				continue
-			}
-
-			// detect spill slots: mov [rsp+off], reg where reg is callee-saved
-			isSpill := false
-			spillReg := ""
-			if mnemonic == "mov" && opIdx == 0 {
-				if len(insn.Operands) > 1 {
-					if srcReg, ok := insn.Operands[1].(disasm.RegisterOperand); ok {
-						canonical := canonicalizeRegister(strings.ToLower(srcReg.Name))
-						for _, csr := range msX64CalleeSavedInt {
-							if canonical == csr {
-								isSpill = true
-								spillReg = canonical
-								break
-							}
-						}
-					}
-				}
-			}
-
-			size := memOp.Size
-			if size == 0 {
-				size = disasm.Size64
-			}
-
-			if _, exists := accessMap[frameOffset]; !exists {
-				accessMap[frameOffset] = stackAccess{
-					offset:   frameOffset,
-					size:     size,
-					isSpill:  isSpill,
-					spillReg: spillReg,
-				}
-			}
-		}
-	}
-
-	// compute frame size as the most negative RSP offset seen
-	minOffset := int64(0)
-	for _, insn := range insns {
-		if off, ok := tracker.GetOffset(insn.Address); ok {
-			if concrete, ok := off.(ConcreteOffset); ok {
-				if concrete.Value < minOffset {
-					minOffset = concrete.Value
-				}
-			}
-		}
-	}
-	frame.Size = -minOffset
-
-	localIdx := 0
-	for _, acc := range accessMap {
-		if acc.isSpill {
-			frame.SpillSlots = append(frame.SpillSlots, SpillSlot{
-				Register:    acc.spillReg,
-				FrameOffset: acc.offset,
-				Size:        acc.size,
-			})
-		} else {
-			frame.LocalVariables = append(frame.LocalVariables, LocalVariable{
-				Name:        fmt.Sprintf("local_%d", localIdx),
-				Type:        ir.IntType{Width: ir.Size(acc.size), Signed: false},
-				FrameOffset: acc.offset,
-				Size:        acc.size,
-			})
-			localIdx++
-		}
-	}
-
-	return frame
+	return analyzeStackFrameCommon(insns, tracker, msX64CalleeSavedInt)
 }
 
 // Analyze performs complete ABI analysis for a function using Microsoft x64 convention.
@@ -640,7 +408,7 @@ func (a *MicrosoftX64Analyzer) Analyze(insns []*disasm.Instruction) *FunctionABI
 
 	isLeaf := true
 	for _, insn := range insns {
-		if strings.ToLower(insn.Mnemonic) == "call" {
+		if strings.ToLower(insn.Mnemonic) == mnemonicCall {
 			isLeaf = false
 			break
 		}

@@ -308,7 +308,7 @@ func TestExtractPointerConstraints_Load(t *testing.T) {
 
 	found := false
 	for _, c := range cs {
-		if c.Kind == PtrConstraintLoad && c.Lhs == "dest" && c.Rhs == "ptr" {
+		if c.Kind == PtrConstraintLoad && c.LHS == "dest" && c.RHS == "ptr" {
 			found = true
 			break
 		}
@@ -339,7 +339,7 @@ func TestExtractPointerConstraints_Store(t *testing.T) {
 
 	found := false
 	for _, c := range cs {
-		if c.Kind == PtrConstraintStore && c.Lhs == "ptr" && c.Rhs == "val" {
+		if c.Kind == PtrConstraintStore && c.LHS == "ptr" && c.RHS == "val" {
 			found = true
 			break
 		}
@@ -369,7 +369,7 @@ func TestExtractPointerConstraints_Copy(t *testing.T) {
 
 	found := false
 	for _, c := range cs {
-		if c.Kind == PtrConstraintCopy && c.Lhs == "dst" && c.Rhs == "src" {
+		if c.Kind == PtrConstraintCopy && c.LHS == "dst" && c.RHS == "src" {
 			found = true
 			break
 		}
@@ -403,10 +403,10 @@ func TestExtractPointerConstraints_Phi(t *testing.T) {
 
 	foundSrc0, foundSrc1 := false, false
 	for _, c := range cs {
-		if c.Kind == PtrConstraintCopy && c.Lhs == "phi_dest" && c.Rhs == "phi_src0" {
+		if c.Kind == PtrConstraintCopy && c.LHS == "phi_dest" && c.RHS == "phi_src0" {
 			foundSrc0 = true
 		}
-		if c.Kind == PtrConstraintCopy && c.Lhs == "phi_dest" && c.Rhs == "phi_src1" {
+		if c.Kind == PtrConstraintCopy && c.LHS == "phi_dest" && c.RHS == "phi_src1" {
 			foundSrc1 = true
 		}
 	}

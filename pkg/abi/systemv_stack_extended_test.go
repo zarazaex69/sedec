@@ -48,6 +48,8 @@ func TestSystemVAnalyzer_TrackStackPointer_PushPopSequence(t *testing.T) {
 
 // TestSystemVAnalyzer_TrackStackPointer_AlignmentOnSymbolic tests and rsp, -16
 // applied to a symbolic offset — exercises the SymbolicOffset branch in handleAndInstruction.
+//
+//nolint:dupl // intentionally tests system v analyzer with similar pattern
 func TestSystemVAnalyzer_TrackStackPointer_AlignmentOnSymbolic(t *testing.T) {
 	// sub rsp, rax (symbolic), then and rsp, -16 (alignment on symbolic base)
 	insns := []*disasm.Instruction{

@@ -42,14 +42,13 @@ const (
 func (lv latticeValue) String() string {
 	switch lv.kind {
 	case latticeTop:
-		const top = "top"
-		return top
+		return strTop
 	case latticeConstant:
 		return fmt.Sprintf("const(%s)", lv.constant.String())
 	case latticeBottom:
-		return "bottom"
+		return strBottom
 	default:
-		return "unknown"
+		return unknownRegion
 	}
 }
 

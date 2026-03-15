@@ -55,6 +55,8 @@ func TestSystemVAnalyzer_IdentifyParameters_NoParams(t *testing.T) {
 }
 
 // TestSystemVAnalyzer_IdentifyParameters_OneIntParam tests a function with one integer parameter
+//
+//nolint:dupl // intentionally tests system v analyzer with similar pattern
 func TestSystemVAnalyzer_IdentifyParameters_OneIntParam(t *testing.T) {
 	// function that reads rdi (first integer parameter) before writing it
 	insns := []*disasm.Instruction{
@@ -439,6 +441,8 @@ func TestSystemVAnalyzer_VerifyCalleeSavedRegisters_NeverUsed(t *testing.T) {
 }
 
 // TestSystemVAnalyzer_VerifyCalleeSavedRegisters_MovSpill tests mov-based spill/restore
+//
+//nolint:dupl // intentionally tests system v analyzer with similar pattern
 func TestSystemVAnalyzer_VerifyCalleeSavedRegisters_MovSpill(t *testing.T) {
 	// function that saves r12 via mov [rsp-8], r12 and restores via mov r12, [rsp-8]
 	insns := []*disasm.Instruction{
@@ -494,6 +498,8 @@ func TestSystemVAnalyzer_Analyze_VariadicFunction(t *testing.T) {
 }
 
 // TestSystemVAnalyzer_Analyze_Complete tests full ABI analysis pipeline
+//
+//nolint:dupl // intentionally tests system v analyzer with similar pattern
 func TestSystemVAnalyzer_Analyze_Complete(t *testing.T) {
 	// function(int a, int b) -> int: a + b
 	// uses rbx as callee-saved scratch register

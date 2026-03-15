@@ -1,6 +1,7 @@
 package abi
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/zarazaex69/sedec/pkg/disasm"
@@ -333,13 +334,13 @@ func TestCallingConvention_String(t *testing.T) {
 	}
 }
 
-// TestErrUnsupportedConvention_Error tests the Error() method on ErrUnsupportedConvention.
+// TestUnsupportedConventionError_Error tests the Error() method on UnsupportedConventionError.
 // this covers the previously uncovered analyzer.go:59 branch.
-func TestErrUnsupportedConvention_Error(t *testing.T) {
-	err := &ErrUnsupportedConvention{Convention: CallingConventionCustom}
+func TestUnsupportedConventionError_Error(t *testing.T) {
+	err := &UnsupportedConventionError{Convention: CallingConventionCustom}
 	msg := err.Error()
 	if msg == "" {
-		t.Error("ErrUnsupportedConvention.Error() must return non-empty string")
+		t.Error("UnsupportedConventionError.Error() must return non-empty string")
 	}
 	// verify the convention name appears in the error message
 	if msg != "unsupported calling convention: Custom" {
@@ -354,9 +355,9 @@ func TestNewAnalyzer_UnsupportedConvention(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unsupported convention, got nil")
 	}
-	unsupported, ok := err.(*ErrUnsupportedConvention)
-	if !ok {
-		t.Fatalf("expected *ErrUnsupportedConvention, got %T", err)
+	var unsupported *UnsupportedConventionError
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("expected *UnsupportedConventionError, got %T", err)
 	}
 	if unsupported.Convention != CallingConventionUnknown {
 		t.Errorf("wrong convention in error: expected Unknown, got %v", unsupported.Convention)
@@ -366,7 +367,7 @@ func TestNewAnalyzer_UnsupportedConvention(t *testing.T) {
 // TestStackOffset_IsStackOffset_Discriminators tests the isStackOffset() discriminator
 // methods on both concrete and symbolic offsets. these are interface discriminators
 // that must compile and execute without panic.
-func TestStackOffset_IsStackOffset_Discriminators(t *testing.T) {
+func TestStackOffset_IsStackOffset_Discriminators(_ *testing.T) {
 	// exercise the isStackOffset() methods directly — they are discriminators
 	// used by the type system and must not panic
 	c := ConcreteOffset{Value: -32}

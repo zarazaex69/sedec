@@ -22,8 +22,8 @@ func ptrVar(name string, version int, pointee ir.Type) ir.Variable {
 }
 
 // ptrVarExpr creates a variable expression for a pointer variable.
-func ptrVarExpr(name string, version int, pointee ir.Type) ir.Expression {
-	return &ir.VariableExpr{Var: ptrVar(name, version, pointee)}
+func ptrVarExpr(name string, _ int, pointee ir.Type) ir.Expression {
+	return &ir.VariableExpr{Var: ptrVar(name, 0, pointee)}
 }
 
 // makeSimpleCFG creates a minimal single-block CFG for testing.
@@ -46,26 +46,6 @@ func makeSimpleDomTree(cfgGraph *cfg.CFG) *cfg.DominatorTree {
 	dt := cfg.NewDominatorTree(cfgGraph)
 	dt.Idom = map[cfg.BlockID]cfg.BlockID{0: 0}
 	dt.Children = map[cfg.BlockID][]cfg.BlockID{0: {}}
-	return dt
-}
-
-// makeTwoBlockCFG creates a two-block CFG: bb0 → bb1.
-func makeTwoBlockCFG() *cfg.CFG {
-	return &cfg.CFG{
-		Blocks: map[cfg.BlockID]*cfg.BasicBlock{
-			0: {ID: 0, Predecessors: []cfg.BlockID{}, Successors: []cfg.BlockID{1}},
-			1: {ID: 1, Predecessors: []cfg.BlockID{0}, Successors: []cfg.BlockID{}},
-		},
-		Entry: 0,
-		Exits: []cfg.BlockID{1},
-	}
-}
-
-// makeTwoBlockDomTree creates a dominator tree for a two-block CFG.
-func makeTwoBlockDomTree(cfgGraph *cfg.CFG) *cfg.DominatorTree {
-	dt := cfg.NewDominatorTree(cfgGraph)
-	dt.Idom = map[cfg.BlockID]cfg.BlockID{0: 0, 1: 0}
-	dt.Children = map[cfg.BlockID][]cfg.BlockID{0: {1}, 1: {}}
 	return dt
 }
 

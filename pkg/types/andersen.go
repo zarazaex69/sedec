@@ -1,8 +1,6 @@
 package typeinfer
 
 import (
-	"fmt"
-
 	"github.com/zarazaex69/sedec/pkg/ir"
 )
 
@@ -82,9 +80,6 @@ type AndersenAnalyzer struct {
 	// nameToNode maps a canonical location name to its node index.
 	nameToNode map[string]int
 
-	// heapCounter generates unique names for heap allocation sites.
-	heapCounter int
-
 	// worklist contains node indices whose points-to sets have grown and
 	// whose outgoing edges must be re-propagated.
 	worklist []int
@@ -127,15 +122,15 @@ func (a *AndersenAnalyzer) andersenUnion(i, j int) int {
 		return ri
 	}
 
-	// union by rank: attach smaller tree under larger tree
 	var newRoot, oldRoot int
-	if a.nodes[ri].rank < a.nodes[rj].rank {
+	switch {
+	case a.nodes[ri].rank < a.nodes[rj].rank:
 		a.nodes[ri].parent = rj
 		newRoot, oldRoot = rj, ri
-	} else if a.nodes[ri].rank > a.nodes[rj].rank {
+	case a.nodes[ri].rank > a.nodes[rj].rank:
 		a.nodes[rj].parent = ri
 		newRoot, oldRoot = ri, rj
-	} else {
+	default:
 		a.nodes[rj].parent = ri
 		a.nodes[ri].rank++
 		newRoot, oldRoot = ri, rj
@@ -192,17 +187,6 @@ func (a *AndersenAnalyzer) andersenNodeFor(name string) int {
 	a.nameToNode[name] = idx
 	return idx
 }
-
-// heapNodeFor returns a unique heap node for an allocation site.
-func (a *AndersenAnalyzer) andersenHeapNodeFor(label string) int {
-	heapName := fmt.Sprintf("$heap_%s_%d", label, a.heapCounter)
-	a.heapCounter++
-	return a.andersenNodeFor(heapName)
-}
-
-// ============================================================================
-// points-to set and edge manipulation
-// ============================================================================
 
 // addToPointsTo adds target to node's points-to set if not already present.
 // returns true if the set grew (new element added).
@@ -523,19 +507,21 @@ func (a *AndersenAnalyzer) AnalyzeConstraints(constraints []PointerConstraint) A
 	// phase 1: seed addr_of constraints first (they establish ground-truth pts sets)
 	for _, c := range constraints {
 		if c.Kind == PtrConstraintAddressOf {
-			a.processAndersenAddressOf(c.Lhs, c.Rhs)
+			a.processAndersenAddressOf(c.LHS, c.RHS)
 		}
 	}
 
 	// phase 2: process copy, load, store constraints
 	for _, c := range constraints {
 		switch c.Kind {
+		case PtrConstraintAddressOf:
+			// handled in phase 1
 		case PtrConstraintCopy:
-			a.processAndersenCopy(c.Lhs, c.Rhs)
+			a.processAndersenCopy(c.LHS, c.RHS)
 		case PtrConstraintLoad:
-			a.processAndersenLoad(c.Lhs, c.Rhs)
+			a.processAndersenLoad(c.LHS, c.RHS)
 		case PtrConstraintStore:
-			a.processAndersenStore(c.Lhs, c.Rhs)
+			a.processAndersenStore(c.LHS, c.RHS)
 		}
 	}
 

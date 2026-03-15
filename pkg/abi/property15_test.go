@@ -211,11 +211,11 @@ func genStackOpProgram() gopter.Gen {
 			case 0: // push reg
 				r := regs[params.NextUint64()%uint64(len(regs))]
 				ops = append(ops, buildInsn(addr, "push", reg(r, disasm.Size64)))
-				addr += 1
+				addr++
 			case 1: // pop reg
 				r := regs[params.NextUint64()%uint64(len(regs))]
 				ops = append(ops, buildInsn(addr, "pop", reg(r, disasm.Size64)))
-				addr += 1
+				addr++
 			case 2: // sub rsp, N
 				n8 := int64((params.NextUint64()%16)+1) * 8
 				ops = append(ops, buildInsn(addr, "sub", reg("rsp", disasm.Size64), imm(n8, disasm.Size64)))

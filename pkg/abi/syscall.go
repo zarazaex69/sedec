@@ -20,14 +20,29 @@ const (
 	OSWindowsNT
 )
 
+const unknownStr = "Unknown"
+
+// os kind string constants
+const (
+	osLinuxAMD64Str = "Linux_AMD64"
+	osWindowsNTStr  = "Windows_NT"
+)
+
+// syscall kind string constants
+const (
+	mnemonicSyscall  = "syscall"
+	mnemonicSysenter = "sysenter"
+	mnemonicXor      = "xor"
+)
+
 func (o OSKind) String() string {
 	switch o {
 	case OSLinuxAMD64:
-		return "Linux_AMD64"
+		return osLinuxAMD64Str
 	case OSWindowsNT:
-		return "Windows_NT"
+		return osWindowsNTStr
 	default:
-		return "Unknown"
+		return unknownStr
 	}
 }
 
@@ -48,9 +63,9 @@ const (
 func (k SyscallKind) String() string {
 	switch k {
 	case SyscallKindSyscall:
-		return "syscall"
+		return mnemonicSyscall
 	case SyscallKindSysenter:
-		return "sysenter"
+		return mnemonicSysenter
 	case SyscallKindInt80:
 		return "int 0x80"
 	case SyscallKindInt2E:
@@ -140,9 +155,9 @@ func (r *SyscallRecovery) Recover(insns []*disasm.Instruction) []SyscallSite {
 func classifySyscallInsn(insn *disasm.Instruction) (SyscallKind, bool) {
 	m := strings.ToLower(insn.Mnemonic)
 	switch m {
-	case "syscall":
+	case mnemonicSyscall:
 		return SyscallKindSyscall, true
-	case "sysenter":
+	case mnemonicSysenter:
 		return SyscallKindSysenter, true
 	case "int":
 		// int 0x80 (linux ia32 compat) or int 0x2e (windows nt)
@@ -197,7 +212,7 @@ func (r *SyscallRecovery) resolveNumber(insns []*disasm.Instruction, siteIdx int
 		}
 
 		// xor eax, eax — zeroing idiom (syscall 0)
-		if (m == "xor" || m == "xorps") && len(insn.Operands) == 2 {
+		if (m == mnemonicXor || m == "xorps") && len(insn.Operands) == 2 {
 			src, ok := insn.Operands[1].(disasm.RegisterOperand)
 			if ok && canonicalizeRegister(strings.ToLower(src.Name)) == "rax" {
 				v := uint64(0)
@@ -206,7 +221,7 @@ func (r *SyscallRecovery) resolveNumber(insns []*disasm.Instruction, siteIdx int
 		}
 
 		// any other write to rax means the value is not statically known
-		if m != "test" && m != "cmp" {
+		if m != mnemonicTest && m != mnemonicCmp {
 			break
 		}
 	}

@@ -21,7 +21,7 @@ func TestStackOffset_Interface(t *testing.T) {
 }
 
 // TestStackOffset_IsStackOffset verifies the type discriminator methods compile and run.
-func TestStackOffset_IsStackOffset(t *testing.T) {
+func TestStackOffset_IsStackOffset(_ *testing.T) {
 	// these calls exercise the isStackOffset() discriminator methods
 	c := ConcreteOffset{Value: 0}
 	c.isStackOffset()

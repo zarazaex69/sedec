@@ -41,6 +41,17 @@ const (
 	ArrayKindInterfaceTable
 )
 
+// array kind string constants
+const (
+	strInterfaceTable = "interface_table"
+)
+
+// convergence reason string constants
+const (
+	strFixedPoint     = "fixed_point"
+	strIterationLimit = "iteration_limit"
+)
+
 // String returns a human-readable name for the array kind.
 func (k ArrayKind) String() string {
 	switch k {
@@ -51,7 +62,7 @@ func (k ArrayKind) String() string {
 	case ArrayKindJumpTable:
 		return "jump_table"
 	case ArrayKindInterfaceTable:
-		return "interface_table"
+		return strInterfaceTable
 	default:
 		return fmt.Sprintf("unknown_array_kind(%d)", int(k))
 	}
@@ -116,9 +127,9 @@ const (
 func (r ConvergenceReason) String() string {
 	switch r {
 	case ConvergenceNoNewTargets:
-		return "fixed_point"
+		return strFixedPoint
 	case ConvergenceIterationLimit:
-		return "iteration_limit"
+		return strIterationLimit
 	default:
 		return fmt.Sprintf("unknown(%d)", int(r))
 	}

@@ -2,11 +2,19 @@
 package analysis
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 
 	"github.com/zarazaex69/sedec/pkg/cfg"
 	"github.com/zarazaex69/sedec/pkg/ir"
+)
+
+// sentinel errors for vsa analysis
+var (
+	errVSANilResult          = errors.New("vsa: nil result")
+	errVSANonPositiveElement = errors.New("vsa: element size must be positive")
+	errVSANilFunction        = errors.New("interprocedural vsa: nil function")
 )
 
 // ============================================================================
@@ -244,10 +252,10 @@ type ArrayBoundsInfo struct {
 //  3. if the allocation size is known, verify that Hi * elementSize < allocSize.
 func InferArrayBounds(vsaResult *VSAResult, indexVar ir.Variable, elementSize int64) (*ArrayBoundsInfo, error) {
 	if vsaResult == nil {
-		return nil, fmt.Errorf("vsa: nil result")
+		return nil, errVSANilResult
 	}
 	if elementSize <= 0 {
-		return nil, fmt.Errorf("vsa: element size must be positive, got %d", elementSize)
+		return nil, fmt.Errorf("%w: got %d", errVSANonPositiveElement, elementSize)
 	}
 
 	vs := vsaResult.GetValueSet(indexVar)
@@ -316,15 +324,21 @@ const (
 	OverflowPossible
 )
 
+// overflow severity string constants
+const (
+	strDefinite = "definite"
+	strPossible = "possible"
+)
+
 // String returns a human-readable severity label.
 func (s BufferOverflowSeverity) String() string {
 	switch s {
 	case OverflowDefinite:
-		return "definite"
+		return strDefinite
 	case OverflowPossible:
-		return "possible"
+		return strPossible
 	default:
-		return "unknown"
+		return unknownRegion
 	}
 }
 
@@ -551,7 +565,7 @@ func (a *InterproceduralVSAAnalyzer) AnalyzeFunction(
 	domTree *cfg.DominatorTree,
 ) (*VSAResult, error) {
 	if function == nil {
-		return nil, fmt.Errorf("interprocedural vsa: nil function")
+		return nil, errVSANilFunction
 	}
 
 	// build a per-function analyzer with the configured parameters

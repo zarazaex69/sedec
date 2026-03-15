@@ -570,6 +570,8 @@ func TestSystemVAnalyzer_IdentifyReturnValues_RdxWithoutRax(t *testing.T) {
 // TestMicrosoftX64Analyzer_VerifyCalleeSavedRegisters_MovSpill tests that
 // callee-saved registers saved via mov [mem], reg and restored via mov reg, [mem]
 // are correctly detected as preserved in the Microsoft x64 convention.
+//
+//nolint:dupl // intentionally tests microsoft x64 analyzer with similar pattern
 func TestMicrosoftX64Analyzer_VerifyCalleeSavedRegisters_MovSpill(t *testing.T) {
 	// save rdi via mov (ms x64: rdi is callee-saved, unlike system v)
 	insns := []*disasm.Instruction{

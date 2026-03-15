@@ -6,8 +6,6 @@ import (
 )
 
 // detectELFArchitecture determines the architecture from ELF file.
-//
-//nolint:exhaustive // only common architectures are supported, default handles all others
 func (p *StandardLibParser) detectELFArchitecture(elfFile *elf.File) Architecture {
 	switch elfFile.Machine {
 	case elf.EM_X86_64:

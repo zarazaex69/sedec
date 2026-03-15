@@ -818,7 +818,7 @@ func (k MemoryDependencyKind) String() string {
 // requirements: 25.6
 func QueryMemoryDependency(
 	instrA, instrB ir.IRInstruction,
-	pointA, pointB ProgramPoint,
+	pointA, _ ProgramPoint,
 	aliasResult *AliasAnalysisResult,
 ) MemoryDependencyKind {
 	addrA := extractMemoryAddress(instrA)

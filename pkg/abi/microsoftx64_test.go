@@ -32,6 +32,8 @@ func TestMicrosoftX64Analyzer_IdentifyParameters_NoParams(t *testing.T) {
 }
 
 // TestMicrosoftX64Analyzer_IdentifyParameters_OneIntParam tests first integer parameter (rcx)
+//
+//nolint:dupl // intentionally tests microsoft x64 analyzer with similar pattern
 func TestMicrosoftX64Analyzer_IdentifyParameters_OneIntParam(t *testing.T) {
 	// microsoft x64: first integer param is rcx (not rdi like system v)
 	insns := []*disasm.Instruction{
@@ -514,6 +516,8 @@ func TestMicrosoftX64Analyzer_AnalyzeStackFrame_LocalVariables(t *testing.T) {
 }
 
 // TestMicrosoftX64Analyzer_Analyze_Complete tests full ABI analysis pipeline
+//
+//nolint:dupl // intentionally tests microsoft x64 analyzer with similar pattern
 func TestMicrosoftX64Analyzer_Analyze_Complete(t *testing.T) {
 	// function(int a, int b) -> int: a + b
 	// uses rbx as callee-saved scratch register

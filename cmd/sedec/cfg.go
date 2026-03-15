@@ -21,6 +21,18 @@ const (
 	helpFlagShort = "-help"
 	// helpFlagShortest is the shortest form help flag.
 	helpFlagShortest = "-h"
+	// flag constants for cfg command
+	flagOutput         = "--output"
+	flagOutputShort    = "-o"
+	flagFunction       = "--function"
+	flagFunctionShort  = "-f"
+	flagAddress        = "--address"
+	flagAddressShort   = "-a"
+	flagNoInstructions = "--no-instructions"
+	flagNoAddresses    = "--no-addresses"
+	flagNoMetadata     = "--no-metadata"
+	flagNoEdgeLabels   = "--no-edge-labels"
+	flagShowProvenance = "--show-provenance"
 )
 
 var (
@@ -141,7 +153,7 @@ func parseArguments(args []string, flags *cfgFlags, stdout io.Writer) (string, e
 			printCFGUsage(stdout)
 			return "", nil
 
-		case "--output", "-o", "--function", "-f", "--address", "-a":
+		case flagOutput, flagOutputShort, flagFunction, flagFunctionShort, flagAddress, flagAddressShort:
 			nextArg, err := getNextArgument(args, i, arg)
 			if err != nil {
 				return "", err
@@ -173,7 +185,7 @@ func parseArguments(args []string, flags *cfgFlags, stdout io.Writer) (string, e
 			}
 			flags.maxInstructions = maxInstr
 
-		case "--no-instructions", "--no-addresses", "--no-metadata", "--no-edge-labels", "--show-provenance":
+		case flagNoInstructions, flagNoAddresses, flagNoMetadata, flagNoEdgeLabels, flagShowProvenance:
 			setBooleanFlag(flags, arg)
 
 		default:
@@ -191,11 +203,11 @@ func parseArguments(args []string, flags *cfgFlags, stdout io.Writer) (string, e
 // setStringFlag sets string flag values based on flag name
 func setStringFlag(flags *cfgFlags, flagName, value string) error {
 	switch flagName {
-	case "--output", "-o":
+	case flagOutput, flagOutputShort:
 		flags.output = value
-	case "--function", "-f":
+	case flagFunction, flagFunctionShort:
 		flags.function = value
-	case "--address", "-a":
+	case flagAddress, flagAddressShort:
 		flags.address = value
 	default:
 		return fmt.Errorf("%w: %s", errUnknownStringFlag, flagName)
@@ -206,15 +218,15 @@ func setStringFlag(flags *cfgFlags, flagName, value string) error {
 // setBooleanFlag sets boolean flag values based on flag name
 func setBooleanFlag(flags *cfgFlags, flagName string) {
 	switch flagName {
-	case "--no-instructions":
+	case flagNoInstructions:
 		flags.includeInstructions = false
-	case "--no-addresses":
+	case flagNoAddresses:
 		flags.includeAddresses = false
-	case "--no-metadata":
+	case flagNoMetadata:
 		flags.includeMetadata = false
-	case "--no-edge-labels":
+	case flagNoEdgeLabels:
 		flags.showEdgeLabels = false
-	case "--show-provenance":
+	case flagShowProvenance:
 		flags.showProvenance = true
 	}
 }

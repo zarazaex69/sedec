@@ -41,10 +41,10 @@ func (p *StandardLibParser) findMachOEntryPoint(machoFile *macho.File) Address {
 	for _, load := range machoFile.Loads {
 		if cmd, ok := load.(*macho.Segment); ok {
 			// check for __TEXT segment which contains entry point
-			if cmd.Name == "__TEXT" {
+			if cmd.Name == segmentNameText {
 				// entry point is typically at start of __text section
 				for _, sec := range machoFile.Sections {
-					if sec.Seg == "__TEXT" && sec.Name == "__text" {
+					if sec.Seg == segmentNameText && sec.Name == "__text" {
 						return Address(sec.Addr)
 					}
 				}

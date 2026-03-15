@@ -109,16 +109,15 @@ func (a *SteensgaardAnalyzer) union(i, j int) int {
 	ptI := a.nodes[ri].pointsTo
 	ptJ := a.nodes[rj].pointsTo
 
-	// union by rank: attach smaller tree under larger tree
 	var newRoot, oldRoot int
-	if a.nodes[ri].rank < a.nodes[rj].rank {
+	switch {
+	case a.nodes[ri].rank < a.nodes[rj].rank:
 		a.nodes[ri].parent = rj
 		newRoot, oldRoot = rj, ri
-	} else if a.nodes[ri].rank > a.nodes[rj].rank {
+	case a.nodes[ri].rank > a.nodes[rj].rank:
 		a.nodes[rj].parent = ri
 		newRoot, oldRoot = ri, rj
-	} else {
-		// equal rank: attach rj under ri and increment ri's rank
+	default:
 		a.nodes[rj].parent = ri
 		a.nodes[ri].rank++
 		newRoot, oldRoot = ri, rj
@@ -126,15 +125,15 @@ func (a *SteensgaardAnalyzer) union(i, j int) int {
 	_ = oldRoot
 
 	// merge pointsTo on the new root
-	if ptI != -1 && ptJ != -1 {
-		// both had targets: recursively unify them
+	switch {
+	case ptI != -1 && ptJ != -1:
 		merged := a.union(ptI, ptJ)
 		a.nodes[newRoot].pointsTo = merged
-	} else if ptI != -1 {
+	case ptI != -1:
 		a.nodes[newRoot].pointsTo = ptI
-	} else if ptJ != -1 {
+	case ptJ != -1:
 		a.nodes[newRoot].pointsTo = ptJ
-	} else {
+	default:
 		a.nodes[newRoot].pointsTo = -1
 	}
 
@@ -233,17 +232,17 @@ func (a *SteensgaardAnalyzer) processLoad(x, y string) {
 	xTarget := a.nodes[xRoot].pointsTo
 	yTargetTarget := a.nodes[yTargetRoot].pointsTo
 
-	if xTarget == -1 && yTargetTarget == -1 {
+	switch {
+	case xTarget == -1 && yTargetTarget == -1:
 		// neither x nor *y has a target yet: create a shared fresh node
 		sharedNode := a.heapNodeFor(fmt.Sprintf("load_shared_%s_%s", x, y))
 		a.nodes[xRoot].pointsTo = sharedNode
 		a.nodes[yTargetRoot].pointsTo = sharedNode
-	} else if xTarget == -1 {
+	case xTarget == -1:
 		a.nodes[xRoot].pointsTo = yTargetTarget
-	} else if yTargetTarget == -1 {
+	case yTargetTarget == -1:
 		a.nodes[yTargetRoot].pointsTo = xTarget
-	} else {
-		// both have targets: unify them
+	default:
 		merged := a.union(xTarget, yTargetTarget)
 		a.nodes[a.find(xRoot)].pointsTo = merged
 		a.nodes[a.find(yTargetRoot)].pointsTo = merged
@@ -286,27 +285,27 @@ type PointerConstraint struct {
 	// Kind identifies the constraint type.
 	Kind PointerConstraintKind
 
-	// Lhs is the left-hand side variable name.
-	Lhs string
+	// LHS is the left-hand side variable name.
+	LHS string
 
-	// Rhs is the right-hand side variable name (or address-taken variable).
-	Rhs string
+	// RHS is the right-hand side variable name (or address-taken variable).
+	RHS string
 }
 
 // PointerConstraintKind classifies the four fundamental pointer constraint forms.
 type PointerConstraintKind int
 
 const (
-	// PtrConstraintAddressOf: lhs = &rhs
+	// PtrConstraintAddressOf represents lhs = &rhs.
 	PtrConstraintAddressOf PointerConstraintKind = iota
 
-	// PtrConstraintCopy: lhs = rhs  (pointer copy)
+	// PtrConstraintCopy represents lhs = rhs (pointer copy).
 	PtrConstraintCopy
 
-	// PtrConstraintLoad: lhs = *rhs
+	// PtrConstraintLoad represents lhs = *rhs.
 	PtrConstraintLoad
 
-	// PtrConstraintStore: *lhs = rhs
+	// PtrConstraintStore represents *lhs = rhs.
 	PtrConstraintStore
 )
 
@@ -358,14 +357,14 @@ func extractFromInstruction(instr ir.IRInstruction) []PointerConstraint {
 	case ir.Load:
 		return []PointerConstraint{{
 			Kind: PtrConstraintLoad,
-			Lhs:  i.Dest.String(),
-			Rhs:  exprRootVar(i.Address),
+			LHS:  i.Dest.String(),
+			RHS:  exprRootVar(i.Address),
 		}}
 	case ir.Store:
 		return []PointerConstraint{{
 			Kind: PtrConstraintStore,
-			Lhs:  exprRootVar(i.Address),
-			Rhs:  exprRootVar(i.Value),
+			LHS:  exprRootVar(i.Address),
+			RHS:  exprRootVar(i.Value),
 		}}
 	case ir.Call:
 		return extractFromCall(i)
@@ -386,8 +385,8 @@ func extractFromAssign(a ir.Assign) []PointerConstraint {
 		// x = y: copy constraint (conservative: always emit, analysis handles non-pointers)
 		return []PointerConstraint{{
 			Kind: PtrConstraintCopy,
-			Lhs:  destName,
-			Rhs:  src.Var.String(),
+			LHS:  destName,
+			RHS:  src.Var.String(),
 		}}
 
 	case ir.Cast:
@@ -397,8 +396,8 @@ func extractFromAssign(a ir.Assign) []PointerConstraint {
 			if innerVar != "" {
 				return []PointerConstraint{{
 					Kind: PtrConstraintAddressOf,
-					Lhs:  destName,
-					Rhs:  innerVar,
+					LHS:  destName,
+					RHS:  innerVar,
 				}}
 			}
 		}
@@ -407,8 +406,8 @@ func extractFromAssign(a ir.Assign) []PointerConstraint {
 		if innerVar != "" {
 			return []PointerConstraint{{
 				Kind: PtrConstraintCopy,
-				Lhs:  destName,
-				Rhs:  innerVar,
+				LHS:  destName,
+				RHS:  innerVar,
 			}}
 		}
 
@@ -419,8 +418,8 @@ func extractFromAssign(a ir.Assign) []PointerConstraint {
 		if baseVar != "" {
 			return []PointerConstraint{{
 				Kind: PtrConstraintCopy,
-				Lhs:  destName,
-				Rhs:  baseVar,
+				LHS:  destName,
+				RHS:  baseVar,
 			}}
 		}
 	}
@@ -440,8 +439,8 @@ func extractFromCall(c ir.Call) []PointerConstraint {
 			retNode := fmt.Sprintf("$ret_%s", targetVar)
 			constraints = append(constraints, PointerConstraint{
 				Kind: PtrConstraintCopy,
-				Lhs:  c.Dest.String(),
-				Rhs:  retNode,
+				LHS:  c.Dest.String(),
+				RHS:  retNode,
 			})
 		}
 	}
@@ -452,8 +451,8 @@ func extractFromCall(c ir.Call) []PointerConstraint {
 		paramNode := fmt.Sprintf("$param_%s_%d", targetVar, idx)
 		constraints = append(constraints, PointerConstraint{
 			Kind: PtrConstraintCopy,
-			Lhs:  paramNode,
-			Rhs:  arg.String(),
+			LHS:  paramNode,
+			RHS:  arg.String(),
 		})
 	}
 
@@ -468,8 +467,8 @@ func extractFromPhi(p ir.Phi) []PointerConstraint {
 	for _, src := range p.Sources {
 		constraints = append(constraints, PointerConstraint{
 			Kind: PtrConstraintCopy,
-			Lhs:  destName,
-			Rhs:  src.Var.String(),
+			LHS:  destName,
+			RHS:  src.Var.String(),
 		})
 	}
 	return constraints
@@ -523,13 +522,13 @@ func (a *SteensgaardAnalyzer) AnalyzeConstraints(constraints []PointerConstraint
 	for _, c := range constraints {
 		switch c.Kind {
 		case PtrConstraintAddressOf:
-			a.processAddressOf(c.Lhs, c.Rhs)
+			a.processAddressOf(c.LHS, c.RHS)
 		case PtrConstraintCopy:
-			a.processCopy(c.Lhs, c.Rhs)
+			a.processCopy(c.LHS, c.RHS)
 		case PtrConstraintLoad:
-			a.processLoad(c.Lhs, c.Rhs)
+			a.processLoad(c.LHS, c.RHS)
 		case PtrConstraintStore:
-			a.processStore(c.Lhs, c.Rhs)
+			a.processStore(c.LHS, c.RHS)
 		}
 	}
 

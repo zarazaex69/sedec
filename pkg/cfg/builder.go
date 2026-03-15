@@ -271,9 +271,12 @@ func (b *Builder) identifyEntryAndExits() {
 	// no additional work needed here
 }
 
+// mnemonic constant for unconditional jump
+const mnemonicJmp = "jmp"
+
 // isUnconditionalJump checks if mnemonic is an unconditional jump.
 func isUnconditionalJump(mnemonic string) bool {
-	return mnemonic == "jmp"
+	return mnemonic == mnemonicJmp
 }
 
 // isConditionalBranch checks if mnemonic is a conditional branch.

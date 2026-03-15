@@ -403,16 +403,16 @@ func checkCopyTransitivity(t *testing.T, prog *copyChainProgram) bool {
 	// v0 = &obj
 	cs = append(cs, PointerConstraint{
 		Kind: PtrConstraintAddressOf,
-		Lhs:  "v0",
-		Rhs:  prog.objName,
+		LHS:  "v0",
+		RHS:  prog.objName,
 	})
 
 	// v1 = v0; v2 = v1; ... vN = v(N-1)
 	for i := 0; i < prog.chainLen; i++ {
 		cs = append(cs, PointerConstraint{
 			Kind: PtrConstraintCopy,
-			Lhs:  fmt.Sprintf("v%d", i+1),
-			Rhs:  fmt.Sprintf("v%d", i),
+			LHS:  fmt.Sprintf("v%d", i+1),
+			RHS:  fmt.Sprintf("v%d", i),
 		})
 	}
 
@@ -502,24 +502,24 @@ func checkLoadSoundness(t *testing.T, prog *loadSoundnessProgram) bool {
 	// p = &a0
 	cs = append(cs, PointerConstraint{
 		Kind: PtrConstraintAddressOf,
-		Lhs:  "p",
-		Rhs:  "a0",
+		LHS:  "p",
+		RHS:  "a0",
 	})
 
 	// a0 = &a1; a1 = &a2; ...
 	for i := 0; i < prog.depth; i++ {
 		cs = append(cs, PointerConstraint{
 			Kind: PtrConstraintAddressOf,
-			Lhs:  fmt.Sprintf("a%d", i),
-			Rhs:  fmt.Sprintf("a%d", i+1),
+			LHS:  fmt.Sprintf("a%d", i),
+			RHS:  fmt.Sprintf("a%d", i+1),
 		})
 	}
 
 	// x = *p (load through p, which points to a0, which points to a1)
 	cs = append(cs, PointerConstraint{
 		Kind: PtrConstraintLoad,
-		Lhs:  "x",
-		Rhs:  "p",
+		LHS:  "x",
+		RHS:  "p",
 	})
 
 	// after x = *p: x should point to what a0 points to, i.e., a1
@@ -561,16 +561,16 @@ func checkStoreSoundness(t *testing.T, prog *storeSoundnessProgram) bool {
 	// p = &a
 	cs = append(cs, PointerConstraint{
 		Kind: PtrConstraintAddressOf,
-		Lhs:  "p",
-		Rhs:  "a",
+		LHS:  "p",
+		RHS:  "a",
 	})
 
 	// *p = b0; *p = b1; ... (store multiple values through p)
 	for i := 0; i < prog.numTargets; i++ {
 		cs = append(cs, PointerConstraint{
 			Kind: PtrConstraintStore,
-			Lhs:  "p",
-			Rhs:  fmt.Sprintf("b%d", i),
+			LHS:  "p",
+			RHS:  fmt.Sprintf("b%d", i),
 		})
 	}
 
@@ -610,8 +610,8 @@ func checkAndersenPrecision(t *testing.T, prog *andersenPrecisionProgram) bool {
 	for i := 0; i < prog.numTargets; i++ {
 		cs = append(cs, PointerConstraint{
 			Kind: PtrConstraintAddressOf,
-			Lhs:  "p",
-			Rhs:  fmt.Sprintf("a%d", i),
+			LHS:  "p",
+			RHS:  fmt.Sprintf("a%d", i),
 		})
 	}
 
@@ -659,28 +659,28 @@ func checkNoAlias(t *testing.T, prog *noAliasProgram) bool {
 	// chain A: pA0 = &objA; pA1 = pA0; ...
 	cs = append(cs, PointerConstraint{
 		Kind: PtrConstraintAddressOf,
-		Lhs:  "pA0",
-		Rhs:  "objA",
+		LHS:  "pA0",
+		RHS:  "objA",
 	})
 	for i := 0; i < prog.chainALen-1; i++ {
 		cs = append(cs, PointerConstraint{
 			Kind: PtrConstraintCopy,
-			Lhs:  fmt.Sprintf("pA%d", i+1),
-			Rhs:  fmt.Sprintf("pA%d", i),
+			LHS:  fmt.Sprintf("pA%d", i+1),
+			RHS:  fmt.Sprintf("pA%d", i),
 		})
 	}
 
 	// chain B: pB0 = &objB; pB1 = pB0; ...
 	cs = append(cs, PointerConstraint{
 		Kind: PtrConstraintAddressOf,
-		Lhs:  "pB0",
-		Rhs:  "objB",
+		LHS:  "pB0",
+		RHS:  "objB",
 	})
 	for i := 0; i < prog.chainBLen-1; i++ {
 		cs = append(cs, PointerConstraint{
 			Kind: PtrConstraintCopy,
-			Lhs:  fmt.Sprintf("pB%d", i+1),
-			Rhs:  fmt.Sprintf("pB%d", i),
+			LHS:  fmt.Sprintf("pB%d", i+1),
+			RHS:  fmt.Sprintf("pB%d", i),
 		})
 	}
 
@@ -876,7 +876,7 @@ func ptrProgramToConstraints(prog *ptrProgram) []PointerConstraint {
 		case genStore:
 			kind = PtrConstraintStore
 		}
-		cs = append(cs, PointerConstraint{Kind: kind, Lhs: op.lhs, Rhs: op.rhs})
+		cs = append(cs, PointerConstraint{Kind: kind, LHS: op.lhs, RHS: op.rhs})
 	}
 	return cs
 }

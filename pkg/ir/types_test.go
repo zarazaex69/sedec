@@ -9,12 +9,9 @@ import (
 // ============================================================================
 
 const (
-	strVoid  = "void"
-	strBool  = "bool"
-	strTrue  = "true"
-	strFalse = "false"
-	strNull  = "null"
-	strAdd   = "add"
+	strVoid = "void"
+	strBool = "bool"
+	strAdd  = "add"
 )
 
 func TestVoidType(t *testing.T) {

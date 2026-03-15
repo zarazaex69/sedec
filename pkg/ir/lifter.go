@@ -103,7 +103,7 @@ func (l *Lifter) LiftInstruction(insn *disasm.Instruction) ([]IRInstruction, err
 
 	switch {
 	// arithmetic operations
-	case mnemonic == "add":
+	case mnemonic == mnemonicAdd:
 		return l.liftAdd(insn)
 	case mnemonic == "sub":
 		return l.liftSub(insn)
@@ -1552,18 +1552,18 @@ func (l *Lifter) getConditionFromMnemonic(mnemonic string) Expression {
 	pfVar := Variable{Name: "pf", Type: BoolType{}}
 
 	switch mnemonic {
-	case "je", "jz":
+	case mnemonicJe, mnemonicJz:
 		// jump if equal (zf = 1)
 		return VariableExpr{Var: zfVar}
 
-	case "jne", "jnz":
+	case mnemonicJne, mnemonicJnz:
 		// jump if not equal (zf = 0)
 		return UnaryOp{
 			Op:      UnOpLogicalNot,
 			Operand: VariableExpr{Var: zfVar},
 		}
 
-	case "jl", "jnge":
+	case mnemonicJl, mnemonicJnge:
 		// jump if less (sf != of)
 		return BinaryOp{
 			Op:    BinOpNe,
@@ -1571,7 +1571,7 @@ func (l *Lifter) getConditionFromMnemonic(mnemonic string) Expression {
 			Right: VariableExpr{Var: ofVar},
 		}
 
-	case "jle", "jng":
+	case mnemonicJle, mnemonicJng:
 		// jump if less or equal (zf = 1 or sf != of)
 		return BinaryOp{
 			Op:   BinOpLogicalOr,
@@ -1583,7 +1583,7 @@ func (l *Lifter) getConditionFromMnemonic(mnemonic string) Expression {
 			},
 		}
 
-	case "jg", "jnle":
+	case mnemonicJg, mnemonicJnle:
 		// jump if greater (zf = 0 and sf = of)
 		return BinaryOp{
 			Op: BinOpLogicalAnd,
@@ -1598,7 +1598,7 @@ func (l *Lifter) getConditionFromMnemonic(mnemonic string) Expression {
 			},
 		}
 
-	case "jge", "jnl":
+	case mnemonicJge, mnemonicJnl:
 		// jump if greater or equal (sf = of)
 		return BinaryOp{
 			Op:    BinOpEq,
@@ -1606,11 +1606,11 @@ func (l *Lifter) getConditionFromMnemonic(mnemonic string) Expression {
 			Right: VariableExpr{Var: ofVar},
 		}
 
-	case "jb", "jnae", "jc":
+	case mnemonicJb, mnemonicJnae, mnemonicJc:
 		// jump if below (cf = 1)
 		return VariableExpr{Var: cfVar}
 
-	case "jbe", "jna":
+	case mnemonicJbe, mnemonicJna:
 		// jump if below or equal (cf = 1 or zf = 1)
 		return BinaryOp{
 			Op:    BinOpLogicalOr,
@@ -1618,7 +1618,7 @@ func (l *Lifter) getConditionFromMnemonic(mnemonic string) Expression {
 			Right: VariableExpr{Var: zfVar},
 		}
 
-	case "ja", "jnbe":
+	case mnemonicJa, mnemonicJnbe:
 		// jump if above (cf = 0 and zf = 0)
 		return BinaryOp{
 			Op: BinOpLogicalAnd,
@@ -1632,40 +1632,40 @@ func (l *Lifter) getConditionFromMnemonic(mnemonic string) Expression {
 			},
 		}
 
-	case "jae", "jnb", "jnc":
+	case mnemonicJae, mnemonicJnb, mnemonicJnc:
 		// jump if above or equal (cf = 0)
 		return UnaryOp{
 			Op:      UnOpLogicalNot,
 			Operand: VariableExpr{Var: cfVar},
 		}
 
-	case "js":
+	case mnemonicJs:
 		// jump if sign (sf = 1)
 		return VariableExpr{Var: sfVar}
 
-	case "jns":
+	case mnemonicJns:
 		// jump if not sign (sf = 0)
 		return UnaryOp{
 			Op:      UnOpLogicalNot,
 			Operand: VariableExpr{Var: sfVar},
 		}
 
-	case "jo":
+	case mnemonicJo:
 		// jump if overflow (of = 1)
 		return VariableExpr{Var: ofVar}
 
-	case "jno":
+	case mnemonicJno:
 		// jump if not overflow (of = 0)
 		return UnaryOp{
 			Op:      UnOpLogicalNot,
 			Operand: VariableExpr{Var: ofVar},
 		}
 
-	case "jp", "jpe":
+	case mnemonicJp, mnemonicJpe:
 		// jump if parity (pf = 1)
 		return VariableExpr{Var: pfVar}
 
-	case "jnp", "jpo":
+	case mnemonicJnp, mnemonicJpo:
 		// jump if not parity (pf = 0)
 		return UnaryOp{
 			Op:      UnOpLogicalNot,

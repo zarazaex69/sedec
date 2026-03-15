@@ -26,9 +26,17 @@ const (
 	RegionUnknown
 )
 
+// unknownRegion is the string representation for unknown/unresolvable values.
+const unknownRegion = "unknown"
+
+// lattice level string constants shared across analysis package
+const (
+	strTop    = "top"
+	strBottom = "bottom"
+)
+
 // String returns a human-readable name for the memory region kind.
 func (k MemoryRegionKind) String() string {
-	const unknownRegion = "unknown"
 	switch k {
 	case RegionGlobal:
 		return "global"
@@ -154,7 +162,7 @@ func (si StridedInterval) String() string {
 		return fmt.Sprintf("{%d}", si.Lo)
 	}
 	if si.IsTop() {
-		return "top"
+		return strTop
 	}
 	if si.Stride == 1 {
 		return fmt.Sprintf("[%d, %d]", si.Lo, si.Hi)
@@ -622,10 +630,10 @@ func (vs *ValueSet) Widen(next *ValueSet) *ValueSet {
 // String returns a human-readable representation of the ValueSet.
 func (vs *ValueSet) String() string {
 	if vs.IsBottom() {
-		return "bottom"
+		return strBottom
 	}
 	if vs.IsTop() {
-		return "top"
+		return strTop
 	}
 	result := "{"
 	first := true

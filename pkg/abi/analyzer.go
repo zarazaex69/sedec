@@ -46,16 +46,18 @@ func NewAnalyzer(convention CallingConvention) (Analyzer, error) {
 		return NewSystemVAnalyzer(), nil
 	case CallingConventionMicrosoftX64:
 		return NewMicrosoftX64Analyzer(), nil
+	case CallingConventionUnknown, CallingConventionCustom:
+		return nil, &UnsupportedConventionError{Convention: convention}
 	default:
-		return nil, &ErrUnsupportedConvention{Convention: convention}
+		return nil, &UnsupportedConventionError{Convention: convention}
 	}
 }
 
-// ErrUnsupportedConvention is returned when an unsupported calling convention is requested
-type ErrUnsupportedConvention struct {
+// UnsupportedConventionError is returned when an unsupported calling convention is requested
+type UnsupportedConventionError struct {
 	Convention CallingConvention
 }
 
-func (e *ErrUnsupportedConvention) Error() string {
+func (e *UnsupportedConventionError) Error() string {
 	return "unsupported calling convention: " + e.Convention.String()
 }

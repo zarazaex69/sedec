@@ -66,6 +66,9 @@ const (
 	CheckSat CheckResult = 1
 )
 
+// check result string constants
+const strUnknown = "unknown"
+
 // String returns a human-readable name for the check result.
 func (r CheckResult) String() string {
 	switch r {
@@ -74,9 +77,9 @@ func (r CheckResult) String() string {
 	case CheckUnsat:
 		return "unsat"
 	case CheckUnknown:
-		return "unknown"
+		return strUnknown
 	default:
-		return "unknown"
+		return strUnknown
 	}
 }
 

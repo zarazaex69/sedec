@@ -45,6 +45,7 @@ const (
 
 // String returns a human-readable name for the constraint kind.
 func (k ConstraintKind) String() string {
+	const ptrKind = "ptr"
 	switch k {
 	case ConstraintEquality:
 		return "eq"
@@ -53,7 +54,7 @@ func (k ConstraintKind) String() string {
 	case ConstraintFieldAccess:
 		return "field"
 	case ConstraintPointerTo:
-		return "ptr"
+		return ptrKind
 	case ConstraintArrayElement:
 		return "array"
 	case ConstraintReturnType:

@@ -767,9 +767,9 @@ func (p *Parser) parseType(s string) (Type, error) {
 	s = strings.TrimSpace(s)
 
 	switch s {
-	case "void":
+	case KeywordVoid:
 		return VoidType{}, nil
-	case "bool":
+	case KeywordBool:
 		return BoolType{}, nil
 	}
 

@@ -99,6 +99,12 @@ func formatHex(value uint64) string {
 	return string(buf[i:])
 }
 
+// formatting constants for memory operand display
+const (
+	strPlus  = " + "
+	strMinus = " - "
+)
+
 // formatMemory formats memory operand as string.
 func formatMemory(m MemoryOperand) string {
 	result := ""
@@ -119,7 +125,7 @@ func formatMemory(m MemoryOperand) string {
 
 	if hasIndex {
 		if hasBase {
-			result += " + "
+			result += strPlus
 		}
 		result += m.Index
 		if m.Scale > 1 {
@@ -142,9 +148,9 @@ func formatDisplacement(result string, hasBase, hasIndex, hasDisp bool, disp int
 
 	if hasBase || hasIndex {
 		if disp > 0 {
-			result += " + "
+			result += strPlus
 		} else {
-			result += " - "
+			result += strMinus
 		}
 		//nolint:gosec // abs value conversion is safe
 		result += "0x" + formatHex(uint64(abs(disp)))
