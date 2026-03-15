@@ -239,6 +239,17 @@ var linuxAMD64SyscallTable = map[uint64]SyscallSignature{
 			{Name: "backlog", Type: ir.IntType{Width: ir.Size4, Signed: true}, Register: "rsi"},
 		},
 	},
+	56: {
+		Name: "clone", Number: 56, OS: OSLinuxAMD64,
+		ReturnType: ir.IntType{Width: ir.Size8, Signed: true},
+		Params: []SyscallParam{
+			{Name: "flags", Type: ir.IntType{Width: ir.Size8, Signed: false}, Register: "rdi"},
+			{Name: "stack", Type: ir.PointerType{Pointee: ir.VoidType{}}, Register: "rsi"},
+			{Name: "parent_tid", Type: ir.PointerType{Pointee: ir.IntType{Width: ir.Size4, Signed: true}}, Register: "rdx"},
+			{Name: "child_tid", Type: ir.PointerType{Pointee: ir.IntType{Width: ir.Size4, Signed: true}}, Register: "r10"},
+			{Name: "tls", Type: ir.IntType{Width: ir.Size8, Signed: false}, Register: "r8"},
+		},
+	},
 	57: {
 		Name: "fork", Number: 57, OS: OSLinuxAMD64,
 		ReturnType: ir.IntType{Width: ir.Size4, Signed: true},
