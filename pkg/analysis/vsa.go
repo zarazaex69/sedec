@@ -920,6 +920,10 @@ type VSAAnalyzer struct {
 
 	// maxIterations is the hard limit on fixed-point iterations.
 	maxIterations int
+
+	// summaryDB is an optional interprocedural function summary database.
+	// when non-nil, call instructions use callee summaries for return values.
+	summaryDB *FunctionSummaryDB
 }
 
 // NewVSAAnalyzer creates a new VSA analyzer with default parameters.
@@ -1099,11 +1103,8 @@ func (a *VSAAnalyzer) transferInstruction(
 		result.ValueSets[i.Dest.String()] = NewValueSetTop()
 
 	case *ir.Call:
-		// call result is top (unknown return value)
-		if i.Dest != nil {
-			state[i.Dest.String()] = NewValueSetTop()
-			result.ValueSets[i.Dest.String()] = NewValueSetTop()
-		}
+		// delegate to summary-aware handler; falls back to top when no summary exists
+		a.transferCallInstruction(i, state, result)
 
 	case *ir.Phi:
 		// phi-node: join all source value sets
