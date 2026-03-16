@@ -3,9 +3,16 @@
 package idiom
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/zarazaex69/sedec/pkg/ir"
+)
+
+// sentinel errors for nil-input guards.
+var (
+	ErrNilBlock    = errors.New("magic divisor recognition: nil block")
+	ErrNilFunction = errors.New("magic divisor recognition: nil function")
 )
 
 // MagicDivKind distinguishes signed from unsigned magic division patterns.
@@ -64,7 +71,7 @@ func (m *MagicDivisorMatch) String() string {
 // pattern with a single division instruction. it returns all matches found.
 func RecognizeMagicDivisors(block *ir.BasicBlock) ([]*MagicDivisorMatch, error) {
 	if block == nil {
-		return nil, fmt.Errorf("magic divisor recognition: nil block")
+		return nil, ErrNilBlock
 	}
 
 	var matches []*MagicDivisorMatch
@@ -170,7 +177,7 @@ func RecognizeMagicDivisors(block *ir.BasicBlock) ([]*MagicDivisorMatch, error) 
 // basic block in a function. returns all matches found across all blocks.
 func RecognizeMagicDivisorsInFunction(fn *ir.Function) ([]*MagicDivisorMatch, error) {
 	if fn == nil {
-		return nil, fmt.Errorf("magic divisor recognition: nil function")
+		return nil, ErrNilFunction
 	}
 
 	var allMatches []*MagicDivisorMatch
@@ -465,10 +472,11 @@ func applyReplacements(block *ir.BasicBlock, matches []*MagicDivisorMatch) {
 			divOp = ir.BinOpDiv
 		}
 
-		divWidth := m.Dividend.Type
-		if divWidth == nil {
-			divWidth = ir.IntType{Width: ir.Size4, Signed: m.Kind == MagicDivSigned}
+		// determine the type for the divisor constant; fall back to i32/u32
+		if m.Dividend.Type == nil {
+			m.Dividend.Type = ir.IntType{Width: ir.Size4, Signed: m.Kind == MagicDivSigned}
 		}
+		signed := m.Kind == MagicDivSigned
 
 		block.Instructions[m.ShiftInstrIdx] = &ir.Assign{
 			Dest: m.ResultVar,
@@ -476,9 +484,10 @@ func applyReplacements(block *ir.BasicBlock, matches []*MagicDivisorMatch) {
 				Op:   divOp,
 				Left: &ir.VariableExpr{Var: m.Dividend},
 				Right: &ir.ConstantExpr{Value: ir.IntConstant{
+					//nolint:gosec // divisor is bounded to [2, 2^31] by recoverDivisor
 					Value:  int64(m.Divisor),
 					Width:  ir.Size4,
-					Signed: m.Kind == MagicDivSigned,
+					Signed: signed,
 				}},
 			},
 		}

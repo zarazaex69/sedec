@@ -25,10 +25,6 @@ func u32Const(v uint64) ir.Expression {
 	}}
 }
 
-func i32Const(v int64) ir.Expression {
-	return &ir.ConstantExpr{Value: ir.IntConstant{Value: v, Width: ir.Size4, Signed: true}}
-}
-
 func varExpr(v ir.Variable) ir.Expression {
 	return &ir.VariableExpr{Var: v}
 }
