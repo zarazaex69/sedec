@@ -23,8 +23,12 @@ import (
 //  3. early-return hoisting:       if(cond){return x;} rest → if(!cond) rest; return x;
 //  4. single-use temporary inlining: t=expr; use(t) → use(expr)
 //  5. tail merging: if(c){S;T} else{S';T} → if(c){S} else{S'} T  (identical tails)
+//  6. empty-else normalization:    if(c){S} else {} → if(c){S}
+//  7. merge consecutive if-statements with identical bodies: if(A){S} if(B){S} → if(A||B){S}
+//  8. redundant branch elimination: if(c){S} S → S  (then-body identical to next stmt)
+//  9. second early-return hoisting pass: collapses patterns exposed by passes 6-8
 //
-// Requirements: 60.4, 60.5, 60.6, 60.7, 60.9
+// Requirements: 60.4, 60.5, 60.6, 60.7, 60.9, 15.1, 15.7
 func CondenseExpressions(ast *StructuredAST) *StructuredAST {
 	if ast == nil {
 		return nil
@@ -38,14 +42,43 @@ func CondenseExpressions(ast *StructuredAST) *StructuredAST {
 	// pass 2: apply de morgan's laws to negate-of-logical expressions
 	body = applyDeMorgan(body)
 
-	// pass 3: hoist early returns to the top of blocks
-	body = hoistEarlyReturns(body)
-
-	// pass 4: inline single-use temporaries
+	// pass 3: inline single-use temporaries
+	// note: hoistEarlyReturns is intentionally deferred to pass 8 so that
+	// passes 4-7 (tail merging, empty-else normalization, consecutive-if merging,
+	// redundant branch elimination) can operate on the original conditions without
+	// interference from condition inversion introduced by early-return hoisting.
 	body = inlineSingleUseTemps(body)
 
-	// pass 5: tail merging — hoist identical trailing statements out of if-else branches
+	// pass 4: tail merging — hoist identical trailing statements out of if-else branches
 	body = mergeTails(body)
+
+	// pass 5: normalize empty else-branches to nil so that pass 6 can merge
+	// consecutive ifs that were separated by an empty else after tail hoisting.
+	// example: if(c){S} else {} → if(c){S}
+	body = normalizeEmptyElse(body)
+
+	// pass 6: merge consecutive if-statements with identical bodies into a
+	// single if with a disjunctive condition: if(A){S} if(B){S} → if(A||B){S}.
+	// this eliminates tail duplication artifacts produced by the structuring engine
+	// when the convergence block is duplicated into multiple branches.
+	body = mergeConsecutiveIfs(body)
+
+	// pass 7: eliminate redundant branches where the then-body is identical to
+	// the immediately following statement: if(c){S} S → S.
+	// this collapses the residual pattern after passes 4-6 where both the
+	// conditional and the fall-through path execute the same code.
+	body = eliminateRedundantBranches(body)
+
+	// pass 8: hoist early returns to the top of blocks.
+	// applied last so that passes 4-7 can operate on unmodified conditions.
+	// example: if(cond){return x;} rest → if(!cond) rest; return x;
+	body = hoistEarlyReturns(body)
+
+	// pass 9: second early-return hoisting pass — re-apply after passes 6-8
+	// have exposed new if(cond){return x;} patterns that were not visible
+	// during pass 3 (e.g., after mergeConsecutiveIfs collapses multiple ifs
+	// into one, the resulting if may now be eligible for hoisting).
+	body = hoistEarlyReturns(body)
 
 	return &StructuredAST{
 		Body:       body,
@@ -870,24 +903,20 @@ func substituteInStmt(stmt Statement, subst map[string]ir.Expression) Statement 
 // by the lifter (which stores *Call, *Load, *Assign etc. in IRInstruction slices).
 func substituteInInstr(instr ir.IRInstruction, subst map[string]ir.Expression) ir.IRInstruction {
 	if assign, ok := ir.AsAssign(instr); ok {
-		return ir.Assign{Dest: assign.Dest, Source: substituteInExpr(assign.Source, subst)}
+		// preserve SourceLocation from the original instruction
+		return ir.CloneAssign(assign, substituteInExpr(assign.Source, subst))
 	}
 	if load, ok := ir.AsLoad(instr); ok {
-		return ir.Load{Dest: load.Dest, Address: substituteInExpr(load.Address, subst), Size: load.Size}
+		return ir.CloneLoad(load, substituteInExpr(load.Address, subst))
 	}
 	if store, ok := ir.AsStore(instr); ok {
-		return ir.Store{
-			Address: substituteInExpr(store.Address, subst),
-			Value:   substituteInExpr(store.Value, subst),
-			Size:    store.Size,
-		}
+		return ir.CloneStore(store,
+			substituteInExpr(store.Address, subst),
+			substituteInExpr(store.Value, subst),
+		)
 	}
 	if branch, ok := ir.AsBranch(instr); ok {
-		return ir.Branch{
-			Condition:   substituteInExpr(branch.Condition, subst),
-			TrueTarget:  branch.TrueTarget,
-			FalseTarget: branch.FalseTarget,
-		}
+		return ir.CloneBranch(branch, substituteInExpr(branch.Condition, subst))
 	}
 	if call, ok := ir.AsCall(instr); ok {
 		// build ArgExprs: for each argument, substitute if it's in subst,
@@ -913,12 +942,8 @@ func substituteInInstr(instr ir.IRInstruction, subst map[string]ir.Expression) i
 		}
 		newArgs := make([]ir.Variable, len(call.Args))
 		copy(newArgs, call.Args)
-		return ir.Call{
-			Dest:     call.Dest,
-			Target:   substituteInExpr(call.Target, subst),
-			Args:     newArgs,
-			ArgExprs: newArgExprs,
-		}
+		// preserve SourceLocation so traceability survives condensation
+		return ir.CloneCall(call, substituteInExpr(call.Target, subst), newArgs, newArgExprs)
 	}
 	return instr
 }
@@ -1272,4 +1297,279 @@ func statementsEqual(a, b Statement) bool {
 		// for other statement types, use string representation as a proxy
 		return fmt.Sprintf("%T", a) == fmt.Sprintf("%T", b)
 	}
+}
+
+// ============================================================================
+// pass 6: consecutive if merging
+// ============================================================================
+
+// mergeConsecutiveIfs walks the AST and collapses sequences of if-statements
+// that share an identical body into a single if with a disjunctive condition:
+//
+//	if (A) { S }
+//	if (B) { S }   →   if (A || B) { S }
+//
+// the merge is applied repeatedly within each block until no further reduction
+// is possible. only if-statements without an else branch are merged; an else
+// branch changes the semantics and must not be collapsed.
+//
+// this eliminates the tail-duplication artifact produced by the structuring
+// engine when the convergence block is cloned into multiple branches.
+func mergeConsecutiveIfs(stmt Statement) Statement {
+	if stmt == nil {
+		return nil
+	}
+
+	switch s := stmt.(type) {
+	case Block:
+		// recurse into children first (bottom-up)
+		stmts := make([]Statement, len(s.Stmts))
+		for i, child := range s.Stmts {
+			stmts[i] = mergeConsecutiveIfs(child)
+		}
+		// repeatedly scan for adjacent if-pairs with identical bodies
+		stmts = collapseConsecutiveIfPairs(stmts)
+		return Block{Stmts: stmts}
+
+	case IfStatement:
+		then := mergeConsecutiveIfs(s.Then)
+		var els Statement
+		if s.Else != nil {
+			els = mergeConsecutiveIfs(s.Else)
+		}
+		return IfStatement{Condition: s.Condition, Then: then, Else: els}
+
+	case WhileStatement:
+		return WhileStatement{Condition: s.Condition, Body: mergeConsecutiveIfs(s.Body)}
+
+	case DoWhileStatement:
+		return DoWhileStatement{Body: mergeConsecutiveIfs(s.Body), Condition: s.Condition}
+
+	case ForStatement:
+		var init, post Statement
+		if s.Init != nil {
+			init = mergeConsecutiveIfs(s.Init)
+		}
+		if s.Post != nil {
+			post = mergeConsecutiveIfs(s.Post)
+		}
+		return ForStatement{
+			Init:      init,
+			Condition: s.Condition,
+			Post:      post,
+			Body:      mergeConsecutiveIfs(s.Body),
+		}
+
+	default:
+		return stmt
+	}
+}
+
+// collapseConsecutiveIfPairs scans a statement list and merges adjacent
+// if-statements (no else) whose bodies are structurally identical.
+// the scan is repeated until no further merges are possible, handling
+// chains of three or more identical branches.
+func collapseConsecutiveIfPairs(stmts []Statement) []Statement {
+	changed := true
+	for changed {
+		changed = false
+		result := make([]Statement, 0, len(stmts))
+		i := 0
+		for i < len(stmts) {
+			a, aOk := stmts[i].(IfStatement)
+			if !aOk || a.Else != nil || i+1 >= len(stmts) {
+				result = append(result, stmts[i])
+				i++
+				continue
+			}
+			b, bOk := stmts[i+1].(IfStatement)
+			if !bOk || b.Else != nil {
+				result = append(result, stmts[i])
+				i++
+				continue
+			}
+			// merge only when bodies are structurally identical
+			if !statementsEqual(a.Then, b.Then) {
+				result = append(result, stmts[i])
+				i++
+				continue
+			}
+			// build disjunctive condition: A || B
+			merged := IfStatement{
+				Condition: ir.BinaryOp{
+					Op:    ir.BinOpLogicalOr,
+					Left:  a.Condition,
+					Right: b.Condition,
+				},
+				Then: a.Then,
+				Else: nil,
+			}
+			result = append(result, merged)
+			i += 2
+			changed = true
+		}
+		stmts = result
+	}
+	return stmts
+}
+
+// ============================================================================
+// pass 6: empty-else normalization
+// ============================================================================
+
+// normalizeEmptyElse walks the AST and replaces empty else-branches with nil.
+// an empty else is a Block with zero non-empty statements.
+// this is necessary because mergeAsymmetricTails (in mergeTails) replaces a
+// hoisted else-branch with Block{Stmts: nil}, which is structurally non-nil
+// but semantically empty. collapseConsecutiveIfPairs checks a.Else != nil to
+// decide whether to skip merging, so without this normalization the merge
+// would be incorrectly suppressed.
+func normalizeEmptyElse(stmt Statement) Statement {
+	if stmt == nil {
+		return nil
+	}
+
+	switch s := stmt.(type) {
+	case Block:
+		result := make([]Statement, len(s.Stmts))
+		for i, child := range s.Stmts {
+			result[i] = normalizeEmptyElse(child)
+		}
+		return Block{Stmts: result}
+
+	case IfStatement:
+		then := normalizeEmptyElse(s.Then)
+		var els Statement
+		if s.Else != nil {
+			normalized := normalizeEmptyElse(s.Else)
+			if !isEmptyBlock(normalized) {
+				els = normalized
+			}
+			// else: els stays nil — empty else is dropped
+		}
+		return IfStatement{Condition: s.Condition, Then: then, Else: els}
+
+	case WhileStatement:
+		return WhileStatement{Condition: s.Condition, Body: normalizeEmptyElse(s.Body)}
+
+	case DoWhileStatement:
+		return DoWhileStatement{Body: normalizeEmptyElse(s.Body), Condition: s.Condition}
+
+	case ForStatement:
+		var init, post Statement
+		if s.Init != nil {
+			init = normalizeEmptyElse(s.Init)
+		}
+		if s.Post != nil {
+			post = normalizeEmptyElse(s.Post)
+		}
+		return ForStatement{
+			Init:      init,
+			Condition: s.Condition,
+			Post:      post,
+			Body:      normalizeEmptyElse(s.Body),
+		}
+
+	default:
+		return stmt
+	}
+}
+
+// ============================================================================
+// pass 8: redundant branch elimination
+// ============================================================================
+
+// eliminateRedundantBranches walks the AST and removes if-statements whose
+// then-body is structurally identical to the immediately following statement
+// in the parent block. the pattern:
+//
+//	if (cond) { S }
+//	S
+//
+// is collapsed to just S, because S executes unconditionally regardless of
+// the branch outcome. this is the residual artifact produced when:
+//  1. mergeTails hoists the convergence block out of the else-branch
+//  2. normalizeEmptyElse drops the now-empty else
+//  3. mergeConsecutiveIfs merges the resulting bare if with the next if
+//  4. the merged if(A||B){S} is followed by the same S from the fall-through
+//
+// the transformation is only applied when:
+//   - the if-statement has no else branch
+//   - the then-body is structurally identical to the next statement
+//
+// after elimination the redundant if is dropped and S appears exactly once.
+func eliminateRedundantBranches(stmt Statement) Statement {
+	if stmt == nil {
+		return nil
+	}
+
+	switch s := stmt.(type) {
+	case Block:
+		// recurse into children first (bottom-up)
+		stmts := make([]Statement, len(s.Stmts))
+		for i, child := range s.Stmts {
+			stmts[i] = eliminateRedundantBranches(child)
+		}
+		stmts = collapseRedundantIfPairs(stmts)
+		return Block{Stmts: stmts}
+
+	case IfStatement:
+		then := eliminateRedundantBranches(s.Then)
+		var els Statement
+		if s.Else != nil {
+			els = eliminateRedundantBranches(s.Else)
+		}
+		return IfStatement{Condition: s.Condition, Then: then, Else: els}
+
+	case WhileStatement:
+		return WhileStatement{Condition: s.Condition, Body: eliminateRedundantBranches(s.Body)}
+
+	case DoWhileStatement:
+		return DoWhileStatement{Body: eliminateRedundantBranches(s.Body), Condition: s.Condition}
+
+	case ForStatement:
+		var init, post Statement
+		if s.Init != nil {
+			init = eliminateRedundantBranches(s.Init)
+		}
+		if s.Post != nil {
+			post = eliminateRedundantBranches(s.Post)
+		}
+		return ForStatement{
+			Init:      init,
+			Condition: s.Condition,
+			Post:      post,
+			Body:      eliminateRedundantBranches(s.Body),
+		}
+
+	default:
+		return stmt
+	}
+}
+
+// collapseRedundantIfPairs scans a statement list and removes if-statements
+// (no else) whose then-body is identical to the immediately following statement.
+// the if is dropped and the following statement is kept (it executes unconditionally).
+func collapseRedundantIfPairs(stmts []Statement) []Statement {
+	result := make([]Statement, 0, len(stmts))
+	i := 0
+	for i < len(stmts) {
+		ifStmt, ok := stmts[i].(IfStatement)
+		if !ok || ifStmt.Else != nil || i+1 >= len(stmts) {
+			result = append(result, stmts[i])
+			i++
+			continue
+		}
+		next := stmts[i+1]
+		if statementsEqual(ifStmt.Then, next) {
+			// then-body is identical to the next statement: drop the if,
+			// keep the unconditional statement
+			result = append(result, next)
+			i += 2
+			continue
+		}
+		result = append(result, stmts[i])
+		i++
+	}
+	return result
 }

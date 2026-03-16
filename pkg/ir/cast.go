@@ -96,3 +96,62 @@ func IsTerminator(instr IRInstruction) bool {
 	}
 	return false
 }
+
+// ============================================================================
+// clone helpers — preserve SourceLocation across condensation passes
+// ============================================================================
+
+// CloneAssign returns a new Assign with the same SourceLocation as src but
+// with Source replaced by newSource.
+func CloneAssign(src Assign, newSource Expression) Assign {
+	return Assign{
+		baseInstruction: src.baseInstruction,
+		Dest:            src.Dest,
+		Source:          newSource,
+	}
+}
+
+// CloneLoad returns a new Load with the same SourceLocation as src but
+// with Address replaced by newAddress.
+func CloneLoad(src Load, newAddress Expression) Load {
+	return Load{
+		baseInstruction: src.baseInstruction,
+		Dest:            src.Dest,
+		Address:         newAddress,
+		Size:            src.Size,
+	}
+}
+
+// CloneStore returns a new Store with the same SourceLocation as src but
+// with Address and Value replaced.
+func CloneStore(src Store, newAddress, newValue Expression) Store {
+	return Store{
+		baseInstruction: src.baseInstruction,
+		Address:         newAddress,
+		Value:           newValue,
+		Size:            src.Size,
+	}
+}
+
+// CloneBranch returns a new Branch with the same SourceLocation as src but
+// with Condition replaced by newCond.
+func CloneBranch(src Branch, newCond Expression) Branch {
+	return Branch{
+		baseInstruction: src.baseInstruction,
+		Condition:       newCond,
+		TrueTarget:      src.TrueTarget,
+		FalseTarget:     src.FalseTarget,
+	}
+}
+
+// CloneCall returns a new Call with the same SourceLocation as src but
+// with Target, Args, and ArgExprs replaced.
+func CloneCall(src Call, newTarget Expression, newArgs []Variable, newArgExprs []Expression) Call {
+	return Call{
+		baseInstruction: src.baseInstruction,
+		Dest:            src.Dest,
+		Target:          newTarget,
+		Args:            newArgs,
+		ArgExprs:        newArgExprs,
+	}
+}
