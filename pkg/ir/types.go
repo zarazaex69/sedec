@@ -570,6 +570,26 @@ func (e Cast) String() string {
 	return fmt.Sprintf("(%s)%s", e.TargetType.String(), e.Expr.String())
 }
 
+// LoadExpr represents an inlined memory dereference expression.
+// it is produced by the expression condensation pass when a single-use
+// Load instruction is inlined at its use site.
+// example: *(uint64_t*)(rip + 141195)
+type LoadExpr struct {
+	Address Expression
+	Size    Size
+}
+
+func (LoadExpr) isExpression() {}
+
+// Type returns a pointer-sized unsigned integer type matching the load size.
+func (e LoadExpr) Type() Type {
+	return IntType{Width: e.Size, Signed: false}
+}
+
+func (e LoadExpr) String() string {
+	return fmt.Sprintf("*(uint%d_t*)(%s)", e.Size*8, e.Address.String())
+}
+
 // ============================================================================
 // IR Instructions
 // ============================================================================

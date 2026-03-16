@@ -50,6 +50,12 @@ func (g *Generator) Generate(fn *ir.Function, ast *structuring.StructuredAST) st
 	return renderFunctionDecl(decl)
 }
 
+// RenderDecl formats a FunctionDecl as a c function definition string.
+// exported so the cli pipeline can render a decl produced by TraceableGenerator.
+func RenderDecl(decl FunctionDecl) string {
+	return renderFunctionDecl(decl)
+}
+
 // renderFunctionDecl formats a FunctionDecl as a c function definition string
 func renderFunctionDecl(decl FunctionDecl) string {
 	var sb strings.Builder
@@ -359,9 +365,9 @@ func (s *generatorState) genExpression(expr ir.Expression) string {
 
 	switch e := expr.(type) {
 	case ir.VariableExpr:
-		return e.Var.String()
+		return normalizeFlagVar(e.Var.String())
 	case *ir.VariableExpr:
-		return e.Var.String()
+		return normalizeFlagVar(e.Var.String())
 
 	case ir.ConstantExpr:
 		return genConstant(e.Value)
@@ -394,6 +400,13 @@ func (s *generatorState) genExpression(expr ir.Expression) string {
 	case *ir.Cast:
 		inner := s.genExpression(e.Expr)
 		return fmt.Sprintf("(%s)(%s)", cTypeName(e.TargetType), inner)
+
+	case ir.LoadExpr:
+		addr := s.genExpression(e.Address)
+		return fmt.Sprintf("*(%s*)(%s)", cIntTypeForSize(e.Size), addr)
+	case *ir.LoadExpr:
+		addr := s.genExpression(e.Address)
+		return fmt.Sprintf("*(%s*)(%s)", cIntTypeForSize(e.Size), addr)
 
 	default:
 		return "/* unknown expr */"
@@ -605,4 +618,19 @@ func indent(depth int) string {
 		return ""
 	}
 	return strings.Repeat("    ", depth)
+}
+
+// normalizeFlagVar rewrites raw cpu flag variable names to readable c expressions.
+// x86 flag variables (zf, sf, of, cf, pf) are boolean-valued; when used directly
+// as a condition they should render as "(flagvar != 0)" to make the semantics
+// explicit and avoid confusion with integer variables.
+// if the lazy flag elimination pass has already materialized the flag into a
+// proper comparison expression, this function is a no-op for non-flag names.
+func normalizeFlagVar(name string) string {
+	switch name {
+	case "zf", "sf", "of", "cf", "pf", "af", "df", "tf":
+		return fmt.Sprintf("(%s != 0)", name)
+	default:
+		return name
+	}
 }

@@ -315,9 +315,14 @@ func decompileInstructions(functionName string, instructions []*disasm.Instructi
 		return "", fmt.Errorf("structuring failed: %w", err)
 	}
 
-	// generate c pseudocode with scope-minimized variable declarations
-	gen := codegen.New()
-	return gen.Generate(irFunc, ast), nil
+	// apply expression condensation: inline single-use temps, merge nested ifs,
+	// de morgan simplification, early-return hoisting
+	ast = structuring.CondenseExpressions(ast)
+
+	// generate c pseudocode with scope minimization and traceability annotations
+	gen := codegen.NewTraceableGenerator()
+	decl, _ := gen.GenerateWithTraceability(irFunc, ast)
+	return codegen.RenderDecl(decl), nil
 }
 
 // buildCFGFromIRFunction reconstructs a cfg.CFG from the ir.Function block topology.

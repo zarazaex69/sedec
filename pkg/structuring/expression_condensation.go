@@ -452,7 +452,9 @@ func inlineSingleUseTemps(stmt Statement) Statement {
 			stmts[i] = inlineSingleUseTemps(child)
 		}
 
-		// collect single-definition candidates from IRBlock nodes
+		// collect single-definition candidates from IRBlock nodes.
+		// candidates are: Assign with pure source, or Load (single memory read)
+		// where the Load is the ONLY instruction in its IRBlock (cross-block inline).
 		// map: variable name → (defining expression, index of IRBlock in stmts)
 		type candidate struct {
 			expr     ir.Expression
@@ -468,20 +470,35 @@ func inlineSingleUseTemps(stmt Statement) Statement {
 				continue
 			}
 			for j, instr := range irb.Instructions {
-				assign, ok := ir.AsAssign(instr)
-				if !ok {
+				// handle Assign with pure source
+				if assign, ok := ir.AsAssign(instr); ok {
+					defCount[assign.Dest.Name]++
+					if defCount[assign.Dest.Name] == 1 && isPureExpr(assign.Source) {
+						candidates[assign.Dest.Name] = candidate{
+							expr:     assign.Source,
+							blockIdx: i,
+							instrIdx: j,
+						}
+					} else {
+						delete(candidates, assign.Dest.Name)
+					}
 					continue
 				}
-				defCount[assign.Dest.Name]++
-				if defCount[assign.Dest.Name] == 1 && isPureExpr(assign.Source) {
-					candidates[assign.Dest.Name] = candidate{
-						expr:     assign.Source,
-						blockIdx: i,
-						instrIdx: j,
+				// handle Load: inline only when it is the sole instruction in its
+				// IRBlock (cross-block pattern: one block = one load, next block uses it).
+				// inlining a Load that shares a block with other instructions would
+				// reorder memory reads relative to those instructions.
+				if load, ok := ir.AsLoad(instr); ok {
+					defCount[load.Dest.Name]++
+					if defCount[load.Dest.Name] == 1 && len(irb.Instructions) == 1 {
+						candidates[load.Dest.Name] = candidate{
+							expr:     buildLoadExpr(load),
+							blockIdx: i,
+							instrIdx: j,
+						}
+					} else {
+						delete(candidates, load.Dest.Name)
 					}
-				} else {
-					// multiple definitions: not safe to inline
-					delete(candidates, assign.Dest.Name)
 				}
 			}
 		}
@@ -517,13 +534,16 @@ func inlineSingleUseTemps(stmt Statement) Statement {
 				continue
 			}
 
-			// rebuild IRBlock, dropping inlined assignments
+			// rebuild IRBlock, dropping inlined assignments and loads
 			newInstrs := make([]ir.IRInstruction, 0, len(irb.Instructions))
 			for _, instr := range irb.Instructions {
-				assign, isAssign := ir.AsAssign(instr)
-				if isAssign {
+				if assign, isAssign := ir.AsAssign(instr); isAssign {
 					if _, shouldInline := subst[assign.Dest.Name]; shouldInline {
-						// drop this assignment; its value is inlined at the use site
+						continue
+					}
+				}
+				if load, isLoad := ir.AsLoad(instr); isLoad {
+					if _, shouldInline := subst[load.Dest.Name]; shouldInline {
 						continue
 					}
 				}
@@ -587,24 +607,43 @@ func inlineSingleUseTemps(stmt Statement) Statement {
 	}
 }
 
-// isPureExpr returns true when the expression has no observable side effects
-// (no function calls, no memory loads). only pure arithmetic/logical/variable
-// expressions are safe to duplicate at the use site.
+// buildLoadExpr constructs a LoadExpr from an ir.Load instruction.
+// used by inlineSingleUseTemps to represent an inlined memory dereference.
+func buildLoadExpr(load ir.Load) ir.Expression {
+	return ir.LoadExpr{Address: load.Address, Size: load.Size}
+}
+
+// isPureExpr returns true when the expression is safe to inline at a single
+// use site without changing observable semantics.
+//
+// policy:
+//   - arithmetic, logical, cast, variable, constant: always safe
+//   - Load (memory read): safe to inline at a single use site because the
+//     value is read exactly once; no write side-effect
+//   - Call: never safe (may have side effects, must execute exactly once at
+//     the original program point)
 func isPureExpr(expr ir.Expression) bool {
 	if expr == nil {
 		return true
 	}
 	switch e := expr.(type) {
-	case ir.VariableExpr, ir.ConstantExpr:
+	case ir.VariableExpr, *ir.VariableExpr,
+		ir.ConstantExpr, *ir.ConstantExpr:
 		return true
 	case ir.BinaryOp:
 		return isPureExpr(e.Left) && isPureExpr(e.Right)
+	case *ir.BinaryOp:
+		return isPureExpr(e.Left) && isPureExpr(e.Right)
 	case ir.UnaryOp:
+		return isPureExpr(e.Operand)
+	case *ir.UnaryOp:
 		return isPureExpr(e.Operand)
 	case ir.Cast:
 		return isPureExpr(e.Expr)
+	case *ir.Cast:
+		return isPureExpr(e.Expr)
 	default:
-		// Load, Call, and any unknown expression type are not pure
+		// Call and unknown expression types are not pure
 		return false
 	}
 }
@@ -816,6 +855,8 @@ func substituteInExpr(expr ir.Expression, subst map[string]ir.Expression) ir.Exp
 		return ir.UnaryOp{Op: e.Op, Operand: substituteInExpr(e.Operand, subst)}
 	case ir.Cast:
 		return ir.Cast{Expr: substituteInExpr(e.Expr, subst), TargetType: e.TargetType}
+	case ir.LoadExpr:
+		return ir.LoadExpr{Address: substituteInExpr(e.Address, subst), Size: e.Size}
 	default:
 		return expr
 	}
