@@ -186,6 +186,21 @@ func (s ReturnStatement) String() string {
 	return "return;"
 }
 
+// VarDeclStatement is an ast node representing a single inline variable declaration.
+// it is injected by the scope minimizer at the first-use point of each variable.
+// example output: "int64_t v0;"
+type VarDeclStatement struct {
+	Name     string
+	TypeName string
+}
+
+func (VarDeclStatement) isStatement() {}
+
+// String returns the c declaration string for this variable.
+func (v VarDeclStatement) String() string {
+	return fmt.Sprintf("%s %s;", v.TypeName, v.Name)
+}
+
 // regionKind classifies the structural type of a CFG region
 type regionKind int
 
