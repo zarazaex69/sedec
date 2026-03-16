@@ -55,6 +55,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runCFG(subArgs, stdin, stdout, stderr)
 	case "ir":
 		return runIR(subArgs, stdin, stdout, stderr)
+	case "decompile":
+		return runDecompile(subArgs, stdin, stdout, stderr)
 	case "signatures":
 		return runSignatures(subArgs, stdin, stdout, stderr)
 	default:
@@ -80,6 +82,7 @@ commands:
   disasm      disassemble binary to assembly output
   cfg         export control flow graph in dot format
   ir          lift binary to intermediate representation
+  decompile   decompile binary to c pseudocode
   signatures  manage and inspect signature databases
 
 global options:
@@ -111,6 +114,12 @@ examples:
 
   # lift to ssa form
   sedec ir --ssa /bin/ls
+
+  # decompile to c pseudocode
+  sedec decompile /bin/ls
+
+  # decompile specific function
+  sedec decompile --function main /bin/ls
 
   # list signatures in a database
   sedec signatures list libc.json
