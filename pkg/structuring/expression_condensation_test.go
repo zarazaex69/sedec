@@ -993,3 +993,108 @@ func TestInlineSingleUseTemps_VariableAddressLoad_NoInline(t *testing.T) {
 		t.Fatal("t1 load must be preserved: variable address load is unsafe to inline")
 	}
 }
+
+// TestInlineSingleUseTemps_PointerCallTarget reproduces the exact lifter output:
+// the lifter emits *ir.Call (pointer), not ir.Call (value). the inline pass
+// must handle both via ir.AsCall to correctly count and substitute uses.
+func TestInlineSingleUseTemps_PointerCallTarget(t *testing.T) {
+	constAddr := constUint(162976)
+	// lifter emits *Load (pointer receiver)
+	loadT2 := &ir.Load{
+		Dest:    ir.Variable{Name: "t2", Type: ir.IntType{Width: ir.Size8, Signed: false}},
+		Address: constAddr,
+		Size:    ir.Size8,
+	}
+	rdiVar := ir.Variable{Name: "rdi", Type: ir.IntType{Width: ir.Size8, Signed: false}}
+	t2Var := ir.Variable{Name: "t2", Type: ir.IntType{Width: ir.Size8, Signed: false}}
+
+	// lifter emits *Call (pointer receiver)
+	callInstr := &ir.Call{
+		Dest:   nil,
+		Target: ir.VariableExpr{Var: t2Var},
+		Args:   []ir.Variable{rdiVar},
+	}
+
+	irb := IRBlock{
+		BlockID:      1,
+		Instructions: []ir.IRInstruction{loadT2, callInstr},
+	}
+	blk := Block{Stmts: []Statement{irb}}
+
+	result := inlineSingleUseTemps(blk)
+
+	// find the call instruction in result
+	var foundCall *ir.Call
+	var check func(Statement)
+	check = func(s Statement) {
+		switch r := s.(type) {
+		case Block:
+			for _, child := range r.Stmts {
+				check(child)
+			}
+		case IRBlock:
+			for _, instr := range r.Instructions {
+				if c, ok := ir.AsCall(instr); ok {
+					cp := c
+					foundCall = &cp
+				}
+			}
+		}
+	}
+	check(result)
+
+	if foundCall == nil {
+		t.Fatal("expected Call instruction in result")
+	}
+	// target must be inlined to LoadExpr
+	if _, ok := foundCall.Target.(ir.LoadExpr); !ok {
+		t.Fatalf("expected LoadExpr as call target after inlining *Call, got %T", foundCall.Target)
+	}
+}
+
+// TestInlineSingleUseTemps_PointerAssign verifies that *ir.Assign (pointer receiver)
+// emitted by the lifter is correctly handled by the inline pass.
+func TestInlineSingleUseTemps_PointerAssign(t *testing.T) {
+	// lifter emits *Assign
+	assignT := &ir.Assign{
+		Dest:   ir.Variable{Name: "t", Type: ir.IntType{Width: ir.Size8, Signed: true}},
+		Source: ir.BinaryOp{Op: ir.BinOpAdd, Left: intVarExpr("a"), Right: constInt(1)},
+	}
+	useT := &ir.Assign{
+		Dest:   ir.Variable{Name: "result", Type: ir.IntType{Width: ir.Size8, Signed: true}},
+		Source: ir.VariableExpr{Var: ir.Variable{Name: "t", Type: ir.IntType{Width: ir.Size8, Signed: true}}},
+	}
+
+	irb := IRBlock{
+		BlockID:      1,
+		Instructions: []ir.IRInstruction{assignT, useT},
+	}
+	blk := Block{Stmts: []Statement{irb}}
+
+	result := inlineSingleUseTemps(blk)
+
+	// t definition must be gone, result must have inlined source
+	var checkIRB func(Statement)
+	checkIRB = func(s Statement) {
+		switch r := s.(type) {
+		case Block:
+			for _, child := range r.Stmts {
+				checkIRB(child)
+			}
+		case IRBlock:
+			for _, instr := range r.Instructions {
+				if assign, ok := ir.AsAssign(instr); ok {
+					if assign.Dest.Name == "t" {
+						t.Fatal("t definition must be inlined away")
+					}
+					if assign.Dest.Name == "result" {
+						if _, ok := assign.Source.(ir.BinaryOp); !ok {
+							t.Fatalf("expected inlined BinaryOp, got %T", assign.Source)
+						}
+					}
+				}
+			}
+		}
+	}
+	checkIRB(result)
+}

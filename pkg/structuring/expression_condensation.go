@@ -729,36 +729,48 @@ func countVarUses(stmt Statement, useCount map[string]int) {
 }
 
 // countVarUsesInInstr counts variable uses in a single IR instruction.
+// uses As* helpers to handle both value and pointer receiver variants emitted
+// by the lifter (which stores *Call, *Load, *Assign etc. in IRInstruction slices).
 func countVarUsesInInstr(instr ir.IRInstruction, useCount map[string]int) {
-	switch i := instr.(type) {
-	case ir.Assign:
+	if assign, ok := ir.AsAssign(instr); ok {
 		// only count uses in the source expression, not the destination
-		countVarUsesInExpr(i.Source, useCount)
-	case ir.Load:
-		countVarUsesInExpr(i.Address, useCount)
-	case ir.Store:
-		countVarUsesInExpr(i.Address, useCount)
-		countVarUsesInExpr(i.Value, useCount)
-	case ir.Branch:
-		countVarUsesInExpr(i.Condition, useCount)
-	case ir.Call:
-		if i.Target != nil {
-			countVarUsesInExpr(i.Target, useCount)
+		countVarUsesInExpr(assign.Source, useCount)
+		return
+	}
+	if load, ok := ir.AsLoad(instr); ok {
+		countVarUsesInExpr(load.Address, useCount)
+		return
+	}
+	if store, ok := ir.AsStore(instr); ok {
+		countVarUsesInExpr(store.Address, useCount)
+		countVarUsesInExpr(store.Value, useCount)
+		return
+	}
+	if branch, ok := ir.AsBranch(instr); ok {
+		countVarUsesInExpr(branch.Condition, useCount)
+		return
+	}
+	if call, ok := ir.AsCall(instr); ok {
+		if call.Target != nil {
+			countVarUsesInExpr(call.Target, useCount)
 		}
 		// if ArgExprs already populated (previous inline pass), count those instead
-		if len(i.ArgExprs) == len(i.Args) && len(i.ArgExprs) > 0 {
-			for _, e := range i.ArgExprs {
+		if len(call.ArgExprs) == len(call.Args) && len(call.ArgExprs) > 0 {
+			for _, e := range call.ArgExprs {
 				countVarUsesInExpr(e, useCount)
 			}
 		} else {
-			for _, arg := range i.Args {
+			for _, arg := range call.Args {
 				useCount[arg.Name]++
 			}
 		}
-	case ir.Return:
-		if i.Value != nil {
-			useCount[i.Value.Name]++
+		return
+	}
+	if ret, ok := ir.AsReturn(instr); ok {
+		if ret.Value != nil {
+			useCount[ret.Value.Name]++
 		}
+		return
 	}
 }
 
@@ -854,48 +866,61 @@ func substituteInStmt(stmt Statement, subst map[string]ir.Expression) Statement 
 
 // substituteInInstr applies the substitution map to all expressions in an
 // IR instruction, returning a new instruction with replaced variable references.
+// uses As* helpers to handle both value and pointer receiver variants emitted
+// by the lifter (which stores *Call, *Load, *Assign etc. in IRInstruction slices).
 func substituteInInstr(instr ir.IRInstruction, subst map[string]ir.Expression) ir.IRInstruction {
-	switch i := instr.(type) {
-	case ir.Assign:
-		return ir.Assign{Dest: i.Dest, Source: substituteInExpr(i.Source, subst)}
-	case ir.Load:
-		return ir.Load{Dest: i.Dest, Address: substituteInExpr(i.Address, subst), Size: i.Size}
-	case ir.Store:
+	if assign, ok := ir.AsAssign(instr); ok {
+		return ir.Assign{Dest: assign.Dest, Source: substituteInExpr(assign.Source, subst)}
+	}
+	if load, ok := ir.AsLoad(instr); ok {
+		return ir.Load{Dest: load.Dest, Address: substituteInExpr(load.Address, subst), Size: load.Size}
+	}
+	if store, ok := ir.AsStore(instr); ok {
 		return ir.Store{
-			Address: substituteInExpr(i.Address, subst),
-			Value:   substituteInExpr(i.Value, subst),
-			Size:    i.Size,
+			Address: substituteInExpr(store.Address, subst),
+			Value:   substituteInExpr(store.Value, subst),
+			Size:    store.Size,
 		}
-	case ir.Branch:
-		return ir.Branch{Condition: substituteInExpr(i.Condition, subst), TrueTarget: i.TrueTarget, FalseTarget: i.FalseTarget}
-	case ir.Call:
+	}
+	if branch, ok := ir.AsBranch(instr); ok {
+		return ir.Branch{
+			Condition:   substituteInExpr(branch.Condition, subst),
+			TrueTarget:  branch.TrueTarget,
+			FalseTarget: branch.FalseTarget,
+		}
+	}
+	if call, ok := ir.AsCall(instr); ok {
 		// build ArgExprs: for each argument, substitute if it's in subst,
 		// otherwise wrap the original variable in a VariableExpr.
 		// this populates ArgExprs so codegen can render inlined expressions
 		// without changing the ssa variable representation in Args.
-		newArgExprs := make([]ir.Expression, len(i.Args))
+		newArgExprs := make([]ir.Expression, len(call.Args))
 		anyInlined := false
-		for j, arg := range i.Args {
+		for j, arg := range call.Args {
 			if replacement, ok := subst[arg.Name]; ok {
 				newArgExprs[j] = replacement
 				anyInlined = true
-			} else if len(i.ArgExprs) == len(i.Args) {
+			} else if len(call.ArgExprs) == len(call.Args) {
 				// preserve existing ArgExprs for args not being substituted
-				newArgExprs[j] = substituteInExpr(i.ArgExprs[j], subst)
+				newArgExprs[j] = substituteInExpr(call.ArgExprs[j], subst)
 			} else {
 				newArgExprs[j] = ir.VariableExpr{Var: arg}
 			}
 		}
 		// only set ArgExprs when at least one arg was inlined or ArgExprs already existed
-		if !anyInlined && len(i.ArgExprs) == 0 {
+		if !anyInlined && len(call.ArgExprs) == 0 {
 			newArgExprs = nil
 		}
-		newArgs := make([]ir.Variable, len(i.Args))
-		copy(newArgs, i.Args)
-		return ir.Call{Dest: i.Dest, Target: substituteInExpr(i.Target, subst), Args: newArgs, ArgExprs: newArgExprs}
-	default:
-		return instr
+		newArgs := make([]ir.Variable, len(call.Args))
+		copy(newArgs, call.Args)
+		return ir.Call{
+			Dest:     call.Dest,
+			Target:   substituteInExpr(call.Target, subst),
+			Args:     newArgs,
+			ArgExprs: newArgExprs,
+		}
 	}
+	return instr
 }
 
 // substituteInExpr replaces VariableExpr nodes whose variable name is in subst
