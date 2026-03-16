@@ -716,6 +716,8 @@ func containsLoopStatement(stmt Statement) bool {
 		return true
 	case DoWhileStatement:
 		return true
+	case ForStatement:
+		return true
 	case Block:
 		for _, child := range s.Stmts {
 			if containsLoopStatement(child) {

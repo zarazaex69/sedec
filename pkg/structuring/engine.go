@@ -345,8 +345,9 @@ func (e *Engine) collapseConditional(
 	return e.mergeSequential(headerIR, ifStmt), nil
 }
 
-// collapseLoop handles a loop header block. it identifies the loop kind
-// (while vs do-while) and builds the corresponding loop statement.
+// collapseLoop handles a loop header block. it uses loopClassifier to determine
+// the loop kind (while/do-while/for/infinite) and builds the corresponding
+// loop statement. for-loops are identified via induction variable analysis.
 func (e *Engine) collapseLoop(
 	headerID cfg.BlockID,
 	_ *cfg.BasicBlock,
@@ -358,8 +359,9 @@ func (e *Engine) collapseLoop(
 		return e.buildIRBlock(headerID), nil
 	}
 
-	// find loop exit condition and exit block
-	exitCond, isWhile := e.extractLoopCondition(loop)
+	// classify loop kind and extract exit condition
+	lc := newLoopClassifier(e.cfgraph, e.dt, e.loopInfo, e.irBlocks)
+	kind, exitCond, _ := lc.classifyLoop(loop)
 
 	// build loop body: all blocks in loop body except header
 	bodyStmt, err := e.buildLoopBody(loop, headerID, collapsed)
@@ -376,19 +378,31 @@ func (e *Engine) collapseLoop(
 		}
 	}
 
-	if isWhile {
-		// while loop: condition checked at header before body
+	switch kind {
+	case LoopKindFor:
+		// recover for-loop: find induction variable and build ForStatement
+		iv := lc.findInductionVariable(loop)
+		if iv != nil {
+			return buildForStatement(iv, exitCond, bodyStmt), nil
+		}
+		// iv detection failed at this point: fall back to while
+		return WhileStatement{Condition: exitCond, Body: bodyStmt}, nil
+
+	case LoopKindDoWhile:
+		// do-while: body executes first, condition checked at tail
+		return DoWhileStatement{Body: bodyStmt, Condition: exitCond}, nil
+
+	case LoopKindInfinite:
+		// infinite loop: while(true)
 		return WhileStatement{
-			Condition: exitCond,
+			Condition: ir.ConstantExpr{Value: ir.BoolConstant{Value: true}},
 			Body:      bodyStmt,
 		}, nil
-	}
 
-	// do-while loop: body executes first, condition at tail
-	return DoWhileStatement{
-		Body:      bodyStmt,
-		Condition: exitCond,
-	}, nil
+	default:
+		// LoopKindWhile: condition at header
+		return WhileStatement{Condition: exitCond, Body: bodyStmt}, nil
+	}
 }
 
 // collapseMultiWay handles blocks with more than 2 successors (switch/indirect jump).
@@ -617,31 +631,6 @@ func (e *Engine) extractBranchTargets(blockID cfg.BlockID, succs []cfg.BlockID) 
 		return succs[0], succs[0]
 	}
 	return blockID, blockID
-}
-
-// extractLoopCondition extracts the loop exit condition from the loop structure.
-// returns (condition, isWhile). isWhile=true means condition is at header (while),
-// isWhile=false means condition is at tail (do-while).
-func (e *Engine) extractLoopCondition(loop *cfg.Loop) (ir.Expression, bool) {
-	if len(loop.ExitEdges) == 0 {
-		// infinite loop: use true as condition
-		return ir.ConstantExpr{Value: ir.BoolConstant{Value: true}}, true
-	}
-
-	// find the exit edge that originates from the header
-	for _, exitEdge := range loop.ExitEdges {
-		if exitEdge.From == loop.Header {
-			// condition is at header: while loop
-			cond := e.extractBranchCondition(loop.Header)
-			return cond, true
-		}
-	}
-
-	// condition is at a tail block: do-while loop
-	// use the first exit edge's source block condition
-	exitFrom := loop.ExitEdges[0].From
-	cond := e.extractBranchCondition(exitFrom)
-	return cond, false
 }
 
 // buildIRBlock creates an IRBlock statement for the given block id

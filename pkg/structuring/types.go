@@ -86,6 +86,72 @@ func (s DoWhileStatement) String() string {
 	return fmt.Sprintf("do %s while (%s);", s.Body.String(), s.Condition.String())
 }
 
+// ForStatement represents a for loop recovered from induction variable analysis.
+// Init is the loop initializer (e.g., i = 0), Condition is the loop test,
+// Post is the per-iteration update (e.g., i++), and Body is the loop body.
+type ForStatement struct {
+	Init      Statement     // initializer: assignment to induction variable (may be nil)
+	Condition ir.Expression // loop continuation condition
+	Post      Statement     // per-iteration update (may be nil)
+	Body      Statement
+}
+
+func (ForStatement) isStatement() {}
+func (s ForStatement) String() string {
+	initStr := ""
+	if s.Init != nil {
+		initStr = s.Init.String()
+	}
+	postStr := ""
+	if s.Post != nil {
+		postStr = s.Post.String()
+	}
+	return fmt.Sprintf("for (%s; %s; %s) %s", initStr, s.Condition.String(), postStr, s.Body.String())
+}
+
+// LoopKind classifies the recovered loop construct
+type LoopKind int
+
+const (
+	// LoopKindWhile is a while loop (condition at header, checked before body)
+	LoopKindWhile LoopKind = iota
+	// LoopKindDoWhile is a do-while loop (condition at tail, body executes at least once)
+	LoopKindDoWhile
+	// LoopKindFor is a for loop (induction variable with init, condition, and post-increment)
+	LoopKindFor
+	// LoopKindInfinite is an infinite loop with no exit condition (while(true))
+	LoopKindInfinite
+)
+
+// LoopBounds captures the statically-recoverable bounds of a loop.
+// All fields are optional (nil means unknown/not recoverable).
+type LoopBounds struct {
+	// InitValue is the initial value of the induction variable (e.g., 0)
+	InitValue ir.Expression
+	// LimitValue is the loop bound (e.g., n in i < n)
+	LimitValue ir.Expression
+	// StepValue is the per-iteration increment (e.g., 1 for i++)
+	StepValue ir.Expression
+	// LimitOp is the comparison operator used in the exit condition
+	LimitOp ir.BinaryOperator
+}
+
+// InductionVariable describes a loop induction variable detected via SSA analysis.
+// A canonical induction variable has the form: iv = phi(init, iv + step)
+// where init is the initial value and step is the per-iteration increment.
+type InductionVariable struct {
+	// Var is the SSA variable that is the induction variable
+	Var ir.Variable
+	// InitExpr is the initial value (from the phi-node's pre-header predecessor)
+	InitExpr ir.Expression
+	// StepExpr is the per-iteration increment expression
+	StepExpr ir.Expression
+	// UpdateBlock is the block where the induction variable is updated
+	UpdateBlock cfg.BlockID
+	// IsCanonical is true if the step is a compile-time constant (e.g., +1 or -1)
+	IsCanonical bool
+}
+
 // GotoStatement represents an unconditional goto for irreducible control flow
 type GotoStatement struct {
 	Target cfg.BlockID
