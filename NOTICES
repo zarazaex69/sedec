@@ -9,3 +9,7 @@ Capstone disassembly framework (www.capstone-engine.org)
 gopter (github.com/leanovate/gopter)
  Copyright ©2016 Lean Automation GmbH. All rights reserved.
   Licensed under MIT: https://github.com/leanovate/gopter/blob/master/LICENSE
+
+Z3 Theorem Prover (github.com/Z3Prover/z3)
+ Copyright ©Microsoft Corporation. All rights reserved.
+  Licensed under MIT: https://github.com/Z3Prover/z3/blob/master/LICENSE.txt
