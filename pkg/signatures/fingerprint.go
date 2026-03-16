@@ -6,6 +6,9 @@ import (
 	"github.com/zarazaex69/sedec/pkg/disasm"
 )
 
+// callMnem is the mnemonic string for the call instruction.
+const callMnem = "call"
+
 // mnemonics whose relative offset operand must be wildcarded.
 // the offset is always the last 1-4 bytes of the instruction encoding.
 var relativeJumpMnemonics = map[string]bool{
@@ -80,11 +83,11 @@ func buildMaskedBytes(ins *disasm.Instruction, raw []byte, imageBase uint64) []W
 	mnem := strings.ToLower(ins.Mnemonic)
 
 	switch {
-	case mnem == "call" && n >= 5 && raw[0] == 0xE8:
+	case mnem == callMnem && n >= 5 && raw[0] == 0xE8:
 		// CALL rel32: mask bytes 1-4
 		maskRange(result, 1, 5)
 
-	case mnem == "call" && n >= 2 && raw[0] == 0xFF:
+	case mnem == callMnem && n >= 2 && raw[0] == 0xFF:
 		// CALL r/m64 (indirect): no masking needed, target is register/memory
 
 	case isRelativeJump(mnem) && n >= 2 && isShortJumpOpcode(raw[0]):

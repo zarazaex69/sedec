@@ -21,6 +21,8 @@ const (
 	helpFlagShort = "-help"
 	// helpFlagShortest is the shortest form help flag.
 	helpFlagShortest = "-h"
+	// helpFlagWord is the bare word help flag.
+	helpFlagWord = "help"
 	// flag constants for cfg command
 	flagOutput         = "--output"
 	flagOutputShort    = "-o"

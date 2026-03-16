@@ -1,3 +1,4 @@
+// Package signatures provides function signature matching via CFG hashing and byte fingerprinting.
 package signatures
 
 import (
@@ -261,13 +262,13 @@ func hashCFGFields(h *CFGHash) uint64 {
 		}
 	}
 
-	mix(uint64(h.BlockCount))
-	mix(uint64(h.EdgeCount))
-	mix(uint64(h.LoopCount))
-	mix(uint64(h.DominatorTreeDepth))
+	mix(uint64(h.BlockCount))         //nolint:gosec // block count is always non-negative
+	mix(uint64(h.EdgeCount))          //nolint:gosec // edge count is always non-negative
+	mix(uint64(h.LoopCount))          //nolint:gosec // loop count is always non-negative
+	mix(uint64(h.DominatorTreeDepth)) //nolint:gosec // dom depth is always non-negative
 
 	for _, d := range h.DegreeSequence {
-		mix(uint64(d.InDegree)<<32 | uint64(d.OutDegree))
+		mix(uint64(d.InDegree)<<32 | uint64(d.OutDegree)) //nolint:gosec // in/out degree are always non-negative
 	}
 
 	return hash
@@ -337,13 +338,14 @@ func degreeSequenceSimilarity(a, b []DegreeEntry) float64 {
 	for i < len(a) && j < len(b) {
 		ai := a[i]
 		bj := b[j]
-		if ai.InDegree == bj.InDegree && ai.OutDegree == bj.OutDegree {
+		switch {
+		case ai.InDegree == bj.InDegree && ai.OutDegree == bj.OutDegree:
 			matches++
 			i++
 			j++
-		} else if ai.InDegree < bj.InDegree || (ai.InDegree == bj.InDegree && ai.OutDegree < bj.OutDegree) {
+		case ai.InDegree < bj.InDegree || (ai.InDegree == bj.InDegree && ai.OutDegree < bj.OutDegree):
 			i++
-		} else {
+		default:
 			j++
 		}
 	}

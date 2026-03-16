@@ -18,6 +18,21 @@ var (
 	errEmptyDatabase = errors.New("signature database is empty")
 	// errInvalidPatLine is returned when a .pat line cannot be parsed.
 	errInvalidPatLine = errors.New("invalid .pat line")
+	// errOddLengthPattern is returned when a hex pattern has an odd number of characters.
+	errOddLengthPattern = errors.New("odd-length pattern")
+	// errInvalidHexByte is returned when a hex byte string is not exactly 2 characters.
+	errInvalidHexByte = errors.New("invalid hex byte")
+	// errInvalidHexChar is returned when a character is not a valid hex digit.
+	errInvalidHexChar = errors.New("invalid hex char")
+)
+
+const (
+	// sigFormatFLIRT is the string representation of the FLIRT format.
+	sigFormatFLIRT = "FLIRT"
+	// sigFormatFID is the string representation of the FID format.
+	sigFormatFID = "FID"
+	// sigFormatNative is the string representation of the native format.
+	sigFormatNative = "Native"
 )
 
 // LoadFromFile loads signatures from a file, auto-detecting the format from
@@ -33,7 +48,7 @@ func LoadFromFile(path string) (*SignatureDB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open signature file %q: %w", path, err)
 	}
-	defer f.Close() //nolint:errcheck
+	defer f.Close() //nolint:errcheck // close on read-only file; error is irrelevant
 
 	switch ext {
 	case ".pat", ".sig":
@@ -57,7 +72,7 @@ func SaveToFile(db *SignatureDB, path string) error {
 	if err != nil {
 		return fmt.Errorf("create signature file %q: %w", path, err)
 	}
-	defer f.Close() //nolint:errcheck
+	defer f.Close() //nolint:errcheck // close on write; encoder already flushed
 
 	enc := json.NewEncoder(f)
 	enc.SetIndent("", "  ")
@@ -121,7 +136,7 @@ func sigToRecord(sig *Signature) nativeRecord {
 		r.ByteLen = sig.Fingerprint.ByteLength
 		r.Pattern = make([]wildcardByteRecord, len(sig.Fingerprint.Pattern))
 		for i, wb := range sig.Fingerprint.Pattern {
-			r.Pattern[i] = wildcardByteRecord{Value: wb.Value, IsWild: wb.IsWild}
+			r.Pattern[i] = wildcardByteRecord(wb)
 		}
 	}
 
@@ -155,7 +170,7 @@ func recordToSig(r nativeRecord) *Signature {
 	if len(r.Pattern) > 0 {
 		pattern := make([]WildcardByte, len(r.Pattern))
 		for i, wb := range r.Pattern {
-			pattern[i] = WildcardByte{Value: wb.Value, IsWild: wb.IsWild}
+			pattern[i] = WildcardByte(wb)
 		}
 		sig.Fingerprint = &FunctionFingerprint{
 			Pattern:    pattern,
@@ -185,11 +200,11 @@ func recordToSig(r nativeRecord) *Signature {
 
 func parseFormatString(s string) SignatureFormat {
 	switch s {
-	case "FLIRT":
+	case sigFormatFLIRT:
 		return SignatureFormatFLIRT
-	case "FID":
+	case sigFormatFID:
 		return SignatureFormatFID
-	case "Native":
+	case sigFormatNative:
 		return SignatureFormatNative
 	default:
 		return SignatureFormatUnknown
@@ -265,7 +280,7 @@ func parseFLIRTLine(line string) (*Signature, error) {
 	hexPat := fields[0]
 	pattern, err := parseFLIRTPattern(hexPat)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", errInvalidPatLine, err)
+		return nil, fmt.Errorf("%w: %w", errInvalidPatLine, err)
 	}
 
 	// find the first ":offset name" pair
@@ -296,7 +311,7 @@ func parseFLIRTLine(line string) (*Signature, error) {
 // ".." represents a wildcard byte; hex pairs represent literal bytes.
 func parseFLIRTPattern(s string) ([]WildcardByte, error) {
 	if len(s)%2 != 0 {
-		return nil, fmt.Errorf("odd-length pattern: %q", s)
+		return nil, fmt.Errorf("%w: %q", errOddLengthPattern, s)
 	}
 
 	result := make([]WildcardByte, 0, len(s)/2)
@@ -317,7 +332,7 @@ func parseFLIRTPattern(s string) ([]WildcardByte, error) {
 
 func parseHexByte(s string) (byte, error) {
 	if len(s) != 2 {
-		return 0, fmt.Errorf("invalid hex byte: %q", s)
+		return 0, fmt.Errorf("%w: %q", errInvalidHexByte, s)
 	}
 	hi, err := hexVal(s[0])
 	if err != nil {
@@ -339,7 +354,7 @@ func hexVal(c byte) (byte, error) {
 	case c >= 'A' && c <= 'F':
 		return c - 'A' + 10, nil
 	default:
-		return 0, fmt.Errorf("invalid hex char: %q", c)
+		return 0, fmt.Errorf("%w: %q", errInvalidHexChar, c)
 	}
 }
 

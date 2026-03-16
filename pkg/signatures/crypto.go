@@ -5,23 +5,27 @@ import (
 	"sort"
 )
 
+// unknownStr is the fallback string for unrecognised enum values.
+const unknownStr = "Unknown"
+
 // CryptoAlgorithm identifies a cryptographic algorithm family.
 type CryptoAlgorithm int
 
+// Supported cryptographic algorithm identifiers.
 const (
-	CryptoAlgorithmUnknown   CryptoAlgorithm = iota
-	CryptoAlgorithmAES                       // advanced encryption standard
-	CryptoAlgorithmDES                       // data encryption standard
-	CryptoAlgorithmTripleDES                 // 3des / tdea
-	CryptoAlgorithmRSA                       // rsa public-key cryptography
-	CryptoAlgorithmSHA1                      // sha-1 hash function
-	CryptoAlgorithmSHA256                    // sha-256 hash function
-	CryptoAlgorithmSHA512                    // sha-512 hash function
-	CryptoAlgorithmMD5                       // md5 message digest
-	CryptoAlgorithmRC4                       // rc4 stream cipher
-	CryptoAlgorithmChaCha20                  // chacha20 stream cipher
-	CryptoAlgorithmBlowfish                  // blowfish block cipher
-	CryptoAlgorithmCRC32                     // crc32 checksum (often confused with crypto)
+	CryptoAlgorithmUnknown   CryptoAlgorithm = iota // unknown or unidentified algorithm
+	CryptoAlgorithmAES                              // advanced encryption standard
+	CryptoAlgorithmDES                              // data encryption standard
+	CryptoAlgorithmTripleDES                        // 3des / tdea
+	CryptoAlgorithmRSA                              // rsa public-key cryptography
+	CryptoAlgorithmSHA1                             // sha-1 hash function
+	CryptoAlgorithmSHA256                           // sha-256 hash function
+	CryptoAlgorithmSHA512                           // sha-512 hash function
+	CryptoAlgorithmMD5                              // md5 message digest
+	CryptoAlgorithmRC4                              // rc4 stream cipher
+	CryptoAlgorithmChaCha20                         // chacha20 stream cipher
+	CryptoAlgorithmBlowfish                         // blowfish block cipher
+	CryptoAlgorithmCRC32                            // crc32 checksum (often confused with crypto)
 )
 
 // String returns the human-readable name of the algorithm.
@@ -52,13 +56,14 @@ func (a CryptoAlgorithm) String() string {
 	case CryptoAlgorithmCRC32:
 		return "CRC32"
 	default:
-		return "Unknown"
+		return unknownStr
 	}
 }
 
 // CryptoConstantKind classifies the type of cryptographic constant.
 type CryptoConstantKind int
 
+// Supported cryptographic constant kind identifiers.
 const (
 	CryptoConstantSBox          CryptoConstantKind = iota // substitution box
 	CryptoConstantInvSBox                                 // inverse substitution box
@@ -90,7 +95,7 @@ func (k CryptoConstantKind) String() string {
 	case CryptoConstantLookupTable:
 		return "Lookup Table"
 	default:
-		return "Unknown"
+		return unknownStr
 	}
 }
 
@@ -137,7 +142,7 @@ type CryptoAnnotation struct {
 // ============================================================================
 
 // aes forward s-box (fips 197, figure 7)
-var aesSBox = []byte{
+var aesSBox = []byte{ //nolint:dupl // aes s-box and inverse s-box are structurally similar byte tables by design
 	0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
 	0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0,
 	0xb7, 0xfd, 0x93, 0x26, 0x36, 0x3f, 0xf7, 0xcc, 0x34, 0xa5, 0xe5, 0xf1, 0x71, 0xd8, 0x31, 0x15,
@@ -157,7 +162,7 @@ var aesSBox = []byte{
 }
 
 // aes inverse s-box (fips 197, figure 14)
-var aesInvSBox = []byte{
+var aesInvSBox = []byte{ //nolint:dupl // aes s-box and inverse s-box are structurally similar byte tables by design
 	0x52, 0x09, 0x6a, 0xd5, 0x30, 0x36, 0xa5, 0x38, 0xbf, 0x40, 0xa3, 0x9e, 0x81, 0xf3, 0xd7, 0xfb,
 	0x7c, 0xe3, 0x39, 0x82, 0x9b, 0x2f, 0xff, 0x87, 0x34, 0x8e, 0x43, 0x44, 0xc4, 0xde, 0xe9, 0xcb,
 	0x54, 0x7b, 0x94, 0x32, 0xa6, 0xc2, 0x23, 0x3d, 0xee, 0x4c, 0x95, 0x0b, 0x42, 0xfa, 0xc3, 0x4e,
@@ -348,10 +353,6 @@ var rsaPublicExponents = [][]byte{
 	{0x01, 0x00, 0x01, 0x00}, // 65537 = 0x10001
 	{0x11, 0x00, 0x00, 0x00}, // 17 = 0x11
 }
-
-// rsaMagicBytes are common byte patterns found in RSA key structures.
-// pkcs#1 der sequence header for 2048-bit rsa key
-var rsaDERHeader = []byte{0x30, 0x82} // der sequence tag + 2-byte length
 
 // ============================================================================
 // crypto signature database
@@ -626,7 +627,7 @@ func countPrefixMatch(data, pattern []byte) int {
 // b must have length divisible by 4.
 func reverseUint32Endian(b []byte) []byte {
 	result := make([]byte, len(b))
-	for i := 0; i < len(b); i += 4 {
+	for i := 0; i+3 < len(b); i += 4 {
 		result[i+0] = b[i+3]
 		result[i+1] = b[i+2]
 		result[i+2] = b[i+1]

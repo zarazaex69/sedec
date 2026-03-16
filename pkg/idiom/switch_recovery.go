@@ -53,6 +53,9 @@ var (
 	ErrNilMemorySW = errors.New("switch recovery: nil memory reader")
 )
 
+// unknownKindStr is the fallback string for unrecognised kind enum values.
+const unknownKindStr = "unknown"
+
 // SwitchKind classifies the switch statement structure.
 type SwitchKind int
 
@@ -70,7 +73,7 @@ func (k SwitchKind) String() string {
 	case SwitchSparse:
 		return "sparse"
 	default:
-		return "unknown"
+		return unknownKindStr
 	}
 }
 
@@ -276,7 +279,7 @@ func isIndirectJumpLoad(load *ir.Load, instrs []ir.IRInstruction, nextIdx int) b
 	}
 
 	// check if the loaded variable is used in the next instruction
-	if nextIdx < len(instrs) {
+	if nextIdx < len(instrs) { //nolint:nestif // pattern matching requires nested type assertions
 		next := instrs[nextIdx]
 		// pattern: assign that copies the load result (indirect jump preparation)
 		if assign, ok := next.(*ir.Assign); ok {
@@ -401,24 +404,24 @@ func extractTableInfoFromExpr(addr ir.Expression, defIdx map[varKey]int, instrs 
 // index expression of the form: index * ptr_size  or  index (ptr_size=1).
 func extractIndexExpr(expr ir.Expression, defIdx map[varKey]int, instrs []ir.IRInstruction) (ir.Variable, int64, bool) {
 	// pattern: index * ptr_size
-	if binop, ok := expr.(*ir.BinaryOp); ok && binop.Op == ir.BinOpMul {
+	if binop, ok := expr.(*ir.BinaryOp); ok && binop.Op == ir.BinOpMul { //nolint:nestif // mul pattern requires nested extraction
 		if idxVar, ok := extractVar(binop.Left); ok {
-			if ptrSize, ok := extractIntConst(binop.Right); ok && isPtrSize(int64(ptrSize)) { //nolint:gosec
-				return idxVar, int64(ptrSize), true //nolint:gosec
+			if ptrSize, ok := extractIntConst(binop.Right); ok && isPtrSize(int64(ptrSize)) { //nolint:gosec // ptrSize is validated by isPtrSize to be 1/2/4/8
+				return idxVar, int64(ptrSize), true //nolint:gosec // safe: ptrSize is bounded to 1/2/4/8 by isPtrSize
 			}
 		}
 		if idxVar, ok := extractVar(binop.Right); ok {
-			if ptrSize, ok := extractIntConst(binop.Left); ok && isPtrSize(int64(ptrSize)) { //nolint:gosec
-				return idxVar, int64(ptrSize), true //nolint:gosec
+			if ptrSize, ok := extractIntConst(binop.Left); ok && isPtrSize(int64(ptrSize)) { //nolint:gosec // ptrSize is validated by isPtrSize to be 1/2/4/8
+				return idxVar, int64(ptrSize), true //nolint:gosec // safe: ptrSize is bounded to 1/2/4/8 by isPtrSize
 			}
 		}
 	}
 
 	// pattern: index << shift_amount (equivalent to index * 2^shift)
-	if binop, ok := expr.(*ir.BinaryOp); ok && binop.Op == ir.BinOpShl {
+	if binop, ok := expr.(*ir.BinaryOp); ok && binop.Op == ir.BinOpShl { //nolint:nestif // shl pattern requires nested extraction
 		if idxVar, ok := extractVar(binop.Left); ok {
 			if shift, ok := extractIntConst(binop.Right); ok {
-				ptrSize := int64(1) << shift //nolint:gosec
+				ptrSize := int64(1) << shift // shift is bounded by isPtrSize check below
 				if isPtrSize(ptrSize) {
 					return idxVar, ptrSize, true
 				}
@@ -427,12 +430,8 @@ func extractIndexExpr(expr ir.Expression, defIdx map[varKey]int, instrs []ir.IRI
 	}
 
 	// pattern: plain variable (ptr_size = 1, byte-indexed table)
-	if v, ok := extractVar(expr); ok {
-		return v, 1, true
-	}
-
-	// pattern: variable that was defined as index * ptr_size
-	if v, ok := extractVar(expr); ok {
+	if v, ok := extractVar(expr); ok { //nolint:nestif // def-chain resolution requires nested lookup
+		// first try direct variable match
 		if idx, defined := defIdx[varKey{name: v.Name, version: v.Version}]; defined {
 			if assign, ok := instrs[idx].(*ir.Assign); ok {
 				if idxVar, ptrSize, ok := extractIndexExpr(assign.Source, defIdx, instrs); ok {
@@ -440,6 +439,7 @@ func extractIndexExpr(expr ir.Expression, defIdx map[varKey]int, instrs []ir.IRI
 				}
 			}
 		}
+		return v, 1, true
 	}
 
 	return ir.Variable{}, 0, false
@@ -553,7 +553,7 @@ func resolveNormalization(v ir.Variable, defIdx map[varKey]int, instrs []ir.IRIn
 	if !originalIsVar || !minIsConst {
 		return v, 0
 	}
-	return original, int64(minConst) //nolint:gosec
+	return original, int64(minConst) //nolint:gosec // minConst is a small integer constant from IR; truncation is intentional
 }
 
 // findBoundsCheckInBlock searches for a bounds check branch in a single block.
@@ -594,7 +594,7 @@ func findBoundsCheckInBlock(indexVar ir.Variable, block *ir.BasicBlock, minCase 
 //	branch (index >=u N), default_block, table_block  → range = N
 //	branch (index <u N),  table_block,   default_block → range = N
 //	branch (index <=u N), table_block,   default_block → range = N+1
-func extractBoundsCondition(branch *ir.Branch, indexVar ir.Variable, defIdx map[varKey]int, instrs []ir.IRInstruction) (uint64, ir.BlockID, bool) {
+func extractBoundsCondition(branch *ir.Branch, indexVar ir.Variable, defIdx map[varKey]int, instrs []ir.IRInstruction) (uint64, ir.BlockID, bool) { //nolint:gocyclo // exhaustive comparison operator dispatch; splitting would obscure the pattern
 	cond := branch.Condition
 
 	// resolve condition through def-use chain if it's a variable
@@ -669,6 +669,8 @@ func extractBoundsCondition(branch *ir.Branch, indexVar ir.Variable, defIdx map[
 				return n + 1, branch.FalseTarget, true
 			}
 		}
+	default:
+		// non-comparison operators cannot be bounds checks
 	}
 
 	// handle reversed operands: branch (N <u index), default, table
@@ -697,6 +699,8 @@ func extractBoundsCondition(branch *ir.Branch, indexVar ir.Variable, defIdx map[
 				return n + 1, branch.FalseTarget, true
 			}
 		}
+	default:
+		// non-comparison operators cannot be reversed bounds checks
 	}
 
 	return 0, 0, false
@@ -736,7 +740,7 @@ func isIndexVar(expr ir.Expression, indexVar ir.Variable, defIdx map[varKey]int,
 // on corrupted or misidentified tables.
 const maxTableEntries = 4096
 
-func readJumpTable(tableBase uint64, rangeSize uint64, minCase int64, mem MemoryReader) ([]CaseEntry, error) {
+func readJumpTable(tableBase uint64, rangeSize uint64, minCase int64, mem MemoryReader) ([]CaseEntry, error) { //nolint:unparam // error return reserved for future partial-read error propagation
 	if rangeSize == 0 || rangeSize > maxTableEntries {
 		return nil, nil
 	}
@@ -755,7 +759,7 @@ func readJumpTable(tableBase uint64, rangeSize uint64, minCase int64, mem Memory
 			continue
 		}
 
-		caseValue := minCase + int64(i) //nolint:gosec
+		caseValue := minCase + int64(i)
 		cases = append(cases, CaseEntry{
 			CaseValue:     caseValue,
 			TargetAddress: target,

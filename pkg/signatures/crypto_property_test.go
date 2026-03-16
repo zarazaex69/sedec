@@ -125,10 +125,7 @@ func TestProperty55_3_ExactMatchConfidence1(t *testing.T) {
 
 			for _, m := range matches {
 				if m.Signature == sig && m.MatchedBytes == len(sig.Bytes) {
-					if m.Confidence != 1.0 {
-						return false
-					}
-					return true
+					return m.Confidence == 1.0
 				}
 			}
 			// if no full match found, check that at least a partial match exists
@@ -173,7 +170,10 @@ func TestProperty55_5_AESSBoxAlwaysDetected(t *testing.T) {
 
 	properties.Property("AES S-Box is always detected when embedded in data", prop.ForAll(
 		func(pair [2]interface{}) bool {
-			data := pair[0].([]byte)
+			data, ok := pair[0].([]byte)
+			if !ok {
+				return false
+			}
 			scanner := NewCryptoScanner()
 			matches := scanner.ScanData(data)
 			for _, m := range matches {
@@ -200,7 +200,10 @@ func TestProperty55_5_SHA256AlwaysDetected(t *testing.T) {
 
 	properties.Property("SHA-256 init hash is always detected when embedded in data", prop.ForAll(
 		func(pair [2]interface{}) bool {
-			data := pair[0].([]byte)
+			data, ok := pair[0].([]byte)
+			if !ok {
+				return false
+			}
 			scanner := NewCryptoScanner()
 			matches := scanner.ScanData(data)
 			for _, m := range matches {
@@ -227,7 +230,10 @@ func TestProperty55_5_ChaCha20AlwaysDetected(t *testing.T) {
 
 	properties.Property("ChaCha20 sigma constant is always detected when embedded in data", prop.ForAll(
 		func(pair [2]interface{}) bool {
-			data := pair[0].([]byte)
+			data, ok := pair[0].([]byte)
+			if !ok {
+				return false
+			}
 			scanner := NewCryptoScanner()
 			matches := scanner.ScanData(data)
 			for _, m := range matches {

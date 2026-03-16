@@ -42,7 +42,7 @@ func (m *testMemory) ReadUint64(addr uint64) (uint64, error) {
 // ============================================================================
 
 // u64Var creates a 64-bit unsigned integer variable.
-func u64Var(name string, version int) ir.Variable {
+func u64Var(name string, version int) ir.Variable { //nolint:unparam // version parameter is intentional for future test cases
 	return ir.Variable{Name: name, Version: version, Type: ir.IntType{Width: ir.Size8, Signed: false}}
 }
 

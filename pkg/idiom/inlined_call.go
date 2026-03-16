@@ -60,7 +60,7 @@ func (k InlinedCallKind) String() string {
 	case InlinedCallSavedRestoreSequence:
 		return "inlined_sequence"
 	default:
-		return "unknown"
+		return unknownKindStr
 	}
 }
 

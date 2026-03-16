@@ -39,7 +39,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return nil
 	}
 
-	if args[0] == "--help" || args[0] == "-help" || args[0] == "help" {
+	if args[0] == helpFlagLong || args[0] == helpFlagShort || args[0] == helpFlagWord {
 		printUsage(stdout)
 		return nil
 	}

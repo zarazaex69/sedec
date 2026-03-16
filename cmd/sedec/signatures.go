@@ -48,7 +48,7 @@ func runSignatures(args []string, _ io.Reader, stdout, stderr io.Writer) error {
 		return runSigExport(subArgs, stdout, stderr)
 	case "validate":
 		return runSigValidate(subArgs, stdout, stderr)
-	case "--help", "-help", "-h", "help":
+	case helpFlagLong, "-help", "-h", helpFlagWord:
 		printSignaturesUsage(stdout)
 		return nil
 	default:
@@ -227,14 +227,6 @@ func runSigImport(args []string, stdout, stderr io.Writer) error {
 	}
 
 	return executeSigImport(cfg, stdout, stderr)
-}
-
-// max returns the larger of two ints.
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 // executeSigImport performs the actual import operation.
