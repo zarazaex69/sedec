@@ -160,6 +160,9 @@ func (s *generatorState) genStatement(stmt structuring.Statement, depth int) str
 		return s.genLabel(n, depth)
 	case structuring.ReturnStatement:
 		return s.genReturn(n, depth)
+	case structuring.VarDeclStatement:
+		// inline variable declaration injected by scope minimizer
+		return indent(depth) + n.String() + "\n"
 	default:
 		// unknown statement type: emit a comment so output remains valid c
 		return indent(depth) + "/* unknown statement */\n"

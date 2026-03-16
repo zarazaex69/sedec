@@ -396,7 +396,7 @@ func TestLifterControlFlow(t *testing.T) {
 				},
 				Length: 5,
 			},
-			wantOps: 3, // rsp -= 8, store return addr, call
+			wantOps: 1, // single abstract Call node (rsp manipulation suppressed)
 			wantErr: false,
 		},
 		{
@@ -407,7 +407,7 @@ func TestLifterControlFlow(t *testing.T) {
 				Operands: []disasm.Operand{},
 				Length:   1,
 			},
-			wantOps: 3, // load return addr, rsp += 8, return
+			wantOps: 1, // single abstract Return node (rsp manipulation suppressed)
 			wantErr: false,
 		},
 	}

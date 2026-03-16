@@ -1123,9 +1123,9 @@ func TestLifterRetWithImmediate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// load return addr + assign rsp + assign rsp (pop bytes) + return
-	if len(result) != 4 {
-		t.Errorf("ret imm16: expected 4 IR instructions, got %d", len(result))
+	// single abstract Return node; rsp adjustment is an ABI artifact, suppressed
+	if len(result) != 1 {
+		t.Errorf("ret imm16: expected 1 IR instruction, got %d", len(result))
 		for i, op := range result {
 			t.Logf("  [%d] %s", i, op.String())
 		}
@@ -1147,9 +1147,9 @@ func TestLifterCallIndirectMemory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// rsp -= 8, store return addr, load target, call
-	if len(result) != 4 {
-		t.Errorf("call [mem]: expected 4 IR instructions, got %d", len(result))
+	// load target pointer + abstract Call node (rsp manipulation suppressed)
+	if len(result) != 2 {
+		t.Errorf("call [mem]: expected 2 IR instructions, got %d", len(result))
 		for i, op := range result {
 			t.Logf("  [%d] %s", i, op.String())
 		}

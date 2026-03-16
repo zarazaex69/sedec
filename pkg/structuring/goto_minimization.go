@@ -57,18 +57,129 @@ func newGotoMinimizer(
 
 // Run executes the goto minimization pass and returns the modified AST.
 // it first attempts node splitting to reduce irreducible regions, then
+// performs tail merging to collapse identical clones, and finally
 // inserts minimal goto statements for any remaining irreducible edges.
 func (g *gotoMinimizer) Run(ast *StructuredAST) *StructuredAST {
 	// phase 1: node splitting for irreducible → reducible transformation
 	g.splitIrreducibleRegions()
 
-	// phase 2: insert goto statements for remaining unstructured edges
+	// phase 2: tail merging — collapse cloned blocks that are structurally
+	// identical back into their originals to prevent block duplication in output.
+	// this is the inverse of splitNode: if a clone has exactly one predecessor
+	// and its ir content is identical to the original, redirect the predecessor
+	// to the original and remove the clone.
+	g.mergeIdenticalClones()
+
+	// phase 3: insert goto statements for remaining unstructured edges
 	body := g.insertGotos(ast.Body)
 
 	return &StructuredAST{
 		Body:       body,
 		FunctionID: ast.FunctionID,
 	}
+}
+
+// mergeIdenticalClones performs tail merging after node splitting.
+// for each cloned block (tracked in splitOrigin), if the clone has exactly
+// one predecessor and its IR instructions are byte-for-byte identical to the
+// original block, the predecessor is redirected to the original and the clone
+// is removed from the CFG and irBlocks map.
+// this prevents the structuring engine from emitting the same basic block twice.
+func (g *gotoMinimizer) mergeIdenticalClones() {
+	// collect clone ids in deterministic order
+	cloneIDs := make([]cfg.BlockID, 0, len(g.splitOrigin))
+	for cloneID := range g.splitOrigin {
+		cloneIDs = append(cloneIDs, cloneID)
+	}
+	sort.Slice(cloneIDs, func(i, j int) bool { return cloneIDs[i] < cloneIDs[j] })
+
+	for _, cloneID := range cloneIDs {
+		origID, ok := g.splitOrigin[cloneID]
+		if !ok {
+			continue
+		}
+
+		cloneBlock, cloneExists := g.cfgraph.Blocks[cloneID]
+		origBlock, origExists := g.cfgraph.Blocks[origID]
+		if !cloneExists || !origExists {
+			continue
+		}
+
+		// only merge if the clone has exactly one predecessor
+		// (multiple predecessors mean it was split for a reason we must preserve)
+		if len(cloneBlock.Predecessors) != 1 {
+			continue
+		}
+
+		// verify ir content is identical
+		if !g.irBlocksIdentical(cloneID, origID) {
+			continue
+		}
+
+		predID := cloneBlock.Predecessors[0]
+		predBlock, predExists := g.cfgraph.Blocks[predID]
+		if !predExists {
+			continue
+		}
+
+		// redirect predecessor's successor list: replace cloneID with origID
+		for i, succ := range predBlock.Successors {
+			if succ == cloneID {
+				predBlock.Successors[i] = origID
+				break
+			}
+		}
+
+		// update edge list
+		for _, edge := range g.cfgraph.Edges {
+			if edge.From == predID && edge.To == cloneID {
+				edge.To = origID
+				break
+			}
+		}
+
+		// add predID to origBlock's predecessors if not already present
+		alreadyPred := false
+		for _, p := range origBlock.Predecessors {
+			if p == predID {
+				alreadyPred = true
+				break
+			}
+		}
+		if !alreadyPred {
+			origBlock.Predecessors = append(origBlock.Predecessors, predID)
+		}
+
+		// remove clone from cfg and irBlocks
+		delete(g.cfgraph.Blocks, cloneID)
+		delete(g.irBlocks, cloneID)
+		delete(g.splitOrigin, cloneID)
+
+		// remove edges originating from clone
+		filtered := g.cfgraph.Edges[:0]
+		for _, edge := range g.cfgraph.Edges {
+			if edge.From != cloneID {
+				filtered = append(filtered, edge)
+			}
+		}
+		g.cfgraph.Edges = filtered
+	}
+}
+
+// irBlocksIdentical returns true if the IR instruction sequences for two blocks
+// are structurally identical (same string representation for each instruction).
+func (g *gotoMinimizer) irBlocksIdentical(a, b cfg.BlockID) bool {
+	instrsA := g.irBlocks[a]
+	instrsB := g.irBlocks[b]
+	if len(instrsA) != len(instrsB) {
+		return false
+	}
+	for i := range instrsA {
+		if instrsA[i].String() != instrsB[i].String() {
+			return false
+		}
+	}
+	return true
 }
 
 // ============================================================================

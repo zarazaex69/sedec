@@ -1768,7 +1768,11 @@ func (l *Lifter) getConditionFromMnemonic(mnemonic string) Expression {
 	}
 }
 
-// liftCall lifts CALL instruction: push return address, jump to target
+// liftCall lifts CALL instruction to a high-level Call IR node.
+// the hardware semantics (push rip; jmp target) are intentionally suppressed:
+// rsp manipulation and return-address store are ABI artifacts that the
+// decompiler must not expose at the IR level. the ABI analyzer populates
+// Call.Args in a subsequent pass.
 func (l *Lifter) liftCall(insn *disasm.Instruction) ([]IRInstruction, error) {
 	if len(insn.Operands) != 1 {
 		return nil, errCallRequires1Operand
@@ -1776,58 +1780,12 @@ func (l *Lifter) liftCall(insn *disasm.Instruction) ([]IRInstruction, error) {
 
 	target := insn.Operands[0]
 
-	// compute return address (address of next instruction)
-	returnAddr := Address(insn.Address) + Address(uint64(insn.Length)) //nolint:gosec // Length is small
-
-	// push return address onto stack
-	rspVar := Variable{
-		Name: "rsp",
-		Type: IntType{Width: Size8, Signed: false},
-	}
-
-	// rsp -= 8
-	sizeExpr := ConstantExpr{
-		Value: IntConstant{
-			Value:  8,
-			Width:  Size8,
-			Signed: false,
-		},
-	}
-
-	newRsp := BinaryOp{
-		Op:    BinOpSub,
-		Left:  VariableExpr{Var: rspVar},
-		Right: sizeExpr,
-	}
-
-	l.emit(&Assign{
-		baseInstruction: baseInstruction{Loc: l.currentLocation},
-		Dest:            rspVar,
-		Source:          newRsp,
-	})
-
-	// [rsp] = return_address
-	returnAddrExpr := ConstantExpr{
-		Value: IntConstant{
-			Value:  int64(returnAddr), //nolint:gosec // returnAddr is a valid address that fits in int64 on 64-bit systems
-			Width:  Size8,
-			Signed: false,
-		},
-	}
-
-	l.emit(&Store{
-		baseInstruction: baseInstruction{Loc: l.currentLocation},
-		Address:         VariableExpr{Var: rspVar},
-		Value:           returnAddrExpr,
-		Size:            Size8,
-	})
-
-	// emit call instruction
+	// resolve call target expression
 	var targetExpr Expression
 	var err error
 
 	if mem, ok := target.(disasm.MemoryOperand); ok {
-		// indirect call through memory
+		// indirect call through memory: load function pointer first
 		targetVar := l.loadFromMemory(mem)
 		targetExpr = VariableExpr{Var: targetVar}
 	} else {
@@ -1837,84 +1795,31 @@ func (l *Lifter) liftCall(insn *disasm.Instruction) ([]IRInstruction, error) {
 		}
 	}
 
+	// emit a single abstract Call node; Args are filled by the ABI analyzer pass
 	l.emit(&Call{
 		baseInstruction: baseInstruction{Loc: l.currentLocation},
-		Dest:            nil, // return value handling done separately
+		Dest:            nil, // return value populated by ABI analyzer
 		Target:          targetExpr,
-		Args:            nil, // arguments extracted by abi analyzer
+		Args:            nil, // arguments populated by ABI analyzer
 	})
 
 	return l.currentBlock, nil
 }
 
-// liftRet lifts RET instruction: pop return address, jump to it
+// liftRet lifts RET instruction to a high-level Return IR node.
+// the hardware semantics (load [rsp]; rsp += 8) are ABI artifacts that
+// must not appear in the decompiled output. the ABI analyzer determines
+// the actual return value register (rax / xmm0) in a subsequent pass.
 func (l *Lifter) liftRet(insn *disasm.Instruction) ([]IRInstruction, error) {
-	rspVar := Variable{
-		Name: "rsp",
-		Type: IntType{Width: Size8, Signed: false},
-	}
+	// handle ret imm16: the immediate encodes the number of additional bytes
+	// to pop from the stack (stdcall / pascal convention). we suppress the
+	// rsp arithmetic here as well — it is a calling-convention detail.
+	_ = insn // operands intentionally ignored at this abstraction level
 
-	// load return address from [rsp]
-	returnAddrVar := l.newTemp(IntType{Width: Size8, Signed: false})
-
-	l.emit(&Load{
-		baseInstruction: baseInstruction{Loc: l.currentLocation},
-		Dest:            returnAddrVar,
-		Address:         VariableExpr{Var: rspVar},
-		Size:            Size8,
-	})
-
-	// rsp += 8
-	sizeExpr := ConstantExpr{
-		Value: IntConstant{
-			Value:  8,
-			Width:  Size8,
-			Signed: false,
-		},
-	}
-
-	newRsp := BinaryOp{
-		Op:    BinOpAdd,
-		Left:  VariableExpr{Var: rspVar},
-		Right: sizeExpr,
-	}
-
-	l.emit(&Assign{
-		baseInstruction: baseInstruction{Loc: l.currentLocation},
-		Dest:            rspVar,
-		Source:          newRsp,
-	})
-
-	// handle ret imm16 (pop additional bytes)
-	if len(insn.Operands) > 0 {
-		if imm, ok := insn.Operands[0].(disasm.ImmediateOperand); ok {
-			popBytes := ConstantExpr{
-				Value: IntConstant{
-					Value:  imm.Value,
-					Width:  Size8,
-					Signed: false,
-				},
-			}
-
-			finalRsp := BinaryOp{
-				Op:    BinOpAdd,
-				Left:  VariableExpr{Var: rspVar},
-				Right: popBytes,
-			}
-
-			l.emit(&Assign{
-				baseInstruction: baseInstruction{Loc: l.currentLocation},
-				Dest:            rspVar,
-				Source:          finalRsp,
-			})
-		}
-	}
-
-	// emit return instruction
-	// return value (rax) will be handled by abi analyzer
+	// emit abstract return; Value is populated by the ABI analyzer
 	l.emit(&Return{
 		baseInstruction: baseInstruction{Loc: l.currentLocation},
-		Value:           nil, // return value extracted separately
+		Value:           nil, // return value extracted by ABI analyzer
 	})
 
 	return l.currentBlock, nil
