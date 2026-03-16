@@ -377,8 +377,9 @@ func liftInstructionsToIR(functionName string, instructions []*disasm.Instructio
 		endAddr := cfgBlock.EndAddress
 
 		for _, irInstr := range allIRInstructions {
-			// check if instruction belongs to this block based on source location
-			if loc := irInstr.Location(); loc.Address >= ir.Address(startAddr) && loc.Address < ir.Address(endAddr) {
+			// check if instruction belongs to this block based on source location.
+			// endAddr is the address of the last instruction (inclusive), so use <=.
+			if loc := irInstr.Location(); loc.Address >= ir.Address(startAddr) && loc.Address <= ir.Address(endAddr) {
 				irBlock.Instructions = append(irBlock.Instructions, irInstr)
 			}
 		}
@@ -394,7 +395,34 @@ func liftInstructionsToIR(functionName string, instructions []*disasm.Instructio
 		function.Blocks[ir.BlockID(blockID)] = irBlock
 	}
 
+	// fix branch targets: lifter stores virtual addresses as BlockID,
+	// but structuring engine expects the sequential cfg.BlockID assigned by the builder.
+	resolveIRBranchTargets(function, cfgBuilder)
+
 	return function, cfgBuilder, nil
+}
+
+// resolveIRBranchTargets rewrites Branch.TrueTarget and Branch.FalseTarget from
+// virtual addresses (as emitted by the lifter) to the sequential cfg.BlockID values
+// assigned by the cfg builder.
+func resolveIRBranchTargets(fn *ir.Function, builder *cfg.Builder) {
+	for _, irBlock := range fn.Blocks {
+		for i, instr := range irBlock.Instructions {
+			b, ok := ir.AsBranch(instr)
+			if !ok {
+				continue
+			}
+			// translate true target address to cfg block id
+			if id, found := builder.BlockIDForAddress(disasm.Address(b.TrueTarget)); found {
+				b.TrueTarget = ir.BlockID(id)
+			}
+			// translate false target address to cfg block id
+			if id, found := builder.BlockIDForAddress(disasm.Address(b.FalseTarget)); found {
+				b.FalseTarget = ir.BlockID(id)
+			}
+			irBlock.Instructions[i] = &b
+		}
+	}
 }
 
 // transformToSSA transforms ir function to ssa form

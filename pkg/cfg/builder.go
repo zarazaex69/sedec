@@ -364,6 +364,13 @@ func (b *Builder) GetUnresolvedIndirectJumps() []disasm.Address {
 	return result
 }
 
+// BlockIDForAddress returns the block id containing the given instruction address.
+// returns 0, false if no block contains that address.
+func (b *Builder) BlockIDForAddress(addr disasm.Address) (BlockID, bool) {
+	id, ok := b.addressToBlock[addr]
+	return id, ok
+}
+
 // AddIndirectTarget adds a resolved indirect jump target to the CFG.
 // This is used during cyclic feedback from type inference.
 func (b *Builder) AddIndirectTarget(jumpSite, target disasm.Address) error {
