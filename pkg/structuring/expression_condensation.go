@@ -20,13 +20,15 @@ import (
 // transformations applied (in order):
 //  1. merge nested if statements:  if(a){if(b){...}} → if(a&&b){...}
 //  2. de morgan simplification:    !(a||b) → !a&&!b, !(a&&b) → !a||!b
-//  3. early-return hoisting:       if(cond){return x;} rest → if(!cond) rest; return x;
-//  4. single-use temporary inlining: t=expr; use(t) → use(expr)
-//  5. tail merging: if(c){S;T} else{S';T} → if(c){S} else{S'} T  (identical tails)
-//  6. empty-else normalization:    if(c){S} else {} → if(c){S}
+//  3. single-use temporary inlining: t=expr; use(t) → use(expr)
+//  4. tail merging: if(c){S;T} else{S';T} → if(c){S} else{S'} T  (identical tails)
+//  5. empty-else normalization:    if(c){S} else {} → if(c){S}
+//  6. else-after-terminator drop:  if(c){return;} else{S} → if(c){return;} S
 //  7. merge consecutive if-statements with identical bodies: if(A){S} if(B){S} → if(A||B){S}
 //  8. redundant branch elimination: if(c){S} S → S  (then-body identical to next stmt)
-//  9. second early-return hoisting pass: collapses patterns exposed by passes 6-8
+//  9. early-return hoisting:       if(cond){return x;} rest → if(!cond) rest; return x;
+//
+// 10. second early-return hoisting pass: collapses patterns exposed by passes 6-9
 //
 // Requirements: 60.4, 60.5, 60.6, 60.7, 60.9, 15.1, 15.7
 func CondenseExpressions(ast *StructuredAST) *StructuredAST {
@@ -36,6 +38,25 @@ func CondenseExpressions(ast *StructuredAST) *StructuredAST {
 
 	body := ast.Body
 
+	// pass 0a: prune empty IRBlocks — removes IRBlock nodes with no instructions.
+	// the structuring engine emits empty IRBlocks for convergence points (e.g. bb3)
+	// that carry no instructions. these empty nodes prevent subsequent passes from
+	// recognising adjacent identical statements.
+	body = pruneEmptyIRBlocks(body)
+
+	// pass 0b: flatten nested Blocks — unwraps Block{Block{...}} into a single
+	// flat Block. the structuring engine wraps branch bodies in extra Block nodes
+	// which, after the else-drop pass, end up as top-level Block children of the
+	// parent Block. flattening puts all statements at the same level so that
+	// mergeConsecutiveIfs and eliminateRedundantBranches can see them together.
+	body = flattenNestedBlocks(body)
+
+	// pass 0c: prune if-statements with empty then-body and no else.
+	// after pruneEmptyIRBlocks removes the convergence block from the then-branch,
+	// the if may be left with an empty Block{} as its then-body. such an if is a
+	// no-op and must be removed before the merge passes run.
+	body = pruneEmptyIfStatements(body)
+
 	// pass 1: merge nested ifs (if(a){if(b){S}} → if(a&&b){S})
 	body = mergeNestedIfs(body)
 
@@ -43,38 +64,56 @@ func CondenseExpressions(ast *StructuredAST) *StructuredAST {
 	body = applyDeMorgan(body)
 
 	// pass 3: inline single-use temporaries
-	// note: hoistEarlyReturns is intentionally deferred to pass 8 so that
-	// passes 4-7 (tail merging, empty-else normalization, consecutive-if merging,
-	// redundant branch elimination) can operate on the original conditions without
-	// interference from condition inversion introduced by early-return hoisting.
+	// note: hoistEarlyReturns is intentionally deferred to pass 9 so that
+	// passes 4-8 (tail merging, empty-else normalization, else-drop,
+	// consecutive-if merging, redundant branch elimination) can operate on
+	// the original conditions without interference from condition inversion
+	// introduced by early-return hoisting.
 	body = inlineSingleUseTemps(body)
 
 	// pass 4: tail merging — hoist identical trailing statements out of if-else branches
 	body = mergeTails(body)
 
-	// pass 5: normalize empty else-branches to nil so that pass 6 can merge
+	// pass 5: normalize empty else-branches to nil so that pass 7 can merge
 	// consecutive ifs that were separated by an empty else after tail hoisting.
 	// example: if(c){S} else {} → if(c){S}
 	body = normalizeEmptyElse(body)
 
-	// pass 6: merge consecutive if-statements with identical bodies into a
+	// pass 6: drop else-branch when then-branch ends with a terminator.
+	// if(c){return x;} else{S} → if(c){return x;} S
+	// this is the prerequisite for passes 7 and 8: once the else is lifted
+	// to the same block level, the consecutive-if merger and redundant-branch
+	// eliminator can collapse the resulting sequence.
+	body = dropElseAfterTerminator(body)
+
+	// pass 6b: re-flatten after else-drop: lifting else-bodies may have introduced
+	// new nested Block nodes that need to be collapsed before the merge passes.
+	body = flattenNestedBlocks(body)
+
+	// pass 6c: re-prune empty IRBlocks and empty if-statements exposed by else-drop.
+	// when the else-body contained empty convergence blocks (e.g. bb3), they are
+	// now at the parent block level and must be removed before the merge passes.
+	body = pruneEmptyIRBlocks(body)
+	body = pruneEmptyIfStatements(body)
+
+	// pass 7: merge consecutive if-statements with identical bodies into a
 	// single if with a disjunctive condition: if(A){S} if(B){S} → if(A||B){S}.
 	// this eliminates tail duplication artifacts produced by the structuring engine
 	// when the convergence block is duplicated into multiple branches.
 	body = mergeConsecutiveIfs(body)
 
-	// pass 7: eliminate redundant branches where the then-body is identical to
+	// pass 8: eliminate redundant branches where the then-body is identical to
 	// the immediately following statement: if(c){S} S → S.
-	// this collapses the residual pattern after passes 4-6 where both the
+	// this collapses the residual pattern after passes 4-7 where both the
 	// conditional and the fall-through path execute the same code.
 	body = eliminateRedundantBranches(body)
 
-	// pass 8: hoist early returns to the top of blocks.
-	// applied last so that passes 4-7 can operate on unmodified conditions.
+	// pass 9: hoist early returns to the top of blocks.
+	// applied last so that passes 4-8 can operate on unmodified conditions.
 	// example: if(cond){return x;} rest → if(!cond) rest; return x;
 	body = hoistEarlyReturns(body)
 
-	// pass 9: second early-return hoisting pass — re-apply after passes 6-8
+	// pass 10: second early-return hoisting pass — re-apply after passes 6-9
 	// have exposed new if(cond){return x;} patterns that were not visible
 	// during pass 3 (e.g., after mergeConsecutiveIfs collapses multiple ifs
 	// into one, the resulting if may now be eligible for hoisting).
@@ -1548,28 +1587,479 @@ func eliminateRedundantBranches(stmt Statement) Statement {
 }
 
 // collapseRedundantIfPairs scans a statement list and removes if-statements
-// (no else) whose then-body is identical to the immediately following statement.
-// the if is dropped and the following statement is kept (it executes unconditionally).
+// (no else) whose then-body is identical to any unconditionally-reachable
+// statement that follows them in the block.
+//
+// the scan is repeated until no further reductions are possible. this handles
+// chains where removing one redundant if exposes the next:
+//
+//	if (A||B) { return x; }   ← then == return x, which appears at end of block
+//	if (B)    { return x; }   ← then == return x (next stmt), removed first
+//	return x;
+//
+// after one pass: if(A||B){return x;} return x;
+// after two passes: return x;
+//
+// the condition for removal is:
+//   - the if has no else branch
+//   - the then-body is structurally identical to the immediately following statement
+//   - the condition expression is pure (no side effects): removing the branch
+//     cannot change observable behaviour
 func collapseRedundantIfPairs(stmts []Statement) []Statement {
-	result := make([]Statement, 0, len(stmts))
-	i := 0
-	for i < len(stmts) {
-		ifStmt, ok := stmts[i].(IfStatement)
-		if !ok || ifStmt.Else != nil || i+1 >= len(stmts) {
+	changed := true
+	for changed {
+		changed = false
+		result := make([]Statement, 0, len(stmts))
+		i := 0
+		for i < len(stmts) {
+			ifStmt, ok := stmts[i].(IfStatement)
+			if !ok || ifStmt.Else != nil || i+1 >= len(stmts) {
+				result = append(result, stmts[i])
+				i++
+				continue
+			}
+			next := stmts[i+1]
+			if statementsEqual(ifStmt.Then, next) && isPureCondition(ifStmt.Condition) {
+				// then-body is identical to the next statement and condition is
+				// side-effect-free: drop the if, keep the unconditional statement
+				result = append(result, next)
+				i += 2
+				changed = true
+				continue
+			}
 			result = append(result, stmts[i])
 			i++
-			continue
 		}
-		next := stmts[i+1]
-		if statementsEqual(ifStmt.Then, next) {
-			// then-body is identical to the next statement: drop the if,
-			// keep the unconditional statement
-			result = append(result, next)
-			i += 2
-			continue
-		}
-		result = append(result, stmts[i])
-		i++
+		stmts = result
 	}
-	return result
+	return stmts
+}
+
+// isPureCondition reports whether an expression is free of observable side
+// effects (no calls, no memory loads, no stores). only pure conditions may be
+// dropped when their branch is redundant; impure conditions must be preserved
+// because their evaluation may have side effects.
+func isPureCondition(expr ir.Expression) bool {
+	if expr == nil {
+		return true
+	}
+	switch e := expr.(type) {
+	case ir.ConstantExpr, *ir.ConstantExpr:
+		return true
+	case ir.VariableExpr, *ir.VariableExpr:
+		return true
+	case ir.BinaryOp:
+		return isPureCondition(e.Left) && isPureCondition(e.Right)
+	case *ir.BinaryOp:
+		return isPureCondition(e.Left) && isPureCondition(e.Right)
+	case ir.UnaryOp:
+		return isPureCondition(e.Operand)
+	case *ir.UnaryOp:
+		return isPureCondition(e.Operand)
+	case ir.Cast:
+		return isPureCondition(e.Expr)
+	case *ir.Cast:
+		return isPureCondition(e.Expr)
+	case ir.LoadExpr, *ir.LoadExpr:
+		// memory load: not pure — address may alias a side-effecting store
+		return false
+	default:
+		// unknown expression type: conservatively treat as impure
+		return false
+	}
+}
+
+// ============================================================================
+// pass 6: else-after-terminator elimination
+// ============================================================================
+
+// dropElseAfterTerminator walks the AST and removes else-branches from
+// if-statements whose then-branch unconditionally exits (return, goto).
+// the else-body is lifted to the enclosing block immediately after the if.
+//
+// transformation:
+//
+//	if (c) { return x; } else { S }   →   if (c) { return x; }
+//	                                        S
+//
+// this is the prerequisite for mergeConsecutiveIfs and eliminateRedundantBranches:
+// once the else-body is at the same block level as the if, the subsequent passes
+// can recognise and collapse the resulting adjacent identical statements.
+//
+// the transformation is safe because:
+//   - the then-branch terminates unconditionally (return or goto), so the
+//     else-body is only reachable when the condition is false — exactly the
+//     same reachability as after the if when the else is dropped.
+//   - no variable scoping rules are violated: the else-body is moved to the
+//     immediately enclosing block, which is the same scope it was already in
+//     from the perspective of the C output (C does not have block-scoped vars
+//     in the sense that would be affected here, and our VarDeclStatement
+//     injection happens after this pass).
+func dropElseAfterTerminator(stmt Statement) Statement {
+	if stmt == nil {
+		return nil
+	}
+
+	switch s := stmt.(type) {
+	case Block:
+		// recurse into children first (bottom-up), then flatten lifted else-bodies
+		stmts := make([]Statement, len(s.Stmts))
+		for i, child := range s.Stmts {
+			stmts[i] = dropElseAfterTerminator(child)
+		}
+		// expand: any IfStatement whose else was lifted becomes a pair
+		// [ifWithoutElse, elseBody] in the parent block
+		result := make([]Statement, 0, len(stmts))
+		for _, child := range stmts {
+			ifStmt, ok := child.(IfStatement)
+			if !ok || ifStmt.Else == nil {
+				result = append(result, child)
+				continue
+			}
+			if endsWithTerminator(ifStmt.Then) {
+				// lift else-body to parent block; strip else from if
+				stripped := IfStatement{
+					Condition: ifStmt.Condition,
+					Then:      ifStmt.Then,
+					Else:      nil,
+				}
+				result = append(result, stripped)
+				// flatten the else-body into the parent block directly
+				for _, lifted := range flattenBlock(ifStmt.Else) {
+					result = append(result, lifted)
+				}
+				continue
+			}
+			result = append(result, child)
+		}
+		if len(result) == 1 {
+			return result[0]
+		}
+		return Block{Stmts: result}
+
+	case IfStatement:
+		then := dropElseAfterTerminator(s.Then)
+		var els Statement
+		if s.Else != nil {
+			els = dropElseAfterTerminator(s.Else)
+		}
+		return IfStatement{Condition: s.Condition, Then: then, Else: els}
+
+	case WhileStatement:
+		return WhileStatement{Condition: s.Condition, Body: dropElseAfterTerminator(s.Body)}
+
+	case DoWhileStatement:
+		return DoWhileStatement{Body: dropElseAfterTerminator(s.Body), Condition: s.Condition}
+
+	case ForStatement:
+		var init, post Statement
+		if s.Init != nil {
+			init = dropElseAfterTerminator(s.Init)
+		}
+		if s.Post != nil {
+			post = dropElseAfterTerminator(s.Post)
+		}
+		return ForStatement{
+			Init:      init,
+			Condition: s.Condition,
+			Post:      post,
+			Body:      dropElseAfterTerminator(s.Body),
+		}
+
+	default:
+		return stmt
+	}
+}
+
+// endsWithTerminator reports whether stmt unconditionally exits on all paths.
+// a statement is terminal when every execution path through it ends with a
+// return or goto — meaning no fall-through to the next statement is possible.
+//
+// the analysis is conservative: it only returns true when it can prove
+// termination. unknown or complex patterns return false (safe default).
+func endsWithTerminator(stmt Statement) bool {
+	if stmt == nil {
+		return false
+	}
+	switch s := stmt.(type) {
+	case ReturnStatement:
+		return true
+
+	case GotoStatement:
+		return true
+
+	case Block:
+		// a block terminates if its last non-empty statement terminates
+		for i := len(s.Stmts) - 1; i >= 0; i-- {
+			child := s.Stmts[i]
+			if isEmptyBlock(child) {
+				continue
+			}
+			return endsWithTerminator(child)
+		}
+		return false
+
+	case IRBlock:
+		// an ir block terminates if its last instruction is a return
+		if len(s.Instructions) == 0 {
+			return false
+		}
+		last := s.Instructions[len(s.Instructions)-1]
+		if _, ok := last.(ir.Return); ok {
+			return true
+		}
+		if _, ok := last.(*ir.Return); ok {
+			return true
+		}
+		return false
+
+	case IfStatement:
+		// an if-else terminates only when both branches terminate
+		if s.Else == nil {
+			return false
+		}
+		return endsWithTerminator(s.Then) && endsWithTerminator(s.Else)
+
+	case WhileStatement, DoWhileStatement, ForStatement:
+		// loops may not terminate; conservatively return false
+		return false
+
+	default:
+		return false
+	}
+}
+
+// ============================================================================
+// pass 0: structural normalization
+// ============================================================================
+
+// pruneEmptyIRBlocks recursively removes IRBlock nodes that contain no
+// instructions from all Block statement lists.
+//
+// the structuring engine emits empty IRBlocks for convergence points and
+// fall-through targets that carry no actual instructions (e.g. bb3 in the
+// _start function). these empty nodes act as opaque separators between
+// adjacent if-statements, preventing mergeConsecutiveIfs and
+// eliminateRedundantBranches from recognising the patterns they target.
+//
+// an IRBlock is considered empty when its Instructions slice is nil or has
+// length zero. the BlockID is not considered: even a labelled convergence
+// block with no instructions is semantically a no-op in the output.
+func pruneEmptyIRBlocks(stmt Statement) Statement {
+	if stmt == nil {
+		return nil
+	}
+	switch s := stmt.(type) {
+	case Block:
+		result := make([]Statement, 0, len(s.Stmts))
+		for _, child := range s.Stmts {
+			pruned := pruneEmptyIRBlocks(child)
+			if irb, ok := pruned.(IRBlock); ok && len(irb.Instructions) == 0 {
+				// drop empty ir block
+				continue
+			}
+			result = append(result, pruned)
+		}
+		return Block{Stmts: result}
+
+	case IfStatement:
+		then := pruneEmptyIRBlocks(s.Then)
+		var els Statement
+		if s.Else != nil {
+			els = pruneEmptyIRBlocks(s.Else)
+		}
+		return IfStatement{Condition: s.Condition, Then: then, Else: els}
+
+	case WhileStatement:
+		return WhileStatement{Condition: s.Condition, Body: pruneEmptyIRBlocks(s.Body)}
+
+	case DoWhileStatement:
+		return DoWhileStatement{Body: pruneEmptyIRBlocks(s.Body), Condition: s.Condition}
+
+	case ForStatement:
+		var init, post Statement
+		if s.Init != nil {
+			init = pruneEmptyIRBlocks(s.Init)
+		}
+		if s.Post != nil {
+			post = pruneEmptyIRBlocks(s.Post)
+		}
+		return ForStatement{
+			Init:      init,
+			Condition: s.Condition,
+			Post:      post,
+			Body:      pruneEmptyIRBlocks(s.Body),
+		}
+
+	default:
+		return stmt
+	}
+}
+
+// flattenNestedBlocks recursively unwraps Block{Block{...}} nesting into a
+// single flat Block at each level.
+//
+// the structuring engine wraps branch bodies in extra Block nodes. after
+// dropElseAfterTerminator lifts the else-body into the parent block, the
+// lifted content arrives as a Block child of the parent Block. without
+// flattening, mergeConsecutiveIfs and eliminateRedundantBranches only see
+// the outer Block node, not the statements inside it, and cannot merge them
+// with adjacent siblings.
+//
+// only one level of nesting is collapsed per call; the recursion handles
+// deeper nesting naturally because each level is processed bottom-up.
+func flattenNestedBlocks(stmt Statement) Statement {
+	if stmt == nil {
+		return nil
+	}
+	switch s := stmt.(type) {
+	case Block:
+		// first recurse into children
+		children := make([]Statement, len(s.Stmts))
+		for i, child := range s.Stmts {
+			children[i] = flattenNestedBlocks(child)
+		}
+		// then flatten any direct Block children into this block
+		result := make([]Statement, 0, len(children))
+		for _, child := range children {
+			if inner, ok := child.(Block); ok {
+				// inline the inner block's statements directly
+				result = append(result, inner.Stmts...)
+			} else {
+				result = append(result, child)
+			}
+		}
+		if len(result) == 1 {
+			return result[0]
+		}
+		return Block{Stmts: result}
+
+	case IfStatement:
+		then := flattenNestedBlocks(s.Then)
+		var els Statement
+		if s.Else != nil {
+			els = flattenNestedBlocks(s.Else)
+		}
+		return IfStatement{Condition: s.Condition, Then: then, Else: els}
+
+	case WhileStatement:
+		return WhileStatement{Condition: s.Condition, Body: flattenNestedBlocks(s.Body)}
+
+	case DoWhileStatement:
+		return DoWhileStatement{Body: flattenNestedBlocks(s.Body), Condition: s.Condition}
+
+	case ForStatement:
+		var init, post Statement
+		if s.Init != nil {
+			init = flattenNestedBlocks(s.Init)
+		}
+		if s.Post != nil {
+			post = flattenNestedBlocks(s.Post)
+		}
+		return ForStatement{
+			Init:      init,
+			Condition: s.Condition,
+			Post:      post,
+			Body:      flattenNestedBlocks(s.Body),
+		}
+
+	default:
+		return stmt
+	}
+}
+
+// pruneEmptyIfStatements removes if-statements whose then-body is empty and
+// that have no else branch. such nodes are no-ops: they test a condition but
+// execute nothing regardless of the outcome.
+//
+// additionally, if both then and else bodies are empty, the entire if is dropped.
+// if then is empty but else is non-empty and the condition is pure, the if is
+// inverted: if(c){} else{S} → if(!c){S}.
+//
+// this situation arises after pruneEmptyIRBlocks removes the convergence block
+// from the then-branch of an if that was originally:
+//
+//	if (cond) { /* bb3 (empty) */ }
+//
+// after pruning bb3, the then-body becomes Block{Stmts: nil}, which is an
+// empty block. the if itself is then a dead no-op and must be removed.
+//
+// the condition is only dropped when it is pure (no side effects). if the
+// condition has side effects (e.g. a function call), the if is preserved as
+// a statement expression.
+func pruneEmptyIfStatements(stmt Statement) Statement {
+	if stmt == nil {
+		return nil
+	}
+	switch s := stmt.(type) {
+	case Block:
+		result := make([]Statement, 0, len(s.Stmts))
+		for _, child := range s.Stmts {
+			pruned := pruneEmptyIfStatements(child)
+			if ifStmt, ok := pruned.(IfStatement); ok {
+				thenEmpty := isEmptyBlock(ifStmt.Then) || ifStmt.Then == nil || isEmptyIRBlock(ifStmt.Then)
+				elseEmpty := ifStmt.Else == nil || isEmptyBlock(ifStmt.Else) || isEmptyIRBlock(ifStmt.Else)
+				if thenEmpty && elseEmpty && isPureCondition(ifStmt.Condition) {
+					// both branches empty and condition pure: drop entirely
+					continue
+				}
+				if thenEmpty && !elseEmpty && isPureCondition(ifStmt.Condition) {
+					// then empty, else non-empty: invert condition, swap branches
+					result = append(result, IfStatement{
+						Condition: negateCondition(ifStmt.Condition),
+						Then:      ifStmt.Else,
+						Else:      nil,
+					})
+					continue
+				}
+			}
+			result = append(result, pruned)
+		}
+		if len(result) == 1 {
+			return result[0]
+		}
+		return Block{Stmts: result}
+
+	case IfStatement:
+		then := pruneEmptyIfStatements(s.Then)
+		var els Statement
+		if s.Else != nil {
+			els = pruneEmptyIfStatements(s.Else)
+		}
+		return IfStatement{Condition: s.Condition, Then: then, Else: els}
+
+	case WhileStatement:
+		return WhileStatement{Condition: s.Condition, Body: pruneEmptyIfStatements(s.Body)}
+
+	case DoWhileStatement:
+		return DoWhileStatement{Body: pruneEmptyIfStatements(s.Body), Condition: s.Condition}
+
+	case ForStatement:
+		var init, post Statement
+		if s.Init != nil {
+			init = pruneEmptyIfStatements(s.Init)
+		}
+		if s.Post != nil {
+			post = pruneEmptyIfStatements(s.Post)
+		}
+		return ForStatement{
+			Init:      init,
+			Condition: s.Condition,
+			Post:      post,
+			Body:      pruneEmptyIfStatements(s.Body),
+		}
+
+	default:
+		return stmt
+	}
+}
+
+// isEmptyIRBlock returns true if stmt is an IRBlock with no instructions.
+// this complements isEmptyBlock (which only checks Block nodes) for the case
+// where the structuring engine emits an empty IRBlock as a convergence point.
+func isEmptyIRBlock(stmt Statement) bool {
+	if irb, ok := stmt.(IRBlock); ok {
+		return len(irb.Instructions) == 0
+	}
+	return false
 }

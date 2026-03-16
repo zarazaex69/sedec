@@ -643,7 +643,16 @@ func TestCondenseExpressions_EarlyReturn(t *testing.T) {
 		Condition: varExpr("err"),
 		Then:      Block{Stmts: []Statement{retStmt}},
 	}
-	work := IRBlock{BlockID: 10}
+	// use a non-empty IRBlock so that pruneEmptyIRBlocks does not remove it
+	work := IRBlock{
+		BlockID: 10,
+		Instructions: []ir.IRInstruction{
+			ir.Assign{
+				Dest:   ir.Variable{Name: "x", Type: ir.IntType{Width: ir.Size8}},
+				Source: ir.ConstantExpr{Value: ir.IntConstant{Value: 1}},
+			},
+		},
+	}
 	ast := makeAST(Block{Stmts: []Statement{ifStmt, work}})
 
 	result := CondenseExpressions(ast)
@@ -1505,5 +1514,178 @@ func TestCondenseExpressions_ControlFlowBloat(t *testing.T) {
 		if binOp.Op != ir.BinOpLogicalOr {
 			t.Fatalf("expected || in merged condition, got %v", binOp.Op)
 		}
+	}
+}
+
+// ============================================================================
+// endsWithTerminator
+// ============================================================================
+
+func TestEndsWithTerminator_ReturnStatement(t *testing.T) {
+	ret := ReturnStatement{Value: intVarExpr("rax")}
+	if !endsWithTerminator(ret) {
+		t.Fatal("ReturnStatement must be terminal")
+	}
+}
+
+func TestEndsWithTerminator_GotoStatement(t *testing.T) {
+	g := GotoStatement{Label: "lbl_0"}
+	if !endsWithTerminator(g) {
+		t.Fatal("GotoStatement must be terminal")
+	}
+}
+
+func TestEndsWithTerminator_BlockEndingWithReturn(t *testing.T) {
+	b := Block{Stmts: []Statement{
+		IRBlock{BlockID: 1, Instructions: []ir.IRInstruction{
+			ir.Assign{Dest: ir.Variable{Name: "x"}, Source: constInt(1)},
+		}},
+		ReturnStatement{Value: intVarExpr("x")},
+	}}
+	if !endsWithTerminator(b) {
+		t.Fatal("block ending with return must be terminal")
+	}
+}
+
+func TestEndsWithTerminator_BlockNotTerminal(t *testing.T) {
+	b := Block{Stmts: []Statement{
+		IRBlock{BlockID: 1, Instructions: []ir.IRInstruction{
+			ir.Assign{Dest: ir.Variable{Name: "x"}, Source: constInt(1)},
+		}},
+	}}
+	if endsWithTerminator(b) {
+		t.Fatal("block ending with assignment must not be terminal")
+	}
+}
+
+func TestEndsWithTerminator_IfElseBothTerminal(t *testing.T) {
+	s := IfStatement{
+		Condition: varExpr("c"),
+		Then:      ReturnStatement{Value: constInt(0)},
+		Else:      ReturnStatement{Value: constInt(1)},
+	}
+	if !endsWithTerminator(s) {
+		t.Fatal("if-else with both branches terminal must be terminal")
+	}
+}
+
+func TestEndsWithTerminator_IfNoElse(t *testing.T) {
+	s := IfStatement{
+		Condition: varExpr("c"),
+		Then:      ReturnStatement{Value: constInt(0)},
+	}
+	if endsWithTerminator(s) {
+		t.Fatal("if without else must not be terminal (fall-through possible)")
+	}
+}
+
+func TestEndsWithTerminator_Nil(t *testing.T) {
+	if endsWithTerminator(nil) {
+		t.Fatal("nil must not be terminal")
+	}
+}
+
+// ============================================================================
+// dropElseAfterTerminator
+// ============================================================================
+
+func TestDropElseAfterTerminator_Basic(t *testing.T) {
+	// if (c) { return 0; } else { return 1; }
+	// → if (c) { return 0; }
+	//   return 1;
+	cond := varExpr("c")
+	thenRet := ReturnStatement{Value: constInt(0)}
+	elseRet := ReturnStatement{Value: constInt(1)}
+
+	input := Block{Stmts: []Statement{
+		IfStatement{Condition: cond, Then: thenRet, Else: elseRet},
+	}}
+
+	result := dropElseAfterTerminator(input)
+	stmts := flattenBlock(result)
+
+	if len(stmts) != 2 {
+		t.Fatalf("expected 2 statements after drop, got %d", len(stmts))
+	}
+	ifStmt, ok := stmts[0].(IfStatement)
+	if !ok {
+		t.Fatalf("first statement must be IfStatement, got %T", stmts[0])
+	}
+	if ifStmt.Else != nil {
+		t.Fatal("else must be nil after drop")
+	}
+	if _, ok := stmts[1].(ReturnStatement); !ok {
+		t.Fatalf("second statement must be ReturnStatement, got %T", stmts[1])
+	}
+}
+
+func TestDropElseAfterTerminator_NoDropWhenThenNotTerminal(t *testing.T) {
+	// if (c) { x = 1; } else { return 1; }
+	// → unchanged (then is not terminal)
+	cond := varExpr("c")
+	thenBlock := IRBlock{BlockID: 1, Instructions: []ir.IRInstruction{
+		ir.Assign{Dest: ir.Variable{Name: "x"}, Source: constInt(1)},
+	}}
+	elseRet := ReturnStatement{Value: constInt(1)}
+
+	input := Block{Stmts: []Statement{
+		IfStatement{Condition: cond, Then: thenBlock, Else: elseRet},
+	}}
+
+	result := dropElseAfterTerminator(input)
+	stmts := flattenBlock(result)
+
+	if len(stmts) != 1 {
+		t.Fatalf("expected 1 statement (unchanged), got %d", len(stmts))
+	}
+	ifStmt, ok := stmts[0].(IfStatement)
+	if !ok {
+		t.Fatalf("expected IfStatement, got %T", stmts[0])
+	}
+	if ifStmt.Else == nil {
+		t.Fatal("else must be preserved when then is not terminal")
+	}
+}
+
+func TestDropElseAfterTerminator_NestedElse(t *testing.T) {
+	// reproduces the exact pattern from the bug report:
+	// if (condA) { return rax; } else { if (condB) { return rax; } }
+	// → if (condA) { return rax; }
+	//   if (condB) { return rax; }
+	raxVar := ir.Variable{Name: "rax", Type: ir.IntType{Width: ir.Size8}}
+	retRax := ReturnStatement{Value: ir.VariableExpr{Var: raxVar}}
+	condA := varExpr("condA")
+	condB := varExpr("condB")
+
+	input := Block{Stmts: []Statement{
+		IfStatement{
+			Condition: condA,
+			Then:      retRax,
+			Else: IfStatement{
+				Condition: condB,
+				Then:      retRax,
+			},
+		},
+	}}
+
+	result := dropElseAfterTerminator(input)
+	stmts := flattenBlock(result)
+
+	if len(stmts) != 2 {
+		t.Fatalf("expected 2 statements after drop, got %d: %v", len(stmts), result.String())
+	}
+	first, ok := stmts[0].(IfStatement)
+	if !ok {
+		t.Fatalf("first must be IfStatement, got %T", stmts[0])
+	}
+	if first.Else != nil {
+		t.Fatal("first if must have no else after drop")
+	}
+	second, ok := stmts[1].(IfStatement)
+	if !ok {
+		t.Fatalf("second must be IfStatement, got %T", stmts[1])
+	}
+	if second.Condition.String() != condB.String() {
+		t.Fatalf("second if condition must be condB, got %v", second.Condition)
 	}
 }
