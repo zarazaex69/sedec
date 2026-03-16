@@ -261,13 +261,17 @@ func decompileAllSections(
 	return nil
 }
 
-// decompileInstructions runs the full pipeline: lift → cfg → domtree → loops → structure → codegen
+// decompileInstructions runs the full pipeline: lift → cfg → domtree → loops → abi → structure → codegen
 func decompileInstructions(functionName string, instructions []*disasm.Instruction) (string, error) {
 	// lift instructions to ir; cfgBuilder retains the built cfg internally
 	irFunc, cfgBuilder, err := liftInstructionsToIR(functionName, instructions)
 	if err != nil {
 		return "", fmt.Errorf("ir lifting failed: %w", err)
 	}
+
+	// run abi analysis pass: populates Call.Args, sets function signature,
+	// and infers return types from register usage at call sites.
+	applyABIPass(irFunc, instructions)
 
 	// compute dominator tree (lengauer-tarjan via gonum)
 	domTree, err := cfgBuilder.ComputeDominators()

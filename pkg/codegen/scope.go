@@ -232,13 +232,22 @@ func (m *ScopeMinimizer) injectBeforeReturn(
 
 // injectInIf handles IfStatement: condition vars are declared before the if,
 // then/else body vars are declared in their respective inner scopes.
+//
+// critical invariant: a variable declared inside one branch is NOT visible
+// outside that branch. therefore we must NOT propagate branch-local declarations
+// into the parent declared set. only variables declared in the condition prefix
+// (before the if) are propagated upward.
+//
+// variables that are used in both branches, or used in the condition, are
+// hoisted to a declaration before the if statement so they remain in scope
+// after the if-else construct.
 func (m *ScopeMinimizer) injectInIf(
 	n structuring.IfStatement,
 	candidates map[string]ir.Variable,
 	depth int,
 	declared map[string]bool,
 ) (structuring.Statement, map[string]bool) {
-	prefix := make([]structuring.Statement, 0, 2)
+	prefix := make([]structuring.Statement, 0, 4)
 
 	// declare variables used in the condition before the if statement
 	for _, varName := range collectUsedVarsInExpr(n.Condition) {
@@ -251,19 +260,48 @@ func (m *ScopeMinimizer) injectInIf(
 		}
 	}
 
-	// recurse into then/else branches with fresh inner scope tracking
-	thenRewritten, thenDeclared := m.injectDeclarations(n.Then, candidates, depth+1, declared)
-	for k := range thenDeclared {
-		declared[k] = true
+	// collect variables used in each branch (without modifying declared yet)
+	usedInThen := collectUsedVars(n.Then)
+	usedInElse := make(map[string]bool)
+	if n.Else != nil {
+		usedInElse = collectUsedVars(n.Else)
 	}
 
+	// hoist variables that appear in both branches to before the if.
+	// this prevents a variable from being declared in one branch and used
+	// in the other (or after the if-else) out of scope.
+	for varName, v := range candidates {
+		if declared[varName] {
+			continue
+		}
+		inThen := usedInThen[varName]
+		inElse := usedInElse[varName]
+		if inThen && inElse {
+			prefix = append(prefix, structuring.VarDeclStatement{
+				Name:     varName,
+				TypeName: cTypeName(v.Type),
+			})
+			declared[varName] = true
+		}
+	}
+
+	// recurse into then-branch with a snapshot of declared (branch-local scope).
+	// do NOT merge thenDeclared back into declared: variables declared inside
+	// a branch are not visible outside it.
+	thenSnapshot := make(map[string]bool, len(declared))
+	for k := range declared {
+		thenSnapshot[k] = true
+	}
+	thenRewritten, _ := m.injectDeclarations(n.Then, candidates, depth+1, thenSnapshot)
+
+	// recurse into else-branch with the same pre-branch declared snapshot.
 	var elseRewritten structuring.Statement
 	if n.Else != nil {
-		var elseDeclared map[string]bool
-		elseRewritten, elseDeclared = m.injectDeclarations(n.Else, candidates, depth+1, declared)
-		for k := range elseDeclared {
-			declared[k] = true
+		elseSnapshot := make(map[string]bool, len(declared))
+		for k := range declared {
+			elseSnapshot[k] = true
 		}
+		elseRewritten, _ = m.injectDeclarations(n.Else, candidates, depth+1, elseSnapshot)
 	}
 
 	ifStmt := structuring.IfStatement{
@@ -281,6 +319,7 @@ func (m *ScopeMinimizer) injectInIf(
 
 // injectInWhile handles WhileStatement: condition vars declared before loop,
 // body vars declared inside loop body.
+// body-local declarations are NOT propagated to the parent scope.
 func (m *ScopeMinimizer) injectInWhile(
 	n structuring.WhileStatement,
 	candidates map[string]ir.Variable,
@@ -299,10 +338,12 @@ func (m *ScopeMinimizer) injectInWhile(
 		}
 	}
 
-	bodyRewritten, bodyDeclared := m.injectDeclarations(n.Body, candidates, depth+1, declared)
-	for k := range bodyDeclared {
-		declared[k] = true
+	// body uses a snapshot: declarations inside the loop body stay loop-local
+	bodySnapshot := make(map[string]bool, len(declared))
+	for k := range declared {
+		bodySnapshot[k] = true
 	}
+	bodyRewritten, _ := m.injectDeclarations(n.Body, candidates, depth+1, bodySnapshot)
 
 	loop := structuring.WhileStatement{Condition: n.Condition, Body: bodyRewritten}
 	if len(prefix) == 0 {
@@ -313,20 +354,25 @@ func (m *ScopeMinimizer) injectInWhile(
 }
 
 // injectInDoWhile handles DoWhileStatement.
+// variables used in the condition that are also defined in the body must be
+// declared before the do-while (they are set in the body and tested in the condition).
+// body-local declarations that are NOT used in the condition stay loop-local.
 func (m *ScopeMinimizer) injectInDoWhile(
 	n structuring.DoWhileStatement,
 	candidates map[string]ir.Variable,
 	depth int,
 	declared map[string]bool,
 ) (structuring.Statement, map[string]bool) {
-	bodyRewritten, bodyDeclared := m.injectDeclarations(n.Body, candidates, depth+1, declared)
-	for k := range bodyDeclared {
-		declared[k] = true
+	// collect variables used in the condition
+	condVars := make(map[string]bool)
+	for _, name := range collectUsedVarsInExpr(n.Condition) {
+		condVars[name] = true
 	}
 
-	// condition vars: declared before the do-while (they may be set in body)
+	// hoist variables that are used in the condition to before the loop.
+	// this covers the canonical do { flag = ...; } while (flag) pattern.
 	prefix := make([]structuring.Statement, 0, 2)
-	for _, varName := range collectUsedVarsInExpr(n.Condition) {
+	for varName := range condVars {
 		if v, ok := candidates[varName]; ok && !declared[varName] {
 			prefix = append(prefix, structuring.VarDeclStatement{
 				Name:     varName,
@@ -335,6 +381,14 @@ func (m *ScopeMinimizer) injectInDoWhile(
 			declared[varName] = true
 		}
 	}
+
+	// body uses a snapshot: declarations inside the loop body that are NOT
+	// condition variables stay loop-local.
+	bodySnapshot := make(map[string]bool, len(declared))
+	for k := range declared {
+		bodySnapshot[k] = true
+	}
+	bodyRewritten, _ := m.injectDeclarations(n.Body, candidates, depth+1, bodySnapshot)
 
 	loop := structuring.DoWhileStatement{Body: bodyRewritten, Condition: n.Condition}
 	if len(prefix) == 0 {
@@ -346,6 +400,7 @@ func (m *ScopeMinimizer) injectInDoWhile(
 
 // injectInFor handles ForStatement: init vars declared before for,
 // body vars declared inside body.
+// body-local declarations are NOT propagated to the parent scope.
 func (m *ScopeMinimizer) injectInFor(
 	n structuring.ForStatement,
 	candidates map[string]ir.Variable,
@@ -389,10 +444,12 @@ func (m *ScopeMinimizer) injectInFor(
 		}
 	}
 
-	bodyRewritten, bodyDeclared := m.injectDeclarations(n.Body, candidates, depth+1, declared)
-	for k := range bodyDeclared {
-		declared[k] = true
+	// body uses a snapshot: declarations inside the loop body stay loop-local
+	bodySnapshot := make(map[string]bool, len(declared))
+	for k := range declared {
+		bodySnapshot[k] = true
 	}
+	bodyRewritten, _ := m.injectDeclarations(n.Body, candidates, depth+1, bodySnapshot)
 
 	forStmt := structuring.ForStatement{
 		Init:      n.Init,
