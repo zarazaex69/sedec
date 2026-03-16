@@ -715,3 +715,281 @@ func TestNegateCondition_Plain(t *testing.T) {
 		t.Fatalf("expected !x, got %T", result)
 	}
 }
+
+// ============================================================================
+// regression tests: task 15.1 (tail merging) and task 15.7 (inline temps)
+// ============================================================================
+
+// makeLoadInstr creates an ir.Load instruction (memory read into dest variable).
+func makeLoadInstr(dest string, addr ir.Expression, size ir.Size) ir.IRInstruction {
+	return ir.Load{
+		Dest:    ir.Variable{Name: dest, Type: ir.IntType{Width: size, Signed: false}},
+		Address: addr,
+		Size:    size,
+	}
+}
+
+// makeCallInstr creates an ir.Call instruction with a variable target and args.
+func makeCallInstr(dest *ir.Variable, target ir.Expression, args []ir.Variable) ir.IRInstruction {
+	return ir.Call{
+		Dest:   dest,
+		Target: target,
+		Args:   args,
+	}
+}
+
+// constUint creates an unsigned integer constant expression.
+func constUint(v uint64) ir.Expression {
+	return ir.ConstantExpr{Value: ir.IntConstant{Value: int64(v), Width: ir.Size8, Signed: false}} //nolint:gosec
+}
+
+// eqExpr creates a == comparison expression.
+func eqExpr(a, b ir.Expression) ir.Expression {
+	return ir.BinaryOp{Op: ir.BinOpEq, Left: a, Right: b}
+}
+
+// TestMergeTails_AsymmetricElseDuplication reproduces the "double tail" pattern
+// from task 15.1: the structuring engine duplicates the convergence block into
+// the else branch, producing identical code in else and after the if-else.
+//
+//	Block {
+//	    IfStatement { Then: S1, Else: Block{ IRBlock{load t3; rax=t3}; IfStatement{rax==0 → return rax} } }
+//	    IRBlock{load t3; rax=t3}          // duplicated convergence block
+//	    IfStatement{rax==0 → return rax}  // duplicated convergence block
+//	}
+//
+// expected after mergeTails:
+//
+//	Block {
+//	    IfStatement { Then: S1, Else: Block{} }
+//	    IRBlock{load t3; rax=t3}
+//	    IfStatement{rax==0 → return rax}
+//	}
+func TestMergeTails_AsymmetricElseDuplication(t *testing.T) {
+	// shared convergence block: t3 = load(163016); rax = t3
+	loadAddr := constUint(163016)
+	loadT3 := makeLoadInstr("t3", loadAddr, ir.Size8)
+	assignRax := makeAssign("rax", intVarExpr("t3"))
+	convergenceIRB := IRBlock{
+		BlockID:      10,
+		Instructions: []ir.IRInstruction{loadT3, assignRax},
+	}
+
+	// shared convergence if: if (rax == 0) { return rax; }
+	raxVar := ir.Variable{Name: "rax", Type: ir.IntType{Width: ir.Size8, Signed: false}}
+	convergenceIf := IfStatement{
+		Condition: eqExpr(ir.VariableExpr{Var: raxVar}, constUint(0)),
+		Then:      ReturnStatement{Value: ir.VariableExpr{Var: raxVar}},
+		Else:      nil,
+	}
+
+	// else branch contains the duplicated convergence block
+	elseBlock := Block{Stmts: []Statement{
+		convergenceIRB,
+		convergenceIf,
+	}}
+
+	// then branch: some other work
+	thenBlock := IRBlock{BlockID: 5, Instructions: []ir.IRInstruction{
+		makeAssign("rax", constUint(1)),
+	}}
+
+	// outer if-else
+	outerIf := IfStatement{
+		Condition: varExpr("cond"),
+		Then:      thenBlock,
+		Else:      elseBlock,
+	}
+
+	// parent block: if-else followed by the same convergence code (duplication)
+	// use a different BlockID to simulate the real CFG scenario
+	convergenceIRB2 := IRBlock{
+		BlockID:      10, // same block id — structuring engine emits same block twice
+		Instructions: []ir.IRInstruction{loadT3, assignRax},
+	}
+	convergenceIf2 := IfStatement{
+		Condition: eqExpr(ir.VariableExpr{Var: raxVar}, constUint(0)),
+		Then:      ReturnStatement{Value: ir.VariableExpr{Var: raxVar}},
+		Else:      nil,
+	}
+
+	parent := Block{Stmts: []Statement{outerIf, convergenceIRB2, convergenceIf2}}
+
+	result := mergeTails(parent)
+
+	// after merging: else branch should be empty (or stripped), convergence code
+	// should appear exactly once after the if-else
+	blk, ok := result.(Block)
+	if !ok {
+		t.Fatalf("expected Block, got %T", result)
+	}
+
+	// find the if statement
+	var foundIf *IfStatement
+	for _, s := range blk.Stmts {
+		if ifS, ok := s.(IfStatement); ok {
+			foundIf = &ifS
+			break
+		}
+	}
+	if foundIf == nil {
+		t.Fatal("expected IfStatement in result block")
+	}
+
+	// else branch must not contain the convergence IRBlock anymore
+	if foundIf.Else != nil {
+		elseStmts := flattenBlock(foundIf.Else)
+		for _, s := range elseStmts {
+			if irb, ok := s.(IRBlock); ok {
+				for _, instr := range irb.Instructions {
+					if load, ok := instr.(ir.Load); ok {
+						if load.Dest.Name == "t3" {
+							t.Fatal("convergence IRBlock must be hoisted out of else branch")
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// convergence IRBlock must appear exactly once in the parent block (after the if)
+	loadCount := 0
+	for _, s := range blk.Stmts {
+		if irb, ok := s.(IRBlock); ok {
+			for _, instr := range irb.Instructions {
+				if load, ok := instr.(ir.Load); ok && load.Dest.Name == "t3" {
+					loadCount++
+				}
+			}
+		}
+	}
+	if loadCount != 1 {
+		t.Fatalf("expected convergence IRBlock exactly once after merge, got %d occurrences", loadCount)
+	}
+}
+
+// TestInlineSingleUseTemps_CallTarget reproduces task 15.7: a single-use
+// temporary loaded from a constant address is used as the call target.
+//
+//	t2 = *(uint64_t*)(162976)   // Load with constant address
+//	t2(rdi, rsi, ...)           // Call with t2 as target
+//
+// expected after inlining:
+//
+//	(*(uint64_t*)(162976))(rdi, rsi, ...)
+func TestInlineSingleUseTemps_CallTarget(t *testing.T) {
+	constAddr := constUint(162976)
+	loadT2 := makeLoadInstr("t2", constAddr, ir.Size8)
+
+	rdiVar := ir.Variable{Name: "rdi", Type: ir.IntType{Width: ir.Size8, Signed: false}}
+	rsiVar := ir.Variable{Name: "rsi", Type: ir.IntType{Width: ir.Size8, Signed: false}}
+	t2Var := ir.Variable{Name: "t2", Type: ir.IntType{Width: ir.Size8, Signed: false}}
+
+	callInstr := ir.Call{
+		Dest:   nil,
+		Target: ir.VariableExpr{Var: t2Var},
+		Args:   []ir.Variable{rdiVar, rsiVar},
+	}
+
+	irb := IRBlock{
+		BlockID:      1,
+		Instructions: []ir.IRInstruction{loadT2, callInstr},
+	}
+	blk := Block{Stmts: []Statement{irb}}
+
+	result := inlineSingleUseTemps(blk)
+
+	// find the call instruction in result
+	var foundCall *ir.Call
+	var checkStmt func(Statement)
+	checkStmt = func(s Statement) {
+		switch r := s.(type) {
+		case Block:
+			for _, child := range r.Stmts {
+				checkStmt(child)
+			}
+		case IRBlock:
+			for _, instr := range r.Instructions {
+				if c, ok := instr.(ir.Call); ok {
+					cp := c
+					foundCall = &cp
+				}
+			}
+		}
+	}
+	checkStmt(result)
+
+	if foundCall == nil {
+		t.Fatal("expected Call instruction in result")
+	}
+
+	// target must be a LoadExpr (inlined from t2 = load(162976))
+	if _, ok := foundCall.Target.(ir.LoadExpr); !ok {
+		t.Fatalf("expected LoadExpr as call target after inlining, got %T", foundCall.Target)
+	}
+
+	// t2 load instruction must be gone
+	var checkNoT2Load func(Statement)
+	checkNoT2Load = func(s Statement) {
+		switch r := s.(type) {
+		case Block:
+			for _, child := range r.Stmts {
+				checkNoT2Load(child)
+			}
+		case IRBlock:
+			for _, instr := range r.Instructions {
+				if load, ok := instr.(ir.Load); ok && load.Dest.Name == "t2" {
+					t.Fatal("t2 load must be inlined away")
+				}
+			}
+		}
+	}
+	checkNoT2Load(result)
+}
+
+// TestInlineSingleUseTemps_VariableAddressLoad_NoInline verifies that a load
+// from a variable address (e.g. rsp) is NOT inlined even when used once,
+// because the address may change between the load and the use site.
+func TestInlineSingleUseTemps_VariableAddressLoad_NoInline(t *testing.T) {
+	rspVar := ir.Variable{Name: "rsp", Type: ir.IntType{Width: ir.Size8, Signed: false}}
+	loadT1 := makeLoadInstr("t1", ir.VariableExpr{Var: rspVar}, ir.Size8)
+	// rsp = rsp + 8 (modifies the address between load and use)
+	addExpr := ir.BinaryOp{
+		Op:    ir.BinOpAdd,
+		Left:  ir.VariableExpr{Var: rspVar},
+		Right: constUint(8),
+	}
+	updateRsp := makeAssign("rsp", addExpr)
+	// rsi = t1
+	assignRsi := makeAssign("rsi", intVarExpr("t1"))
+
+	irb := IRBlock{
+		BlockID:      1,
+		Instructions: []ir.IRInstruction{loadT1, updateRsp, assignRsi},
+	}
+	blk := Block{Stmts: []Statement{irb}}
+
+	result := inlineSingleUseTemps(blk)
+
+	// t1 load must still be present (variable address — unsafe to inline)
+	found := false
+	var check func(Statement)
+	check = func(s Statement) {
+		switch r := s.(type) {
+		case Block:
+			for _, child := range r.Stmts {
+				check(child)
+			}
+		case IRBlock:
+			for _, instr := range r.Instructions {
+				if load, ok := instr.(ir.Load); ok && load.Dest.Name == "t1" {
+					found = true
+				}
+			}
+		}
+	}
+	check(result)
+	if !found {
+		t.Fatal("t1 load must be preserved: variable address load is unsafe to inline")
+	}
+}

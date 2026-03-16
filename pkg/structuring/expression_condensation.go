@@ -1081,9 +1081,13 @@ func mergeAsymmetricTails(stmts []Statement) []Statement {
 				Else:      newElse,
 			}
 			result = append(result, newIf)
-			// skip the hoisted statements in the parent (they stay after the if)
+			// the hoisted statements are the first `count` elements of following;
+			// they must appear after the if (deduplicated — keep only the copy
+			// from the parent block, not the one inside the branch).
+			result = append(result, following[:count]...)
+			// skip past the hoisted statements in the parent block
 			i += 1 + count
-			// append the remaining following statements that were not hoisted
+			// append any remaining statements after the hoisted block
 			result = append(result, stmts[i:]...)
 			return result
 		}
@@ -1096,6 +1100,7 @@ func mergeAsymmetricTails(stmts []Statement) []Statement {
 				Else:      ifStmt.Else,
 			}
 			result = append(result, newIf)
+			result = append(result, following[:count]...)
 			i += 1 + count
 			result = append(result, stmts[i:]...)
 			return result
