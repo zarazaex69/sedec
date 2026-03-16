@@ -62,8 +62,8 @@ func applyABIPass(irFunc *ir.Function, rawInsns []*disasm.Instruction) {
 			// collect live argument registers immediately before this call.
 			// we scan backwards from the call site through the raw instruction stream
 			// to find the last writes to each argument register.
-			args := collectCallArgs(callAddr, rawInsns, insnByAddr, argRegs)
-			callNode.Args = args
+			callResult := collectCallArgs(callAddr, rawInsns, insnByAddr, argRegs)
+			callNode.Args = callResult.args
 
 			// determine return value: if rax is written by the call target,
 			// assign a fresh temp as the call destination.
@@ -77,6 +77,14 @@ func applyABIPass(irFunc *ir.Function, rawInsns []*disasm.Instruction) {
 			}
 
 			block.Instructions[i] = &callNode
+
+			// remove ir instructions that were emitted for absorbed push instructions.
+			// the lifter emits a Store (push value onto stack) and an Assign (rsp -= 8)
+			// for each push. now that these pushes are represented as Call.Args, those
+			// ir instructions are pure noise — remove them from the block.
+			if len(callResult.absorbedPushAddrs) > 0 {
+				removeAbsorbedPushInstrs(block, callResult.absorbedPushAddrs)
+			}
 		}
 	}
 
@@ -102,10 +110,17 @@ func applyABIPass(irFunc *ir.Function, rawInsns []*disasm.Instruction) {
 	}
 }
 
+// collectCallArgsResult holds the result of collectCallArgs.
+type collectCallArgsResult struct {
+	args              []ir.Variable
+	absorbedPushAddrs map[disasm.Address]bool // addresses of push insns absorbed as stack args
+}
+
 // collectCallArgs scans backwards from callAddr through rawInsns to find
 // the last write to each argument register before the call, and also collects
 // stack-passed arguments from push instructions (system v: 7th+ arg).
-// returns a slice of ir.Variable in argument order (arg0, arg1, ...).
+// returns args in argument order (arg0, arg1, ...) and the set of push
+// instruction addresses that were absorbed into the call abstraction.
 // stops collecting when a register has not been written since function entry
 // or since the previous call (indicating it is not an argument for this call).
 func collectCallArgs(
@@ -113,7 +128,7 @@ func collectCallArgs(
 	rawInsns []*disasm.Instruction,
 	insnByAddr map[disasm.Address]*disasm.Instruction,
 	argRegs []string,
-) []ir.Variable {
+) collectCallArgsResult {
 	_ = insnByAddr // reserved for future per-address lookup
 
 	// find the index of the call instruction in the raw stream
@@ -125,7 +140,7 @@ func collectCallArgs(
 		}
 	}
 	if callIdx < 0 {
-		return nil
+		return collectCallArgsResult{}
 	}
 
 	// track which argument registers have been written before the call.
@@ -138,6 +153,7 @@ func collectCallArgs(
 	// right-to-left, so the first push encountered scanning backwards is the
 	// last (highest-indexed) stack argument.
 	var stackArgs []ir.Variable
+	absorbedPushAddrs := make(map[disasm.Address]bool)
 
 	for i := callIdx - 1; i >= 0; i-- {
 		insn := rawInsns[i]
@@ -179,6 +195,9 @@ func collectCallArgs(
 			}
 			// prepend: scanning backwards, so first push found = last arg pushed
 			stackArgs = append([]ir.Variable{argVar}, stackArgs...)
+			// record this push address as absorbed: the ir.Store and rsp Assign
+			// that the lifter emitted for this push are now redundant.
+			absorbedPushAddrs[insn.Address] = true
 			continue
 		}
 
@@ -232,7 +251,7 @@ func collectCallArgs(
 	// append stack-passed arguments after register arguments
 	result = append(result, stackArgs...)
 
-	return result
+	return collectCallArgsResult{args: result, absorbedPushAddrs: absorbedPushAddrs}
 }
 
 // inferCallDest checks whether the instruction immediately following the call
@@ -362,4 +381,33 @@ func canonicalizeABIReg(name string) string {
 	default:
 		return name
 	}
+}
+
+// removeAbsorbedPushInstrs removes ir.Store and ir.Assign instructions from block
+// that were emitted by the lifter for push instructions whose addresses are in
+// absorbedAddrs. a push rax lifts to:
+//   - ir.Assign: rsp = rsp - 8   (stack pointer decrement)
+//   - ir.Store:  *(rsp) = rax    (value write)
+//
+// both carry the source address of the push instruction in their SourceLocation.
+// since these are now represented as Call.Args, they are pure noise in the ir.
+func removeAbsorbedPushInstrs(block *ir.BasicBlock, absorbedAddrs map[disasm.Address]bool) {
+	kept := block.Instructions[:0]
+	for _, instr := range block.Instructions {
+		loc := instr.Location()
+		addr := disasm.Address(loc.Address)
+		if !absorbedAddrs[addr] {
+			kept = append(kept, instr)
+			continue
+		}
+		// only remove Store and Assign emitted for the push; preserve everything else
+		// at this address (e.g., a call instruction itself shares no address with push)
+		switch instr.(type) {
+		case ir.Store, *ir.Store, ir.Assign, *ir.Assign:
+			// drop: this is the push artifact
+		default:
+			kept = append(kept, instr)
+		}
+	}
+	block.Instructions = kept
 }

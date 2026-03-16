@@ -745,8 +745,15 @@ func countVarUsesInInstr(instr ir.IRInstruction, useCount map[string]int) {
 		if i.Target != nil {
 			countVarUsesInExpr(i.Target, useCount)
 		}
-		for _, arg := range i.Args {
-			useCount[arg.Name]++
+		// if ArgExprs already populated (previous inline pass), count those instead
+		if len(i.ArgExprs) == len(i.Args) && len(i.ArgExprs) > 0 {
+			for _, e := range i.ArgExprs {
+				countVarUsesInExpr(e, useCount)
+			}
+		} else {
+			for _, arg := range i.Args {
+				useCount[arg.Name]++
+			}
 		}
 	case ir.Return:
 		if i.Value != nil {
@@ -862,9 +869,30 @@ func substituteInInstr(instr ir.IRInstruction, subst map[string]ir.Expression) i
 	case ir.Branch:
 		return ir.Branch{Condition: substituteInExpr(i.Condition, subst), TrueTarget: i.TrueTarget, FalseTarget: i.FalseTarget}
 	case ir.Call:
+		// build ArgExprs: for each argument, substitute if it's in subst,
+		// otherwise wrap the original variable in a VariableExpr.
+		// this populates ArgExprs so codegen can render inlined expressions
+		// without changing the ssa variable representation in Args.
+		newArgExprs := make([]ir.Expression, len(i.Args))
+		anyInlined := false
+		for j, arg := range i.Args {
+			if replacement, ok := subst[arg.Name]; ok {
+				newArgExprs[j] = replacement
+				anyInlined = true
+			} else if len(i.ArgExprs) == len(i.Args) {
+				// preserve existing ArgExprs for args not being substituted
+				newArgExprs[j] = substituteInExpr(i.ArgExprs[j], subst)
+			} else {
+				newArgExprs[j] = ir.VariableExpr{Var: arg}
+			}
+		}
+		// only set ArgExprs when at least one arg was inlined or ArgExprs already existed
+		if !anyInlined && len(i.ArgExprs) == 0 {
+			newArgExprs = nil
+		}
 		newArgs := make([]ir.Variable, len(i.Args))
 		copy(newArgs, i.Args)
-		return ir.Call{Dest: i.Dest, Target: substituteInExpr(i.Target, subst), Args: newArgs}
+		return ir.Call{Dest: i.Dest, Target: substituteInExpr(i.Target, subst), Args: newArgs, ArgExprs: newArgExprs}
 	default:
 		return instr
 	}
@@ -913,6 +941,11 @@ func substituteInExpr(expr ir.Expression, subst map[string]ir.Expression) ir.Exp
 // structuring engine emitted twice because the CFG had a shared successor
 // that was duplicated into both branches.
 //
+// additionally handles the asymmetric case produced by the structuring engine
+// when the convergence block is only included in one branch:
+//
+//	Block { if(c) { S1 } else { S2; T }; T }  →  Block { if(c) { S1 } else { S2 }; T }
+//
 // the transformation is applied recursively bottom-up so that nested
 // if-else constructs are also simplified.
 func mergeTails(stmt Statement) Statement {
@@ -927,6 +960,13 @@ func mergeTails(stmt Statement) Statement {
 		for i, child := range s.Stmts {
 			stmts[i] = mergeTails(child)
 		}
+
+		// asymmetric tail merging: scan for the pattern
+		//   stmts[i] = IfStatement{Then: S1, Else: Block{...; T}}
+		//   stmts[i+1..] = T (identical suffix)
+		// and hoist T out of the else branch.
+		stmts = mergeAsymmetricTails(stmts)
+
 		return Block{Stmts: stmts}
 
 	case IfStatement:
@@ -937,7 +977,7 @@ func mergeTails(stmt Statement) Statement {
 			els = mergeTails(s.Else)
 		}
 
-		// only attempt tail merging when both branches exist
+		// only attempt symmetric tail merging when both branches exist
 		if els == nil {
 			return IfStatement{Condition: s.Condition, Then: then, Else: els}
 		}
@@ -1006,6 +1046,101 @@ func mergeTails(stmt Statement) Statement {
 	default:
 		return stmt
 	}
+}
+
+// mergeAsymmetricTails handles the case where the structuring engine duplicated
+// the convergence block into only one branch of an if-else. the pattern is:
+//
+//	stmts[i]   = IfStatement { Then: S1, Else: Block{S2; T1; T2; ...} }
+//	stmts[i+1] = T1
+//	stmts[i+2] = T2
+//	...
+//
+// or the mirror (tail in Then branch, not Else). it finds the longest suffix
+// of the else (or then) branch that matches the subsequent statements in the
+// parent block, and hoists that suffix out.
+func mergeAsymmetricTails(stmts []Statement) []Statement {
+	result := make([]Statement, 0, len(stmts))
+	i := 0
+	for i < len(stmts) {
+		ifStmt, ok := stmts[i].(IfStatement)
+		if !ok || ifStmt.Else == nil || i+1 >= len(stmts) {
+			result = append(result, stmts[i])
+			i++
+			continue
+		}
+
+		// remaining statements after this if in the parent block
+		following := stmts[i+1:]
+
+		// try to hoist from else branch
+		if _, newElse, count := hoistMatchingSuffix(ifStmt.Else, following); count > 0 {
+			newIf := IfStatement{
+				Condition: ifStmt.Condition,
+				Then:      ifStmt.Then,
+				Else:      newElse,
+			}
+			result = append(result, newIf)
+			// skip the hoisted statements in the parent (they stay after the if)
+			i += 1 + count
+			// append the remaining following statements that were not hoisted
+			result = append(result, stmts[i:]...)
+			return result
+		}
+
+		// try to hoist from then branch
+		if _, newThen, count := hoistMatchingSuffix(ifStmt.Then, following); count > 0 {
+			newIf := IfStatement{
+				Condition: ifStmt.Condition,
+				Then:      newThen,
+				Else:      ifStmt.Else,
+			}
+			result = append(result, newIf)
+			i += 1 + count
+			result = append(result, stmts[i:]...)
+			return result
+		}
+
+		result = append(result, stmts[i])
+		i++
+	}
+	return result
+}
+
+// hoistMatchingSuffix checks whether the trailing statements of branchStmt
+// match a prefix of following. returns the number of matched statements,
+// the trimmed branch (with the matched suffix removed), and the count.
+// returns count=0 if no match.
+func hoistMatchingSuffix(branchStmt Statement, following []Statement) ([]Statement, Statement, int) {
+	branchStmts := flattenBlock(branchStmt)
+	if len(branchStmts) == 0 || len(following) == 0 {
+		return nil, branchStmt, 0
+	}
+
+	// count how many trailing statements of branchStmts match the prefix of following
+	maxMatch := len(following)
+	if len(branchStmts) < maxMatch {
+		maxMatch = len(branchStmts)
+	}
+
+	matched := 0
+	for matched < maxMatch {
+		bIdx := len(branchStmts) - maxMatch + matched
+		fIdx := matched
+		if !statementsEqual(branchStmts[bIdx], following[fIdx]) {
+			break
+		}
+		matched++
+	}
+
+	if matched == 0 {
+		return nil, branchStmt, 0
+	}
+
+	// trim the matched suffix from the branch
+	trimmed := branchStmts[:len(branchStmts)-matched]
+	hoisted := branchStmts[len(branchStmts)-matched:]
+	return hoisted, blockOrSingle(trimmed), matched
 }
 
 // flattenBlock returns the statement list of a Block, or a single-element

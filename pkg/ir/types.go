@@ -680,9 +680,13 @@ func (j Jump) String() string {
 // Call represents a function call
 type Call struct {
 	baseInstruction
-	Dest   *Variable // nil for void return
-	Target Expression
-	Args   []Variable
+	Dest     *Variable // nil for void return
+	Target   Expression
+	Args     []Variable   // original variable-level arguments (from abi pass)
+	ArgExprs []Expression // inlined argument expressions (populated by expression condensation pass).
+	// when ArgExprs is non-nil and len(ArgExprs) == len(Args), codegen uses
+	// ArgExprs for rendering instead of Args, enabling single-use temp inlining
+	// across the call boundary without changing the ssa variable representation.
 }
 
 func (Call) isIRInstruction() {}

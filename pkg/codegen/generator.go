@@ -328,9 +328,18 @@ func (s *generatorState) genIRInstruction(instr ir.IRInstruction) string {
 		return fmt.Sprintf("*(%s*)(%s) = %s;", cIntTypeForSize(n.Size), addr, val)
 	}
 	if n, ok := ir.AsCall(instr); ok {
-		args := make([]string, 0, len(n.Args))
-		for _, a := range n.Args {
-			args = append(args, a.String())
+		var args []string
+		// prefer inlined argument expressions when the condensation pass populated them
+		if len(n.ArgExprs) == len(n.Args) && len(n.ArgExprs) > 0 {
+			args = make([]string, 0, len(n.ArgExprs))
+			for _, e := range n.ArgExprs {
+				args = append(args, s.genExpression(e))
+			}
+		} else {
+			args = make([]string, 0, len(n.Args))
+			for _, a := range n.Args {
+				args = append(args, a.String())
+			}
 		}
 		callExpr := fmt.Sprintf("%s(%s)", s.genExpression(n.Target), strings.Join(args, ", "))
 		if n.Dest != nil {
