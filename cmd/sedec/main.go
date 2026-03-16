@@ -55,6 +55,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runCFG(subArgs, stdin, stdout, stderr)
 	case "ir":
 		return runIR(subArgs, stdin, stdout, stderr)
+	case "signatures":
+		return runSignatures(subArgs, stdin, stdout, stderr)
 	default:
 		//nolint:errcheck // error message output is informational, subcommand is from args
 		fmt.Fprintf(stderr, "unknown command: %s\n\n", subcommand)
@@ -75,9 +77,10 @@ usage:
   sedec --help
 
 commands:
-  disasm    disassemble binary to assembly output
-  cfg       export control flow graph in dot format
-  ir        lift binary to intermediate representation
+  disasm      disassemble binary to assembly output
+  cfg         export control flow graph in dot format
+  ir          lift binary to intermediate representation
+  signatures  manage and inspect signature databases
 
 global options:
   --version    print version information
@@ -108,6 +111,15 @@ examples:
 
   # lift to ssa form
   sedec ir --ssa /bin/ls
+
+  # list signatures in a database
+  sedec signatures list libc.json
+
+  # import FLIRT signatures
+  sedec signatures import --import-flirt libc.pat --output libc.json
+
+  # validate signature database
+  sedec signatures validate libc.json
 
 run 'sedec <command> --help' for command-specific options.
 `, version)
