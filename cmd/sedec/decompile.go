@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
+	"github.com/zarazaex69/sedec/pkg/analysis"
 	binfmt "github.com/zarazaex69/sedec/pkg/binary"
 	"github.com/zarazaex69/sedec/pkg/cfg"
 	"github.com/zarazaex69/sedec/pkg/codegen"
@@ -202,6 +204,9 @@ func decompileFunction(
 		return fmt.Errorf("failed to disassemble function %s: %w", target.name, err)
 	}
 
+	// trim instructions to function boundary: stop after the first ret/retn
+	instructions = trimToFunctionBoundary(instructions)
+
 	cCode, err := decompileInstructions(target.name, instructions)
 	if err != nil {
 		return fmt.Errorf("failed to decompile function %s: %w", target.name, err)
@@ -276,8 +281,25 @@ func decompileInstructions(functionName string, instructions []*disasm.Instructi
 		return "", fmt.Errorf("loop detection failed: %w", err)
 	}
 
-	// reconstruct cfg graph from ir function block topology for structuring engine
+	// reconstruct cfg graph from ir function block topology for analysis and structuring
 	cfgGraph := buildCFGFromIRFunction(irFunc)
+
+	// recompute dominator tree for the reconstructed cfg (block ids are preserved)
+	irDomTree, err := cfg.ComputeDominatorsForCFG(cfgGraph)
+	if err != nil {
+		// fall back to original dominator tree if recomputation fails
+		irDomTree = domTree
+	}
+
+	// run constant folding: simplifies xor reg,reg → 0, and other constant expressions
+	if _, cfErr := analysis.FoldConstants(irFunc); cfErr != nil {
+		_ = cfErr
+	}
+
+	// run dead code elimination: removes dead assignments (xor reg,reg after folding, etc.)
+	if _, dceErr := analysis.EliminateDeadCode(irFunc, cfgGraph, irDomTree); dceErr != nil {
+		_ = dceErr
+	}
 
 	// build ir block map: cfg.BlockID → []ir.IRInstruction
 	irBlockMap := buildIRBlockMap(irFunc)
@@ -331,4 +353,17 @@ func buildIRBlockMap(fn *ir.Function) structuring.IRBlockMap {
 		m[cfg.BlockID(blockID)] = irBlock.Instructions
 	}
 	return m
+}
+
+// trimToFunctionBoundary limits instructions to a single function by stopping
+// after the last ret/retn that is reachable without crossing another function entry.
+// this prevents the lifter from processing instructions from subsequent functions.
+func trimToFunctionBoundary(instructions []*disasm.Instruction) []*disasm.Instruction {
+	for i, instr := range instructions {
+		m := strings.ToLower(instr.Mnemonic)
+		if m == "ret" || m == "retn" {
+			return instructions[:i+1]
+		}
+	}
+	return instructions
 }

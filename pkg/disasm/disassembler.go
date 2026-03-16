@@ -180,12 +180,11 @@ func (d *Disassembler) extractOperands(insn *capstone.Instruction) []Operand {
 
 		switch op.Type {
 		case capstone.OpReg:
-			// register operand
+			// use op.Size from capstone directly — it contains the operand size in bytes
 			regName := d.getRegisterName(op.Reg)
-			regSize := d.getRegisterSize(op.Reg)
 			operands = append(operands, RegisterOperand{
 				Name: regName,
-				Size: regSize,
+				Size: Size(op.Size),
 			})
 
 		case capstone.OpImm:
@@ -198,12 +197,31 @@ func (d *Disassembler) extractOperands(insn *capstone.Instruction) []Operand {
 		case capstone.OpMem:
 			// memory operand
 			mem := op.Mem
+			baseName := d.getRegisterName(mem.Base)
+			disp := mem.Disp
+
+			// rip-relative: resolve to absolute va = insn_end + disp
+			// capstone gives raw displacement, not the resolved address
+			if baseName == "rip" {
+				//nolint:gosec // address arithmetic is safe for valid binary addresses
+				absAddr := int64(insn.Address) + int64(insn.Size) + disp
+				operands = append(operands, MemoryOperand{
+					Segment: d.getRegisterName(mem.Segment),
+					Base:    "",
+					Index:   "",
+					Scale:   0,
+					Disp:    absAddr,
+					Size:    Size(op.Size),
+				})
+				continue
+			}
+
 			operands = append(operands, MemoryOperand{
 				Segment: d.getRegisterName(mem.Segment),
-				Base:    d.getRegisterName(mem.Base),
+				Base:    baseName,
 				Index:   d.getRegisterName(mem.Index),
 				Scale:   int(mem.Scale),
-				Disp:    mem.Disp,
+				Disp:    disp,
 				Size:    Size(op.Size),
 			})
 		}

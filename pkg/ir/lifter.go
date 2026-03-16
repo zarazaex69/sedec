@@ -1528,7 +1528,7 @@ func (l *Lifter) liftJcc(insn *disasm.Instruction) ([]IRInstruction, error) {
 
 	// determine condition based on mnemonic
 	mnemonic := strings.ToLower(insn.Mnemonic)
-	condition := l.getConditionFromMnemonic(mnemonic)
+	condition := l.materializeCondition(mnemonic)
 
 	// emit conditional branch
 	// fall-through target will be next instruction (resolved by cfg builder)
@@ -1540,6 +1540,94 @@ func (l *Lifter) liftJcc(insn *disasm.Instruction) ([]IRInstruction, error) {
 	})
 
 	return l.currentBlock, nil
+}
+
+// materializeCondition builds the branch condition expression for a conditional jump.
+// if currentLazyFlags is set (i.e. the preceding instruction set flags), the required
+// flags are materialized from the lazy structure instead of emitting raw flag variables.
+// this eliminates zf/sf/cf variables from the output for the common case where a
+// flag-setting instruction (cmp, test, add, sub, ...) immediately precedes the jump.
+func (l *Lifter) materializeCondition(mnemonic string) Expression {
+	if l.currentLazyFlags == nil {
+		// no lazy flags available — fall back to raw flag variables
+		return l.getConditionFromMnemonic(mnemonic)
+	}
+
+	lf := l.currentLazyFlags
+
+	// helper: materialize a single flag, returning a boolean expression
+	mat := func(flag CPUFlag) Expression {
+		return lf.MaterializeFlag(flag)
+	}
+
+	switch mnemonic {
+	case mnemonicJe, mnemonicJz:
+		return mat(FlagZF)
+
+	case mnemonicJne, mnemonicJnz:
+		return UnaryOp{Op: UnOpLogicalNot, Operand: mat(FlagZF)}
+
+	case mnemonicJl, mnemonicJnge:
+		// sf != of
+		return BinaryOp{Op: BinOpNe, Left: mat(FlagSF), Right: mat(FlagOF)}
+
+	case mnemonicJle, mnemonicJng:
+		// zf || (sf != of)
+		return BinaryOp{
+			Op:    BinOpLogicalOr,
+			Left:  mat(FlagZF),
+			Right: BinaryOp{Op: BinOpNe, Left: mat(FlagSF), Right: mat(FlagOF)},
+		}
+
+	case mnemonicJg, mnemonicJnle:
+		// !zf && (sf == of)
+		return BinaryOp{
+			Op:    BinOpLogicalAnd,
+			Left:  UnaryOp{Op: UnOpLogicalNot, Operand: mat(FlagZF)},
+			Right: BinaryOp{Op: BinOpEq, Left: mat(FlagSF), Right: mat(FlagOF)},
+		}
+
+	case mnemonicJge, mnemonicJnl:
+		// sf == of
+		return BinaryOp{Op: BinOpEq, Left: mat(FlagSF), Right: mat(FlagOF)}
+
+	case mnemonicJb, mnemonicJnae, mnemonicJc:
+		return mat(FlagCF)
+
+	case mnemonicJbe, mnemonicJna:
+		return BinaryOp{Op: BinOpLogicalOr, Left: mat(FlagCF), Right: mat(FlagZF)}
+
+	case mnemonicJa, mnemonicJnbe:
+		return BinaryOp{
+			Op:    BinOpLogicalAnd,
+			Left:  UnaryOp{Op: UnOpLogicalNot, Operand: mat(FlagCF)},
+			Right: UnaryOp{Op: UnOpLogicalNot, Operand: mat(FlagZF)},
+		}
+
+	case mnemonicJae, mnemonicJnb, mnemonicJnc:
+		return UnaryOp{Op: UnOpLogicalNot, Operand: mat(FlagCF)}
+
+	case mnemonicJs:
+		return mat(FlagSF)
+
+	case mnemonicJns:
+		return UnaryOp{Op: UnOpLogicalNot, Operand: mat(FlagSF)}
+
+	case mnemonicJo:
+		return mat(FlagOF)
+
+	case mnemonicJno:
+		return UnaryOp{Op: UnOpLogicalNot, Operand: mat(FlagOF)}
+
+	case mnemonicJp, mnemonicJpe:
+		return mat(FlagPF)
+
+	case mnemonicJnp, mnemonicJpo:
+		return UnaryOp{Op: UnOpLogicalNot, Operand: mat(FlagPF)}
+
+	default:
+		return l.getConditionFromMnemonic(mnemonic)
+	}
 }
 
 // getConditionFromMnemonic extracts condition expression from jump mnemonic.

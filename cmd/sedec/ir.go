@@ -326,26 +326,33 @@ func liftAllSections(binaryInfo *binfmt.BinaryInfo, disassembler *disasm.Disasse
 
 // liftInstructionsToIR lifts disassembled instructions to ir representation
 func liftInstructionsToIR(functionName string, instructions []*disasm.Instruction) (*ir.Function, *cfg.Builder, error) {
-	// create ir lifter
-	lifter := ir.NewLifter()
-
-	// lift each instruction to ir
-	var allIRInstructions []ir.IRInstruction
-	for _, instr := range instructions {
-		irInstrs, err := lifter.LiftInstruction(instr)
-		if err != nil {
-			// skip unsupported instructions with warning
-			// in production, this would be logged
-			continue
-		}
-		allIRInstructions = append(allIRInstructions, irInstrs...)
-	}
-
-	// build cfg from instructions
+	// build cfg first to determine which instructions belong to this function
 	cfgBuilder := cfg.NewCFGBuilder()
 	cfgGraph, err := cfgBuilder.Build(instructions)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to build cfg: %w", err)
+	}
+
+	// collect address ranges of all cfg blocks to filter instructions
+	cfgAddrs := make(map[disasm.Address]struct{})
+	for _, block := range cfgGraph.Blocks {
+		for _, instr := range block.Instructions {
+			cfgAddrs[instr.Address] = struct{}{}
+		}
+	}
+
+	// lift only instructions that belong to cfg blocks
+	lifter := ir.NewLifter()
+	var allIRInstructions []ir.IRInstruction
+	for _, instr := range instructions {
+		if _, inCFG := cfgAddrs[instr.Address]; !inCFG {
+			continue
+		}
+		irInstrs, liftErr := lifter.LiftInstruction(instr)
+		if liftErr != nil {
+			continue
+		}
+		allIRInstructions = append(allIRInstructions, irInstrs...)
 	}
 
 	// create ir function structure
@@ -399,6 +406,9 @@ func liftInstructionsToIR(functionName string, instructions []*disasm.Instructio
 	// but structuring engine expects the sequential cfg.BlockID assigned by the builder.
 	resolveIRBranchTargets(function, cfgBuilder)
 
+	// collect all variables defined in the function for declaration generation
+	function.Variables = collectFunctionVariables(function)
+
 	return function, cfgBuilder, nil
 }
 
@@ -423,6 +433,81 @@ func resolveIRBranchTargets(fn *ir.Function, builder *cfg.Builder) {
 			irBlock.Instructions[i] = &b
 		}
 	}
+}
+
+// collectFunctionVariables scans all IR instructions and returns a deduplicated
+// list of temporary variables defined within the function.
+// register names (rax, rsp, etc.) are excluded — they are implicit globals in the output.
+func collectFunctionVariables(fn *ir.Function) []ir.Variable {
+	seen := make(map[string]ir.Variable)
+
+	addVar := func(v ir.Variable) {
+		name := v.String()
+		// skip x86 register names — they are not declared as local variables
+		if isX86Register(name) {
+			return
+		}
+		if _, exists := seen[name]; !exists {
+			seen[name] = v
+		}
+	}
+
+	for _, block := range fn.Blocks {
+		for _, instr := range block.Instructions {
+			if a, ok := ir.AsAssign(instr); ok {
+				addVar(a.Dest)
+			}
+			if l, ok := ir.AsLoad(instr); ok {
+				addVar(l.Dest)
+			}
+			if c, ok := ir.AsCall(instr); ok && c.Dest != nil {
+				addVar(*c.Dest)
+			}
+			if p, ok := ir.AsPhi(instr); ok {
+				addVar(p.Dest)
+			}
+		}
+	}
+
+	vars := make([]ir.Variable, 0, len(seen))
+	for _, v := range seen {
+		vars = append(vars, v)
+	}
+	return vars
+}
+
+// x86RegisterNames is the set of x86_64 register names that should not be declared as locals.
+var x86RegisterNames = func() map[string]struct{} {
+	names := []string{
+		// 64-bit
+		"rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp",
+		"r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "rip",
+		// 32-bit
+		"eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp",
+		"r8d", "r9d", "r10d", "r11d", "r12d", "r13d", "r14d", "r15d",
+		// 16-bit
+		"ax", "bx", "cx", "dx", "si", "di", "bp", "sp",
+		"r8w", "r9w", "r10w", "r11w", "r12w", "r13w", "r14w", "r15w",
+		// 8-bit
+		"al", "ah", "bl", "bh", "cl", "ch", "dl", "dh",
+		"sil", "dil", "bpl", "spl",
+		"r8b", "r9b", "r10b", "r11b", "r12b", "r13b", "r14b", "r15b",
+		// flags
+		"zf", "sf", "of", "cf", "pf", "af",
+		// x87 / mmx / xmm
+		"st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7",
+	}
+	m := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		m[n] = struct{}{}
+	}
+	return m
+}()
+
+// isX86Register reports whether name is a known x86_64 register or flag name.
+func isX86Register(name string) bool {
+	_, ok := x86RegisterNames[name]
+	return ok
 }
 
 // transformToSSA transforms ir function to ssa form

@@ -107,32 +107,37 @@ func (b *Builder) ComputeDominators() (*DominatorTree, error) {
 	if b.cfg == nil {
 		return nil, errCFGNotBuilt
 	}
+	return ComputeDominatorsForCFG(b.cfg)
+}
 
-	if len(b.cfg.Blocks) == 0 {
+// ComputeDominatorsForCFG computes the dominator tree for any cfg using lengauer-tarjan algorithm.
+// this allows computing dominators without a Builder, e.g. for reconstructed cfgs.
+func ComputeDominatorsForCFG(cfgGraph *CFG) (*DominatorTree, error) {
+	if cfgGraph == nil {
+		return nil, errCFGNotBuilt
+	}
+
+	if len(cfgGraph.Blocks) == 0 {
 		return nil, errCFGHasNoBlocks
 	}
 
 	// create dominator tree structure
-	dt := NewDominatorTree(b.cfg)
+	dt := NewDominatorTree(cfgGraph)
 
 	// convert cfg to gonum directed graph
 	g := simple.NewDirectedGraph()
 
 	// add all nodes
-	for id := range b.cfg.Blocks {
-		// blockid is controlled, overflow impossible in practice
+	for id := range cfgGraph.Blocks {
 		//nolint:gosec // G115: safe conversion - blockid range is limited by cfg size
 		g.AddNode(simple.Node(int64(id)))
 	}
 
 	// add all edges (skip self-loops as gonum doesn't support them)
-	for _, edge := range b.cfg.Edges {
-		// skip self-loops (gonum simple graph doesn't allow self-edges)
+	for _, edge := range cfgGraph.Edges {
 		if edge.From == edge.To {
 			continue
 		}
-
-		// blockid is controlled, overflow impossible in practice
 		//nolint:gosec // G115: safe conversion - blockid range is limited by cfg size
 		g.SetEdge(simple.Edge{
 			F: simple.Node(int64(edge.From)),
@@ -141,17 +146,16 @@ func (b *Builder) ComputeDominators() (*DominatorTree, error) {
 	}
 
 	// perform dfs numbering to build spanning tree
-	dt.performDFSNumbering(b.cfg.Entry)
+	dt.performDFSNumbering(cfgGraph.Entry)
 
 	// compute dominators using gonum's lengauer-tarjan implementation
 	//nolint:gosec // G115: safe conversion - blockid range is limited by cfg size
-	entryNode := simple.Node(int64(b.cfg.Entry))
+	entryNode := simple.Node(int64(cfgGraph.Entry))
 	dominatorTree := flow.Dominators(entryNode, g)
 
 	// extract immediate dominators from gonum result
-	for id := range b.cfg.Blocks {
-		if id == b.cfg.Entry {
-			// entry block's immediate dominator is itself
+	for id := range cfgGraph.Blocks {
+		if id == cfgGraph.Entry {
 			dt.Idom[id] = id
 			continue
 		}
@@ -161,11 +165,9 @@ func (b *Builder) ComputeDominators() (*DominatorTree, error) {
 		idomNode := dominatorTree.DominatorOf(node.ID())
 
 		if idomNode == nil {
-			// unreachable block - no dominator
 			continue
 		}
 
-		// node id from gonum graph, controlled value
 		//nolint:gosec // G115: safe conversion - node id comes from our controlled graph
 		idomID := BlockID(idomNode.ID())
 		dt.Idom[id] = idomID

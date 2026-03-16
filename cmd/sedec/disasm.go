@@ -226,8 +226,26 @@ func resolveFunctionTarget(binaryInfo *binfmt.BinaryInfo, functionSpec string) (
 		return target, nil
 	}
 
-	// if not found by name, try parsing as hex address
-	return parseFunctionAddress(functionSpec)
+	// parse as hex address, then check against known binary metadata
+	target, err := parseFunctionAddress(functionSpec)
+	if err != nil {
+		return nil, err
+	}
+
+	// check symbol table for a name at this address
+	if binaryInfo != nil && binaryInfo.GroundTruthDB != nil {
+		if name, ok := binaryInfo.GroundTruthDB.SymbolsByAddress[binfmt.Address(target.address)]; ok && name != "" {
+			target.name = name
+			return target, nil
+		}
+	}
+
+	// check if this is the binary entry point — name it _start (elf convention)
+	if binaryInfo != nil && binfmt.Address(target.address) == binaryInfo.EntryPoint {
+		target.name = "_start"
+	}
+
+	return target, nil
 }
 
 // findFunctionByName searches for function in symbol table

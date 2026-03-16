@@ -195,14 +195,18 @@ func (s *generatorState) genIf(n structuring.IfStatement, depth int) string {
 	sb.WriteString(indent(depth))
 	sb.WriteString("}")
 	if n.Else != nil {
-		sb.WriteString("\n")
-		sb.WriteString(indent(depth))
-		sb.WriteString("else\n")
-		sb.WriteString(indent(depth))
-		sb.WriteString("{\n")
-		sb.WriteString(s.genStatement(n.Else, depth+1))
-		sb.WriteString(indent(depth))
-		sb.WriteString("}")
+		// suppress empty else branches
+		elseBody := s.genStatement(n.Else, depth+1)
+		if strings.TrimSpace(elseBody) != "" {
+			sb.WriteString("\n")
+			sb.WriteString(indent(depth))
+			sb.WriteString("else\n")
+			sb.WriteString(indent(depth))
+			sb.WriteString("{\n")
+			sb.WriteString(elseBody)
+			sb.WriteString(indent(depth))
+			sb.WriteString("}")
+		}
 	}
 	sb.WriteString("\n")
 	return sb.String()
@@ -356,11 +360,20 @@ func (s *generatorState) genExpression(expr ir.Expression) string {
 	switch e := expr.(type) {
 	case ir.VariableExpr:
 		return e.Var.String()
+	case *ir.VariableExpr:
+		return e.Var.String()
 
 	case ir.ConstantExpr:
 		return genConstant(e.Value)
+	case *ir.ConstantExpr:
+		return genConstant(e.Value)
 
 	case ir.BinaryOp:
+		left := s.genExpression(e.Left)
+		right := s.genExpression(e.Right)
+		op := cBinaryOp(e.Op)
+		return fmt.Sprintf("(%s %s %s)", left, op, right)
+	case *ir.BinaryOp:
 		left := s.genExpression(e.Left)
 		right := s.genExpression(e.Right)
 		op := cBinaryOp(e.Op)
@@ -370,8 +383,15 @@ func (s *generatorState) genExpression(expr ir.Expression) string {
 		operand := s.genExpression(e.Operand)
 		op := cUnaryOp(e.Op)
 		return fmt.Sprintf("(%s%s)", op, operand)
+	case *ir.UnaryOp:
+		operand := s.genExpression(e.Operand)
+		op := cUnaryOp(e.Op)
+		return fmt.Sprintf("(%s%s)", op, operand)
 
 	case ir.Cast:
+		inner := s.genExpression(e.Expr)
+		return fmt.Sprintf("(%s)(%s)", cTypeName(e.TargetType), inner)
+	case *ir.Cast:
 		inner := s.genExpression(e.Expr)
 		return fmt.Sprintf("(%s)(%s)", cTypeName(e.TargetType), inner)
 
