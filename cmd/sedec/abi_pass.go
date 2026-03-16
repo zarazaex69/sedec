@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/zarazaex69/sedec/pkg/abi"
@@ -78,10 +79,32 @@ func applyABIPass(irFunc *ir.Function, rawInsns []*disasm.Instruction) {
 			block.Instructions[i] = &callNode
 		}
 	}
+
+	// patch ir.Return instructions: if the function has a non-void return type,
+	// set Return.Value to the return register variable so codegen emits
+	// "return rax;" instead of bare "return;".
+	if len(funcABI.ReturnValues) > 0 {
+		retReg := funcABI.ReturnValues[0].Register
+		retType := funcABI.ReturnValues[0].Type
+		retVar := ir.Variable{
+			Name: retReg,
+			Type: retType,
+		}
+		for _, block := range irFunc.Blocks {
+			for i, instr := range block.Instructions {
+				if r, ok := ir.AsReturn(instr); ok && r.Value == nil {
+					patched := r
+					patched.Value = &retVar
+					block.Instructions[i] = &patched
+				}
+			}
+		}
+	}
 }
 
 // collectCallArgs scans backwards from callAddr through rawInsns to find
-// the last write to each argument register before the call.
+// the last write to each argument register before the call, and also collects
+// stack-passed arguments from push instructions (system v: 7th+ arg).
 // returns a slice of ir.Variable in argument order (arg0, arg1, ...).
 // stops collecting when a register has not been written since function entry
 // or since the previous call (indicating it is not an argument for this call).
@@ -110,6 +133,12 @@ func collectCallArgs(
 	written := make(map[string]bool, len(argRegs))
 	argVars := make(map[string]ir.Variable, len(argRegs))
 
+	// collect push-based stack arguments in reverse order (last push = last arg).
+	// system v amd64: after the 6 register slots, additional args are pushed
+	// right-to-left, so the first push encountered scanning backwards is the
+	// last (highest-indexed) stack argument.
+	var stackArgs []ir.Variable
+
 	for i := callIdx - 1; i >= 0; i-- {
 		insn := rawInsns[i]
 		mnemonic := strings.ToLower(insn.Mnemonic)
@@ -120,6 +149,36 @@ func collectCallArgs(
 		}
 
 		if len(insn.Operands) == 0 {
+			continue
+		}
+
+		// handle push instructions: each push before the call is a stack argument.
+		// scanning backwards means we encounter them in reverse push order;
+		// we prepend to stackArgs to restore left-to-right argument order.
+		if mnemonic == "push" {
+			op := insn.Operands[0]
+			var argVar ir.Variable
+			switch typedOp := op.(type) {
+			case disasm.RegisterOperand:
+				argVar = ir.Variable{
+					Name: strings.ToLower(typedOp.Name),
+					Type: ir.IntType{Width: ir.Size8, Signed: false},
+				}
+			case disasm.ImmediateOperand:
+				// immediate pushed as stack arg: represent as a synthetic temp
+				argVar = ir.Variable{
+					Name: fmt.Sprintf("imm%d", typedOp.Value),
+					Type: ir.IntType{Width: ir.Size8, Signed: false},
+				}
+			default:
+				// memory operand or other: use a generic placeholder
+				argVar = ir.Variable{
+					Name: "stack_arg",
+					Type: ir.IntType{Width: ir.Size8, Signed: false},
+				}
+			}
+			// prepend: scanning backwards, so first push found = last arg pushed
+			stackArgs = append([]ir.Variable{argVar}, stackArgs...)
 			continue
 		}
 
@@ -159,17 +218,19 @@ func collectCallArgs(
 		}
 	}
 
-	// build ordered argument list: only include registers that were written
-	// and appear contiguously from arg0 (no gaps — stop at first missing slot)
-	result := make([]ir.Variable, 0, len(argRegs))
+	// build ordered argument list: register args first (contiguous from arg0),
+	// then stack args appended in push order.
+	result := make([]ir.Variable, 0, len(argRegs)+len(stackArgs))
 	for _, argReg := range argRegs {
 		v, ok := argVars[argReg]
 		if !ok {
-			// gap in argument registers: stop here
+			// gap in argument registers: stop register args here
 			break
 		}
 		result = append(result, v)
 	}
+	// append stack-passed arguments after register arguments
+	result = append(result, stackArgs...)
 
 	return result
 }

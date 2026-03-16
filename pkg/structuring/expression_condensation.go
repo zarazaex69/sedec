@@ -5,6 +5,8 @@
 package structuring
 
 import (
+	"fmt"
+
 	"github.com/zarazaex69/sedec/pkg/ir"
 )
 
@@ -20,6 +22,7 @@ import (
 //  2. de morgan simplification:    !(a||b) → !a&&!b, !(a&&b) → !a||!b
 //  3. early-return hoisting:       if(cond){return x;} rest → if(!cond) rest; return x;
 //  4. single-use temporary inlining: t=expr; use(t) → use(expr)
+//  5. tail merging: if(c){S;T} else{S';T} → if(c){S} else{S'} T  (identical tails)
 //
 // Requirements: 60.4, 60.5, 60.6, 60.7, 60.9
 func CondenseExpressions(ast *StructuredAST) *StructuredAST {
@@ -40,6 +43,9 @@ func CondenseExpressions(ast *StructuredAST) *StructuredAST {
 
 	// pass 4: inline single-use temporaries
 	body = inlineSingleUseTemps(body)
+
+	// pass 5: tail merging — hoist identical trailing statements out of if-else branches
+	body = mergeTails(body)
 
 	return &StructuredAST{
 		Body:       body,
@@ -484,13 +490,16 @@ func inlineSingleUseTemps(stmt Statement) Statement {
 					}
 					continue
 				}
-				// handle Load: inline only when it is the sole instruction in its
-				// IRBlock (cross-block pattern: one block = one load, next block uses it).
-				// inlining a Load that shares a block with other instructions would
-				// reorder memory reads relative to those instructions.
+				// handle Load: inline only when the address is a constant expression.
+				// a load from a constant address (e.g. *(uint64_t*)(163016)) is
+				// safe to inline at a single use site because the address is
+				// statically known and cannot alias any variable.
+				// a load from a variable address (e.g. *(uint64_t*)(addr)) must
+				// NOT be inlined — the address may change between the load and
+				// the use site, and inlining would reorder the memory read.
 				if load, ok := ir.AsLoad(instr); ok {
 					defCount[load.Dest.Name]++
-					if defCount[load.Dest.Name] == 1 && len(irb.Instructions) == 1 {
+					if defCount[load.Dest.Name] == 1 && isConstantAddress(load.Address) {
 						candidates[load.Dest.Name] = candidate{
 							expr:     buildLoadExpr(load),
 							blockIdx: i,
@@ -611,6 +620,34 @@ func inlineSingleUseTemps(stmt Statement) Statement {
 // used by inlineSingleUseTemps to represent an inlined memory dereference.
 func buildLoadExpr(load ir.Load) ir.Expression {
 	return ir.LoadExpr{Address: load.Address, Size: load.Size}
+}
+
+// isConstantAddress returns true when an address expression is fully constant
+// (contains no variable references). such loads are safe to inline at a single
+// use site because the address cannot alias any variable in the function.
+func isConstantAddress(expr ir.Expression) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.(type) {
+	case ir.ConstantExpr, *ir.ConstantExpr:
+		return true
+	case ir.BinaryOp:
+		return isConstantAddress(e.Left) && isConstantAddress(e.Right)
+	case *ir.BinaryOp:
+		return isConstantAddress(e.Left) && isConstantAddress(e.Right)
+	case ir.UnaryOp:
+		return isConstantAddress(e.Operand)
+	case *ir.UnaryOp:
+		return isConstantAddress(e.Operand)
+	case ir.Cast:
+		return isConstantAddress(e.Expr)
+	case *ir.Cast:
+		return isConstantAddress(e.Expr)
+	default:
+		// VariableExpr and anything else: not a constant address
+		return false
+	}
 }
 
 // isPureExpr returns true when the expression is safe to inline at a single
@@ -859,5 +896,215 @@ func substituteInExpr(expr ir.Expression, subst map[string]ir.Expression) ir.Exp
 		return ir.LoadExpr{Address: substituteInExpr(e.Address, subst), Size: e.Size}
 	default:
 		return expr
+	}
+}
+
+// ============================================================================
+// pass 5: tail merging
+// ============================================================================
+
+// mergeTails walks the AST and hoists identical trailing statements out of
+// if-then-else branches. the pattern:
+//
+//	if (c) { S1; T } else { S2; T }  →  if (c) { S1 } else { S2 } T
+//
+// where T is a structurally identical suffix shared by both branches.
+// this is the inverse of tail duplication: it collapses code that the
+// structuring engine emitted twice because the CFG had a shared successor
+// that was duplicated into both branches.
+//
+// the transformation is applied recursively bottom-up so that nested
+// if-else constructs are also simplified.
+func mergeTails(stmt Statement) Statement {
+	if stmt == nil {
+		return nil
+	}
+
+	switch s := stmt.(type) {
+	case Block:
+		// recurse into children first
+		stmts := make([]Statement, len(s.Stmts))
+		for i, child := range s.Stmts {
+			stmts[i] = mergeTails(child)
+		}
+		return Block{Stmts: stmts}
+
+	case IfStatement:
+		// recurse into branches first (bottom-up)
+		then := mergeTails(s.Then)
+		var els Statement
+		if s.Else != nil {
+			els = mergeTails(s.Else)
+		}
+
+		// only attempt tail merging when both branches exist
+		if els == nil {
+			return IfStatement{Condition: s.Condition, Then: then, Else: els}
+		}
+
+		// extract statement lists from both branches
+		thenStmts := flattenBlock(then)
+		elseStmts := flattenBlock(els)
+
+		if len(thenStmts) == 0 || len(elseStmts) == 0 {
+			return IfStatement{Condition: s.Condition, Then: then, Else: els}
+		}
+
+		// count how many trailing statements are identical in both branches
+		sharedCount := 0
+		for sharedCount < len(thenStmts) && sharedCount < len(elseStmts) {
+			tIdx := len(thenStmts) - 1 - sharedCount
+			eIdx := len(elseStmts) - 1 - sharedCount
+			if !statementsEqual(thenStmts[tIdx], elseStmts[eIdx]) {
+				break
+			}
+			sharedCount++
+		}
+
+		if sharedCount == 0 {
+			return IfStatement{Condition: s.Condition, Then: then, Else: els}
+		}
+
+		// build trimmed branches (without the shared tail)
+		thenTrimmed := thenStmts[:len(thenStmts)-sharedCount]
+		elseTrimmed := elseStmts[:len(elseStmts)-sharedCount]
+		sharedTail := thenStmts[len(thenStmts)-sharedCount:]
+
+		newIf := IfStatement{
+			Condition: s.Condition,
+			Then:      blockOrSingle(thenTrimmed),
+			Else:      blockOrSingle(elseTrimmed),
+		}
+
+		// build result: new if followed by the shared tail
+		result := make([]Statement, 0, 1+len(sharedTail))
+		result = append(result, newIf)
+		result = append(result, sharedTail...)
+		return Block{Stmts: result}
+
+	case WhileStatement:
+		return WhileStatement{Condition: s.Condition, Body: mergeTails(s.Body)}
+
+	case DoWhileStatement:
+		return DoWhileStatement{Body: mergeTails(s.Body), Condition: s.Condition}
+
+	case ForStatement:
+		var init, post Statement
+		if s.Init != nil {
+			init = mergeTails(s.Init)
+		}
+		if s.Post != nil {
+			post = mergeTails(s.Post)
+		}
+		return ForStatement{
+			Init:      init,
+			Condition: s.Condition,
+			Post:      post,
+			Body:      mergeTails(s.Body),
+		}
+
+	default:
+		return stmt
+	}
+}
+
+// flattenBlock returns the statement list of a Block, or a single-element
+// slice containing stmt if it is not a Block.
+func flattenBlock(stmt Statement) []Statement {
+	if stmt == nil {
+		return nil
+	}
+	if b, ok := stmt.(Block); ok {
+		return b.Stmts
+	}
+	return []Statement{stmt}
+}
+
+// blockOrSingle wraps a statement list into a Block, or returns the single
+// statement directly. returns an empty Block for an empty list.
+func blockOrSingle(stmts []Statement) Statement {
+	switch len(stmts) {
+	case 0:
+		return Block{Stmts: nil}
+	case 1:
+		return stmts[0]
+	default:
+		cp := make([]Statement, len(stmts))
+		copy(cp, stmts)
+		return Block{Stmts: cp}
+	}
+}
+
+// statementsEqual performs structural equality comparison between two statements.
+// it compares the string representation of IR instructions within IRBlock nodes
+// and recursively compares composite statements. this is sufficient for the
+// tail-merging use case where duplicated blocks originate from the same CFG node.
+func statementsEqual(a, b Statement) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+
+	switch sa := a.(type) {
+	case IRBlock:
+		sb, ok := b.(IRBlock)
+		if !ok {
+			return false
+		}
+		if len(sa.Instructions) != len(sb.Instructions) {
+			return false
+		}
+		for i := range sa.Instructions {
+			if sa.Instructions[i].String() != sb.Instructions[i].String() {
+				return false
+			}
+		}
+		return true
+
+	case ReturnStatement:
+		rb, ok := b.(ReturnStatement)
+		if !ok {
+			return false
+		}
+		aVal := ""
+		bVal := ""
+		if sa.Value != nil {
+			aVal = sa.Value.String()
+		}
+		if rb.Value != nil {
+			bVal = rb.Value.String()
+		}
+		return aVal == bVal
+
+	case Block:
+		sb, ok := b.(Block)
+		if !ok {
+			return false
+		}
+		if len(sa.Stmts) != len(sb.Stmts) {
+			return false
+		}
+		for i := range sa.Stmts {
+			if !statementsEqual(sa.Stmts[i], sb.Stmts[i]) {
+				return false
+			}
+		}
+		return true
+
+	case IfStatement:
+		sb, ok := b.(IfStatement)
+		if !ok {
+			return false
+		}
+		if sa.Condition.String() != sb.Condition.String() {
+			return false
+		}
+		return statementsEqual(sa.Then, sb.Then) && statementsEqual(sa.Else, sb.Else)
+
+	default:
+		// for other statement types, use string representation as a proxy
+		return fmt.Sprintf("%T", a) == fmt.Sprintf("%T", b)
 	}
 }
