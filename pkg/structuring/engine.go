@@ -602,7 +602,7 @@ func (e *Engine) extractBranchCondition(blockID cfg.BlockID) ir.Expression {
 
 	// the last instruction should be a Branch
 	last := instrs[len(instrs)-1]
-	if branch, ok := last.(ir.Branch); ok {
+	if branch, ok := ir.AsBranch(last); ok {
 		return branch.Condition
 	}
 
@@ -616,7 +616,7 @@ func (e *Engine) extractBranchTargets(blockID cfg.BlockID, succs []cfg.BlockID) 
 	instrs, ok := e.irBlocks[blockID]
 	if ok && len(instrs) > 0 {
 		last := instrs[len(instrs)-1]
-		if branch, ok := last.(ir.Branch); ok {
+		if branch, ok := ir.AsBranch(last); ok {
 			// ir.BlockID and cfg.BlockID are both uint64 - safe cast
 			//nolint:gosec // G115: controlled conversion between equivalent uint64 types
 			return cfg.BlockID(branch.TrueTarget), cfg.BlockID(branch.FalseTarget)
@@ -653,7 +653,7 @@ func (e *Engine) buildIRBlockWithoutTerminator(blockID cfg.BlockID) Statement {
 	// check if last instruction is a branch or jump terminator
 	last := instrs[len(instrs)-1]
 	switch last.(type) {
-	case ir.Branch, ir.Jump:
+	case ir.Branch, ir.Jump, *ir.Branch, *ir.Jump:
 		// omit the terminator: it is represented by the structural node
 		return IRBlock{
 			BlockID:      blockID,

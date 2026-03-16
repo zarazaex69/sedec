@@ -81,7 +81,7 @@ func (lc *loopClassifier) findInductionVariable(loop *cfg.Loop) *InductionVariab
 	preHeader, hasPreHeader := lc.findPreHeader(loop)
 
 	for _, instr := range instrs {
-		phi, ok := instr.(ir.Phi)
+		phi, ok := ir.AsPhi(instr)
 		if !ok {
 			continue
 		}
@@ -163,7 +163,7 @@ func (lc *loopClassifier) findStep(
 		}
 
 		for _, instr := range instrs {
-			assign, ok := instr.(ir.Assign)
+			assign, ok := ir.AsAssign(instr)
 			if !ok {
 				continue
 			}
@@ -264,7 +264,7 @@ func (lc *loopClassifier) extractBlockCondition(blockID cfg.BlockID) ir.Expressi
 	}
 
 	last := instrs[len(instrs)-1]
-	if branch, ok := last.(ir.Branch); ok {
+	if branch, ok := ir.AsBranch(last); ok {
 		return branch.Condition
 	}
 

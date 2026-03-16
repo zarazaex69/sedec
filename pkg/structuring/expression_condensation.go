@@ -468,7 +468,7 @@ func inlineSingleUseTemps(stmt Statement) Statement {
 				continue
 			}
 			for j, instr := range irb.Instructions {
-				assign, ok := instr.(ir.Assign)
+				assign, ok := ir.AsAssign(instr)
 				if !ok {
 					continue
 				}
@@ -520,7 +520,7 @@ func inlineSingleUseTemps(stmt Statement) Statement {
 			// rebuild IRBlock, dropping inlined assignments
 			newInstrs := make([]ir.IRInstruction, 0, len(irb.Instructions))
 			for _, instr := range irb.Instructions {
-				assign, isAssign := instr.(ir.Assign)
+				assign, isAssign := ir.AsAssign(instr)
 				if isAssign {
 					if _, shouldInline := subst[assign.Dest.Name]; shouldInline {
 						// drop this assignment; its value is inlined at the use site

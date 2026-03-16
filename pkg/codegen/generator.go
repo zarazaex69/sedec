@@ -300,21 +300,21 @@ func (s *generatorState) genReturn(n structuring.ReturnStatement, depth int) str
 
 // genIRInstruction converts a single ir instruction to a c statement string (no newline).
 // Returns empty string for instructions that should be suppressed (phi nodes, jumps).
+// Both value and pointer receivers are handled since the lifter emits pointer types.
 func (s *generatorState) genIRInstruction(instr ir.IRInstruction) string {
-	switch n := instr.(type) {
-	case ir.Assign:
+	if n, ok := ir.AsAssign(instr); ok {
 		return fmt.Sprintf("%s = %s;", n.Dest.String(), s.genExpression(n.Source))
-
-	case ir.Load:
+	}
+	if n, ok := ir.AsLoad(instr); ok {
 		addr := s.genExpression(n.Address)
 		return fmt.Sprintf("%s = *(%s*)(%s);", n.Dest.String(), cIntTypeForSize(n.Size), addr)
-
-	case ir.Store:
+	}
+	if n, ok := ir.AsStore(instr); ok {
 		addr := s.genExpression(n.Address)
 		val := s.genExpression(n.Value)
 		return fmt.Sprintf("*(%s*)(%s) = %s;", cIntTypeForSize(n.Size), addr, val)
-
-	case ir.Call:
+	}
+	if n, ok := ir.AsCall(instr); ok {
 		args := make([]string, 0, len(n.Args))
 		for _, a := range n.Args {
 			args = append(args, a.String())
@@ -324,25 +324,23 @@ func (s *generatorState) genIRInstruction(instr ir.IRInstruction) string {
 			return fmt.Sprintf("%s = %s;", n.Dest.String(), callExpr)
 		}
 		return callExpr + ";"
-
-	case ir.Return:
+	}
+	if n, ok := ir.AsReturn(instr); ok {
 		if n.Value != nil {
 			return fmt.Sprintf("return %s;", n.Value.String())
 		}
 		return "return;"
-
-	case ir.Phi:
+	}
+	if n, ok := ir.AsPhi(instr); ok {
 		// phi nodes are an ssa artifact; they should be eliminated before codegen.
 		// if they survive, emit a comment so the output remains valid c.
 		return fmt.Sprintf("/* phi: %s */", n.Dest.String())
-
-	case ir.Branch, ir.Jump:
+	}
+	if ir.IsTerminator(instr) {
 		// control flow is handled by the structured ast; suppress raw jumps
 		return ""
-
-	default:
-		return fmt.Sprintf("/* unhandled ir: %s */", instr.String())
 	}
+	return fmt.Sprintf("/* unhandled ir: %s */", instr.String())
 }
 
 // ============================================================================
