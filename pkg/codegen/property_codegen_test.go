@@ -20,6 +20,7 @@
 package codegen
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -294,6 +295,172 @@ func TestProperty4_BugCondition_RapidReturnWithDeadCode(t *testing.T) {
 					"full generated block:\n%s",
 				numBefore, numAfter, snippet, generated,
 			)
+		}
+	})
+}
+
+// ============================================================================
+// preservation 3: synthetic variable names emitted verbatim
+// ============================================================================
+
+// TestPreservation3_SyntheticVarNamesEmittedVerbatim verifies that ir.Function
+// instances with ONLY synthetic variable names (matching /^t\d+$/ or /^local_\d+$/)
+// have those names emitted verbatim in the generated c output.
+//
+// **Validates: Requirements 3.5, 3.6**
+//
+// this is the preservation guarantee for fix 3: the register-renaming pass must
+// not rename synthetic variables that do not match any hardware register name.
+// names like "t1", "t2", "local_8" must pass through unchanged.
+//
+// EXPECTED OUTCOME: PASS on both unfixed and fixed code.
+// synthetic names are not in the x86-64 register name set and are never renamed.
+func TestPreservation3_SyntheticVarNamesEmittedVerbatim(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		// generate 1–4 synthetic variable names matching /^t\d+$/ or /^local_\d+$/
+		numVars := rapid.IntRange(1, 4).Draw(rt, "numVars")
+
+		// choose name pattern: 0 = t\d+, 1 = local_\d+
+		useLocalPrefix := rapid.IntRange(0, 1).Draw(rt, "useLocalPrefix")
+
+		vars := make([]ir.Variable, numVars)
+		for i := range vars {
+			var name string
+			if useLocalPrefix == 1 {
+				name = fmt.Sprintf("local_%d", i*8)
+			} else {
+				name = fmt.Sprintf("t%d", i+1)
+			}
+			vars[i] = ir.Variable{
+				Name: name,
+				Type: ir.IntType{Width: ir.Size8, Signed: false},
+			}
+		}
+
+		// build a minimal ir.Function with one assign per variable
+		instrs := make([]ir.IRInstruction, numVars)
+		for i, v := range vars {
+			src := ir.ConstantExpr{
+				Value: ir.IntConstant{Value: int64(i), Width: ir.Size8},
+			}
+			instrs[i] = ir.Assign{Dest: v, Source: src}
+		}
+
+		block := &ir.BasicBlock{
+			ID:           0,
+			Instructions: instrs,
+		}
+
+		fn := &ir.Function{
+			Name: "test_synthetic",
+			Signature: ir.FunctionType{
+				ReturnType: ir.VoidType{},
+			},
+			Blocks:     map[ir.BlockID]*ir.BasicBlock{0: block},
+			EntryBlock: 0,
+			Variables:  vars,
+		}
+
+		ast := &structuring.StructuredAST{
+			Body: structuring.IRBlock{
+				BlockID:      0,
+				Instructions: instrs,
+			},
+			FunctionID: 0,
+		}
+
+		gen := New()
+		decl := gen.GenerateFunction(fn, ast)
+		cOutput := RenderDecl(decl)
+
+		// preservation property: each synthetic name must appear in the output
+		for _, v := range vars {
+			if !strings.Contains(cOutput, v.Name) {
+				rt.Errorf(
+					"preservation violated: synthetic variable %q not found in generated output\n"+
+						"generated output:\n%s",
+					v.Name, cOutput,
+				)
+			}
+		}
+	})
+}
+
+// ============================================================================
+// preservation 4: blocks without return emit all statements
+// ============================================================================
+
+// TestPreservation4_BlockWithoutReturnEmitsAllStatements verifies that
+// structuring.Block instances with NO ReturnStatement nodes have all their
+// statements emitted in the generated c output.
+//
+// **Validates: Requirements 3.7, 3.8**
+//
+// this is the preservation guarantee for fix 4: the dead-code truncation must
+// not suppress statements in blocks that contain no return.
+// a block with only assignments must emit all assignments verbatim.
+//
+// EXPECTED OUTCOME: PASS on both unfixed and fixed code.
+// blocks without return are never truncated by the dead-code suppression logic.
+func TestPreservation4_BlockWithoutReturnEmitsAllStatements(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		// generate 1–5 assign statements with no return
+		numStmts := rapid.IntRange(1, 5).Draw(rt, "numStmts")
+
+		varNames := []string{"v0", "v1", "v2", "v3", "v4"}
+		stmts := make([]structuring.Statement, numStmts)
+		sentinels := make([]string, numStmts)
+
+		for i := range numStmts {
+			destIdx := i % len(varNames)
+			srcIdx := (i + 1) % len(varNames)
+			dest := makeInt64Var(varNames[destIdx])
+			src := makeInt64Var(varNames[srcIdx])
+			// use a unique constant as sentinel to verify emission
+			sentinel := fmt.Sprintf("sentinel_%d", i)
+			sentinels[i] = sentinel
+
+			// build an irblock with a unique assign using a constant that encodes the sentinel
+			stmts[i] = structuring.IRBlock{
+				BlockID: cfg.BlockID(i),
+				Instructions: []ir.IRInstruction{
+					ir.Assign{
+						Dest: dest,
+						Source: ir.BinaryOp{
+							Op:    ir.BinOpAdd,
+							Left:  ir.VariableExpr{Var: src},
+							Right: ir.ConstantExpr{Value: ir.IntConstant{Value: int64(i * 1000), Width: ir.Size8}},
+						},
+					},
+				},
+			}
+		}
+
+		block := structuring.Block{Stmts: stmts}
+
+		fn := buildFunctionForBlock([]ir.Variable{
+			makeInt64Var("v0"),
+			makeInt64Var("v1"),
+			makeInt64Var("v2"),
+			makeInt64Var("v3"),
+			makeInt64Var("v4"),
+		})
+		ast := &structuring.StructuredAST{Body: block, FunctionID: 0}
+
+		state := newGeneratorState(fn, ast)
+		generated := state.genBlock(block, 0)
+
+		// preservation property: all constant values must appear in the output
+		// each assign uses a unique constant i*1000 that must be present
+		for i := range numStmts {
+			sentinel := fmt.Sprintf("%d", i*1000)
+			if !strings.Contains(generated, sentinel) {
+				rt.Errorf(
+					"preservation violated: statement %d (constant %s) not found in output\n"+
+						"numStmts=%d\ngenerated:\n%s",
+					i, sentinel, numStmts, generated,
+				)
+			}
 		}
 	})
 }

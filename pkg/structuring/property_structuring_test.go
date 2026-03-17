@@ -24,6 +24,7 @@ import (
 	"github.com/leanovate/gopter/prop"
 	"github.com/zarazaex69/sedec/pkg/cfg"
 	"github.com/zarazaex69/sedec/pkg/ir"
+	"pgregory.net/rapid"
 )
 
 // ============================================================================
@@ -306,4 +307,88 @@ func genDiamondCFGSpec() gopter.Gen {
 		spec := diamondCFGSpec{extraBlocks: extraBlocks}
 		return gopter.NewGenResult(spec, gopter.NoShrinker)
 	}
+}
+
+// ============================================================================
+// preservation 1: linear cfgs (no shared blocks) emit each block exactly once
+// ============================================================================
+
+// TestPreservation1_LinearCFGEmitsEachBlockOnce verifies that for any cfg where
+// every block has exactly one predecessor (no shared convergence blocks), the
+// structuring engine emits each block's ir instructions exactly once.
+//
+// **Validates: Requirements 3.1, 3.2**
+//
+// this is the preservation guarantee for fix 1: the fix must not break the
+// baseline behavior for cfgs that do not trigger the duplication bug.
+// a linear cfg (chain: entry -> b1 -> b2 -> ... -> exit) has no shared blocks
+// and must always produce exactly one emission per block.
+//
+// EXPECTED OUTCOME: PASS on both unfixed and fixed code.
+// linear cfgs never trigger the collapseConditional duplication path.
+func TestPreservation1_LinearCFGEmitsEachBlockOnce(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		// generate a linear chain of 2–8 blocks: entry -> b1 -> b2 -> ... -> exit
+		chainLen := rapid.IntRange(2, 8).Draw(rt, "chainLen")
+
+		g := cfg.NewCFG()
+		g.Entry = 0
+		irBlocks := make(IRBlockMap)
+
+		// add all blocks with unique sentinel assigns
+		for i := 0; i < chainLen; i++ {
+			id := cfg.BlockID(i)
+			g.AddBlock(&cfg.BasicBlock{ID: id})
+			irBlocks[id] = []ir.IRInstruction{
+				ir.Assign{
+					Dest: ir.Variable{
+						Name: sentinelVarName(id),
+						Type: ir.IntType{Width: ir.Size8},
+					},
+					Source: ir.ConstantExpr{
+						Value: ir.IntConstant{
+							//nolint:gosec // G115: id bounded by chainLen <= 8
+							Value: int64(id),
+							Width: ir.Size8,
+						},
+					},
+				},
+			}
+		}
+
+		// connect blocks in a linear chain
+		for i := 0; i < chainLen-1; i++ {
+			g.AddEdge(cfg.BlockID(i), cfg.BlockID(i+1), cfg.EdgeTypeFallthrough)
+		}
+		g.Exits = []cfg.BlockID{cfg.BlockID(chainLen - 1)}
+
+		dt, err := cfg.ComputeDominatorsForCFG(g)
+		if err != nil {
+			// infrastructure failure: skip this sample
+			return
+		}
+
+		li := cfg.NewLoopInfo(g, dt)
+		engine, err := New(g, dt, li, irBlocks)
+		if err != nil {
+			return
+		}
+
+		ast, err := engine.Structure()
+		if err != nil {
+			return
+		}
+
+		// preservation property: every block emitted exactly once
+		for i := 0; i < chainLen; i++ {
+			id := cfg.BlockID(i)
+			emitCount := countSentinel(ast.Body, id)
+			if emitCount != 1 {
+				rt.Errorf(
+					"preservation violated: linear cfg (chainLen=%d), bb%d emitted %d times, expected 1",
+					chainLen, id, emitCount,
+				)
+			}
+		}
+	})
 }

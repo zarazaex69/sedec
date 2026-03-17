@@ -346,3 +346,91 @@ func TestProperty6_BugCondition_RapidCallTargetResolution(t *testing.T) {
 		}
 	})
 }
+
+// ============================================================================
+// preservation 6: call targets not in database are left unchanged
+// ============================================================================
+
+// TestPreservation6_UnknownCallTargetUnchanged verifies that ir.Call nodes whose
+// target address is NOT in any database map have their target expression left
+// unchanged after applyABIPass.
+//
+// **Validates: Requirements 3.11, 3.12**
+//
+// this is the preservation guarantee for fix 6: the call target resolution must
+// not modify call targets that are not in the GroundTruthDatabase.
+// indirect calls through registers (e.g., call rax) and calls to unknown addresses
+// must be left unchanged.
+//
+// EXPECTED OUTCOME: PASS on both unfixed and fixed code.
+// the unfixed applyABIPass never modifies any call target (it has no database),
+// so all call targets are trivially preserved. the fixed version must also
+// preserve targets not in the database.
+func TestPreservation6_UnknownCallTargetUnchanged(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		// generate a call target address that is NOT in any database
+		// use addresses in a range that is unlikely to collide with plt stubs
+		callTargetAddr := rapid.Uint64Range(0x600000, 0x6fffff).Draw(rt, "callTargetAddr")
+
+		irFunc := buildCallTargetIRFunction(callTargetAddr)
+		rawInsns := buildCallRawInsns(callTargetAddr)
+
+		// record the original target expression before applyABIPass
+		originalTarget := extractCallTarget(irFunc)
+		if originalTarget == nil {
+			// no call instruction — skip
+			return
+		}
+
+		// call applyABIPass — on unfixed code this does not modify any target
+		// on fixed code this must also leave unknown targets unchanged
+		applyABIPass(irFunc, rawInsns)
+
+		// extract the target after the pass
+		resultTarget := extractCallTarget(irFunc)
+		if resultTarget == nil {
+			// call instruction was removed — this is a preservation violation
+			rt.Errorf(
+				"preservation violated: call to unknown addr 0x%x was removed by applyABIPass",
+				callTargetAddr,
+			)
+			return
+		}
+
+		// preservation property: target must still be a ConstantExpr with the same address
+		// (the unfixed code never resolves anything, so this always passes on unfixed code)
+		if !isConstantExprWithAddr(resultTarget, callTargetAddr) {
+			rt.Errorf(
+				"preservation violated: call target for unknown addr 0x%x was modified\n"+
+					"original: ConstantExpr{%d}\n"+
+					"result: %T(%s)",
+				callTargetAddr, callTargetAddr, resultTarget, resultTarget.String(),
+			)
+		}
+	})
+}
+
+// TestPreservation6_ConcreteUnknownAddressUnchanged tests the concrete case:
+// a call to address 0x600000 (not in any database) must remain unchanged.
+//
+// EXPECTED OUTCOME: PASS on both unfixed and fixed code.
+func TestPreservation6_ConcreteUnknownAddressUnchanged(t *testing.T) {
+	const unknownAddr = uint64(0x600000)
+
+	irFunc := buildCallTargetIRFunction(unknownAddr)
+	rawInsns := buildCallRawInsns(unknownAddr)
+
+	applyABIPass(irFunc, rawInsns)
+
+	target := extractCallTarget(irFunc)
+	if target == nil {
+		t.Fatal("call instruction disappeared after applyABIPass")
+	}
+
+	if !isConstantExprWithAddr(target, unknownAddr) {
+		t.Errorf(
+			"preservation violated: call target for unknown addr 0x%x was modified to %T(%s)",
+			unknownAddr, target, target.String(),
+		)
+	}
+}

@@ -326,3 +326,66 @@ func formatParams(params []Parameter) string {
 	}
 	return result + "]"
 }
+
+// ============================================================================
+// preservation 2: prologues reading only integer registers produce ir.IntType
+// ============================================================================
+
+// TestPreservation2_IntegerOnlyPrologueNoFloatType verifies that for any function
+// prologue that reads ONLY integer argument registers (no xmm reads at all),
+// IdentifyParameters assigns ir.IntType to all detected parameters.
+//
+// **Validates: Requirements 3.3, 3.4**
+//
+// this is the preservation guarantee for fix 2: the fix must not break the
+// baseline behavior for prologues that do not contain xmm save-area writes.
+// a prologue reading only rdi/rsi/rdx/rcx/r8/r9 must always produce IntType params.
+//
+// EXPECTED OUTCOME: PASS on both unfixed and fixed code.
+// integer-only prologues never trigger the float misclassification path.
+func TestPreservation2_IntegerOnlyPrologueNoFloatType(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		// generate 1–6 integer register reads with no xmm instructions
+		numIntReads := rapid.IntRange(1, 6).Draw(rt, "numIntReads")
+
+		var insns []*disasm.Instruction
+		addr := disasm.Address(0x1000)
+
+		// emit only integer register reads — no movaps, no xmm instructions at all
+		for i := 0; i < numIntReads && i < len(intArgRegs); i++ {
+			disp := int64(8 + 8*i)
+			insns = append(insns, buildMovRegToStack(addr, intArgRegs[i], disp))
+			addr += 4
+		}
+		insns = append(insns, buildInsn(addr, "ret"))
+
+		a := SystemVAnalyzer{}
+		params := a.IdentifyParameters(insns)
+
+		// preservation property: no parameter has FloatType
+		for _, p := range params {
+			if _, isFloat := p.Type.(ir.FloatType); isFloat {
+				rt.Errorf(
+					"preservation violated: integer-only prologue (numIntReads=%d) "+
+						"produced FloatType for parameter %s (register=%s)",
+					numIntReads, p.Name, p.Register,
+				)
+			}
+		}
+
+		// preservation property: all detected integer register params have IntType
+		for _, p := range params {
+			if !integerParamRegs[p.Register] {
+				continue
+			}
+			expected := ir.IntType{Width: ir.Size8, Signed: false}
+			if p.Type != expected {
+				rt.Errorf(
+					"preservation violated: integer-only prologue (numIntReads=%d) "+
+						"register %s has type %T{%v}, expected IntType{Width:8}",
+					numIntReads, p.Register, p.Type, p.Type,
+				)
+			}
+		}
+	})
+}

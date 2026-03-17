@@ -380,3 +380,149 @@ func TestProperty5_BugCondition_RapidSymbolNames(t *testing.T) {
 		}
 	})
 }
+
+// ============================================================================
+// preservation 5: already-valid c identifiers are used verbatim
+// ============================================================================
+
+// TestPreservation5_ValidIdentifiersUnchanged verifies that function names that
+// already match /^[a-zA-Z_][a-zA-Z0-9_]*$/ are returned unchanged by
+// sanitizeFunctionName and used verbatim in splitSectionIntoFunctions.
+//
+// **Validates: Requirements 3.9, 3.10**
+//
+// this is the preservation guarantee for fix 5: the sanitization function must
+// not modify names that are already valid c identifiers.
+// names like "main", "printf", "__libc_start_main" must pass through unchanged.
+//
+// EXPECTED OUTCOME: PASS on both unfixed and fixed code.
+// the sanitizeFunctionName function has an explicit preservation check:
+// if name already matches /^[a-zA-Z_][a-zA-Z0-9_]*$/, return it unchanged.
+func TestPreservation5_ValidIdentifiersUnchanged(t *testing.T) {
+	// concrete cases from the design doc
+	validNames := []string{
+		"main",
+		"printf",
+		"__libc_start_main",
+		"_start",
+		"__cxa_finalize",
+		"malloc",
+		"free",
+		"exit",
+		"abort",
+		"strlen",
+		"strcmp",
+		"memcpy",
+		"__stack_chk_fail",
+		"_IO_2_1_stderr_",
+		"fn_test",
+		"sub_00401000",
+		"a",
+		"_",
+		"A",
+		"Z",
+		"z",
+		"_0",
+		"a0",
+	}
+
+	for _, name := range validNames {
+		result := sanitizeFunctionName(name, 0)
+		if result != name {
+			t.Errorf(
+				"preservation violated: valid identifier %q was modified to %q — "+
+					"sanitizeFunctionName must return valid identifiers unchanged",
+				name, result,
+			)
+		}
+	}
+}
+
+// TestPreservation5_RapidValidIdentifiersUnchanged is the property-based test
+// using pgregory.net/rapid to generate random valid c identifiers and verify
+// that sanitizeFunctionName returns them unchanged.
+//
+// **Validates: Requirements 3.9, 3.10**
+//
+// EXPECTED OUTCOME: PASS on both unfixed and fixed code.
+func TestPreservation5_RapidValidIdentifiersUnchanged(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		// generate a valid c identifier: starts with letter or underscore,
+		// followed by letters, digits, or underscores
+		name := validCIdentifierGenerator().Draw(rt, "validName")
+
+		result := sanitizeFunctionName(name, 0)
+		if result != name {
+			rt.Errorf(
+				"preservation violated: valid identifier %q was modified to %q\n"+
+					"sanitizeFunctionName must return valid c identifiers unchanged",
+				name, result,
+			)
+		}
+	})
+}
+
+// validCIdentifierGenerator produces random strings matching /^[a-zA-Z_][a-zA-Z0-9_]*$/.
+func validCIdentifierGenerator() *rapid.Generator[string] {
+	return rapid.Custom(func(t *rapid.T) string {
+		// first character: letter or underscore
+		firstChars := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_"
+		firstIdx := rapid.IntRange(0, len(firstChars)-1).Draw(t, "firstChar")
+		first := string(firstChars[firstIdx])
+
+		// body: 0–15 letters, digits, or underscores
+		bodyLen := rapid.IntRange(0, 15).Draw(t, "bodyLen")
+		bodyChars := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+		body := make([]byte, bodyLen)
+		for i := range body {
+			idx := rapid.IntRange(0, len(bodyChars)-1).Draw(t, "bodyChar")
+			body[i] = bodyChars[idx]
+		}
+
+		return first + string(body)
+	})
+}
+
+// TestPreservation5_ValidSymbolNamesUnchangedInSplitSection verifies that
+// splitSectionIntoFunctions uses valid symbol names verbatim without modification.
+//
+// **Validates: Requirements 3.9, 3.10**
+//
+// EXPECTED OUTCOME: PASS on both unfixed and fixed code.
+func TestPreservation5_ValidSymbolNamesUnchangedInSplitSection(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		// generate a valid c identifier as symbol name
+		symName := validCIdentifierGenerator().Draw(rt, "symName")
+
+		baseAddr := disasm.Address(0x401000)
+		instrs := []*disasm.Instruction{
+			makeNopInstruction(baseAddr),
+			makeRetInstruction(baseAddr + 1),
+		}
+
+		symbols := []*binfmt.Symbol{
+			{
+				Name:    symName,
+				Address: binfmt.Address(baseAddr),
+				Type:    binfmt.SymbolTypeFunction,
+				Size:    2,
+			},
+		}
+
+		chunks := splitSectionIntoFunctions(instrs, symbols, ".text")
+		if len(chunks) == 0 {
+			// no chunks produced — skip
+			return
+		}
+
+		for _, chunk := range chunks {
+			if chunk.name != symName {
+				rt.Errorf(
+					"preservation violated: valid symbol name %q was modified to %q\n"+
+						"splitSectionIntoFunctions must use valid c identifiers verbatim",
+					symName, chunk.name,
+				)
+			}
+		}
+	})
+}

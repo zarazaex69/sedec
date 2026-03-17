@@ -495,3 +495,145 @@ func TestProperty7_BugCondition_HexLiteralFallback(t *testing.T) {
 		)
 	}
 }
+
+// ============================================================================
+// preservation 7: register-relative addresses are not symbolized
+// ============================================================================
+
+// TestPreservation7_RegisterRelativeAddressUnchanged verifies that IR instructions
+// with ONLY register-relative addresses (no absolute constants) are not modified
+// by the symbolization pass.
+//
+// **Validates: Requirements 3.13, 3.14**
+//
+// this is the preservation guarantee for fix 7: the symbolization pass must not
+// modify address expressions that are register-relative (e.g., rbp-8, rsp+16).
+// these are stack variable references that must remain as-is.
+//
+// EXPECTED OUTCOME: PASS on both unfixed and fixed code.
+// the unfixed pipeline has no symbolizeAddresses pass, so register-relative
+// addresses are trivially preserved. the fixed version must also preserve them.
+func TestPreservation7_RegisterRelativeAddressUnchanged(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		// generate a register-relative address: (rbp + offset) or (rsp + offset)
+		useRBP := rapid.IntRange(0, 1).Draw(rt, "useRBP")
+		offset := rapid.Int64Range(-256, 256).Draw(rt, "offset")
+
+		var baseRegName string
+		if useRBP == 1 {
+			baseRegName = "rbp"
+		} else {
+			baseRegName = "rsp"
+		}
+
+		baseReg := ir.Variable{
+			Name: baseRegName,
+			Type: ir.IntType{Width: ir.Size8, Signed: false},
+		}
+
+		// register-relative address: (baseReg + offset)
+		addrExpr := ir.BinaryOp{
+			Op:   ir.BinOpAdd,
+			Left: ir.VariableExpr{Var: baseReg},
+			Right: ir.ConstantExpr{
+				Value: ir.IntConstant{Value: offset, Width: ir.Size8, Signed: true},
+			},
+		}
+
+		destVar := ir.Variable{
+			Name: "t1",
+			Type: ir.IntType{Width: ir.Size8, Signed: false},
+		}
+
+		loadInstr := ir.Load{
+			Dest:    destVar,
+			Address: addrExpr,
+			Size:    ir.Size8,
+		}
+
+		block := &ir.BasicBlock{
+			ID:           0,
+			Instructions: []ir.IRInstruction{loadInstr},
+		}
+
+		fn := &ir.Function{
+			Name: "test_reg_rel",
+			Signature: ir.FunctionType{
+				ReturnType: ir.VoidType{},
+			},
+			Blocks:     map[ir.BlockID]*ir.BasicBlock{0: block},
+			EntryBlock: 0,
+			Variables:  []ir.Variable{destVar, baseReg},
+		}
+
+		// generate c output — the unfixed pipeline has no symbolizeAddresses
+		cOutput := generateCOutputForFunction(fn)
+
+		// preservation property: the base register name must still appear in the output
+		// (register-relative addresses must not be symbolized or removed)
+		if !strings.Contains(cOutput, baseRegName) {
+			rt.Errorf(
+				"preservation violated: register-relative address (%s + %d) was modified\n"+
+					"base register %q not found in output\ngenerated output:\n%s",
+				baseRegName, offset, baseRegName, cOutput,
+			)
+		}
+	})
+}
+
+// TestPreservation7_ConcreteRBPRelativeUnchanged tests the concrete case:
+// a load from (rbp - 8) must appear as a register-relative expression in the output.
+//
+// EXPECTED OUTCOME: PASS on both unfixed and fixed code.
+func TestPreservation7_ConcreteRBPRelativeUnchanged(t *testing.T) {
+	rbpVar := ir.Variable{
+		Name: "rbp",
+		Type: ir.IntType{Width: ir.Size8, Signed: false},
+	}
+
+	// (rbp + -8) — typical local variable access
+	addrExpr := ir.BinaryOp{
+		Op:   ir.BinOpAdd,
+		Left: ir.VariableExpr{Var: rbpVar},
+		Right: ir.ConstantExpr{
+			Value: ir.IntConstant{Value: -8, Width: ir.Size8, Signed: true},
+		},
+	}
+
+	destVar := ir.Variable{
+		Name: "t1",
+		Type: ir.IntType{Width: ir.Size8, Signed: false},
+	}
+
+	loadInstr := ir.Load{
+		Dest:    destVar,
+		Address: addrExpr,
+		Size:    ir.Size8,
+	}
+
+	block := &ir.BasicBlock{
+		ID:           0,
+		Instructions: []ir.IRInstruction{loadInstr},
+	}
+
+	fn := &ir.Function{
+		Name: "test_rbp_rel",
+		Signature: ir.FunctionType{
+			ReturnType: ir.VoidType{},
+		},
+		Blocks:     map[ir.BlockID]*ir.BasicBlock{0: block},
+		EntryBlock: 0,
+		Variables:  []ir.Variable{destVar, rbpVar},
+	}
+
+	cOutput := generateCOutputForFunction(fn)
+
+	// preservation: rbp must appear in the output as part of the address expression
+	if !strings.Contains(cOutput, "rbp") {
+		t.Errorf(
+			"preservation violated: rbp-relative address not preserved in output\n"+
+				"generated output:\n%s",
+			cOutput,
+		)
+	}
+}
