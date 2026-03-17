@@ -1555,6 +1555,19 @@ func (l *Lifter) materializeCondition(mnemonic string) Expression {
 
 	lf := l.currentLazyFlags
 
+	// optimization: when lazy flags come from a cmp/sub operation with two operands,
+	// emit direct high-level comparisons instead of decomposing into individual flags.
+	// this produces clean output like (a <= b) instead of (zf || (sf != of)).
+	if lf.Operation == FlagOpArithmetic && len(lf.Operands) >= 2 {
+		if binResult, ok := lf.Result.(BinaryOp); ok && binResult.Op == BinOpSub {
+			left := lf.Operands[0]
+			right := lf.Operands[1]
+			if cond := directComparisonFromMnemonic(mnemonic, left, right); cond != nil {
+				return cond
+			}
+		}
+	}
+
 	// helper: materialize a single flag, returning a boolean expression
 	mat := func(flag CPUFlag) Expression {
 		return lf.MaterializeFlag(flag)
@@ -1627,6 +1640,37 @@ func (l *Lifter) materializeCondition(mnemonic string) Expression {
 
 	default:
 		return l.getConditionFromMnemonic(mnemonic)
+	}
+}
+
+// directComparisonFromMnemonic maps a conditional jump mnemonic to a direct
+// high-level comparison between the original cmp operands.
+// returns nil if the mnemonic is not a simple comparison (e.g., parity, overflow-only).
+func directComparisonFromMnemonic(mnemonic string, left, right Expression) Expression {
+	switch mnemonic {
+	case mnemonicJe, mnemonicJz:
+		return BinaryOp{Op: BinOpEq, Left: left, Right: right}
+	case mnemonicJne, mnemonicJnz:
+		return BinaryOp{Op: BinOpNe, Left: left, Right: right}
+	case mnemonicJl, mnemonicJnge:
+		return BinaryOp{Op: BinOpLt, Left: left, Right: right}
+	case mnemonicJle, mnemonicJng:
+		return BinaryOp{Op: BinOpLe, Left: left, Right: right}
+	case mnemonicJg, mnemonicJnle:
+		return BinaryOp{Op: BinOpGt, Left: left, Right: right}
+	case mnemonicJge, mnemonicJnl:
+		return BinaryOp{Op: BinOpGe, Left: left, Right: right}
+	case mnemonicJb, mnemonicJnae, mnemonicJc:
+		return BinaryOp{Op: BinOpULt, Left: left, Right: right}
+	case mnemonicJbe, mnemonicJna:
+		return BinaryOp{Op: BinOpULe, Left: left, Right: right}
+	case mnemonicJa, mnemonicJnbe:
+		return BinaryOp{Op: BinOpUGt, Left: left, Right: right}
+	case mnemonicJae, mnemonicJnb, mnemonicJnc:
+		return BinaryOp{Op: BinOpUGe, Left: left, Right: right}
+	default:
+		// parity, sign, overflow-only conditions: fall through to flag decomposition
+		return nil
 	}
 }
 
@@ -1834,17 +1878,24 @@ func (l *Lifter) liftRet(insn *disasm.Instruction) ([]IRInstruction, error) {
 // for deferred materialization. flags are computed only when actually used
 // by conditional branches, achieving 95%+ elimination rate.
 func (l *Lifter) setArithmeticFlags(result Expression, size Size) {
-	// create lazy flags structure and store in lifter state
+	// extract original left/right operands from the result binary expression.
+	// arithmetic flag materialization (cf, of) requires the original operands,
+	// not just the composite result. for example, cf after sub needs (left < right),
+	// and of after sub needs sign analysis on left, right, and result independently.
+	var operands []Expression
+	if binOp, ok := result.(BinaryOp); ok {
+		operands = []Expression{binOp.Left, binOp.Right}
+	} else {
+		operands = []Expression{result}
+	}
+
 	l.currentLazyFlags = NewLazyFlags(
 		FlagOpArithmetic,
-		[]Expression{result},
+		operands,
 		result,
 		size,
 		l.currentLocation,
 	)
-
-	// no ir instructions emitted - flags are completely lazy
-	// materialization happens during data flow analysis
 }
 
 // setLogicalFlags creates lazy flags for logical operations.

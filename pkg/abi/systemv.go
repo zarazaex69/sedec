@@ -111,6 +111,11 @@ func (a *SystemVAnalyzer) IdentifyParameters(insns []*disasm.Instruction) []Para
 	intParamSeen := make(map[string]bool)
 	floatParamSeen := make(map[string]bool)
 
+	// track the first-access register name for each parameter register.
+	// this lets us infer the operand width from the sub-register alias used
+	// (e.g., edi -> 32-bit, rdi -> 64-bit).
+	firstAccessReg := make(map[string]string)
+
 	var params []Parameter
 	intParamIdx := 0
 	floatParamIdx := 0
@@ -157,7 +162,12 @@ func (a *SystemVAnalyzer) IdentifyParameters(insns []*disasm.Instruction) []Para
 					if regName == "al" && !alWritten {
 						alRead = true
 					}
-					a.matchIntParam(canonical, &intParamIdx, intRegWritten, intParamSeen, systemVIntParamRegs, &params)
+					// record the first-access register name before matchIntParam
+					// so we can infer the operand width from the sub-register alias
+					if _, seen := firstAccessReg[canonical]; !seen && !intRegWritten[canonical] {
+						firstAccessReg[canonical] = regName
+					}
+					a.matchIntParam(canonical, regName, &intParamIdx, intRegWritten, intParamSeen, systemVIntParamRegs, &params)
 					a.matchFloatParam(canonical, &floatParamIdx, floatRegWritten, floatParamSeen, systemVFloatParamRegs, &params)
 				}
 
@@ -196,8 +206,11 @@ func (a *SystemVAnalyzer) IdentifyParameters(insns []*disasm.Instruction) []Para
 
 // matchIntParam checks if canonical matches a sequential integer parameter register
 // and appends the parameter if it is the next expected slot.
+// rawRegName is the original (possibly sub-register) name used at the first access
+// site, allowing width inference (e.g., edi -> 32-bit, rdi -> 64-bit).
 func (a *SystemVAnalyzer) matchIntParam(
 	canonical string,
+	rawRegName string,
 	nextIdx *int,
 	written, seen map[string]bool,
 	regs []string,
@@ -205,9 +218,12 @@ func (a *SystemVAnalyzer) matchIntParam(
 ) {
 	for i, paramReg := range regs {
 		if canonical == paramReg && !written[paramReg] && !seen[paramReg] && i == *nextIdx {
+			// infer type width from the sub-register alias used at first access.
+			// edi -> Size4 (uint32_t), rdi -> Size8 (uint64_t), di -> Size2, etc.
+			width := RegisterWidthFromName(rawRegName)
 			*params = append(*params, Parameter{
 				Name:     fmt.Sprintf("arg%d", *nextIdx),
-				Type:     ir.IntType{Width: ir.Size8, Signed: false},
+				Type:     ir.IntType{Width: width, Signed: false},
 				Register: paramReg,
 				Location: ParameterLocationRegister,
 				Index:    *nextIdx,
@@ -257,11 +273,15 @@ func markRegWritten(canonical string, regs []string, written map[string]bool) {
 //   - Float/SSE: XMM0 (and XMM1 for complex/128-bit)
 //   - Void: no return register written before ret
 func (a *SystemVAnalyzer) IdentifyReturnValues(insns []*disasm.Instruction) []ReturnValue {
-	// scan backwards from ret instruction to find last writes to return registers
+	// scan backwards from ret instruction to find last writes to return registers.
+	// track both the canonical register and the raw sub-register name for width inference.
 	raxWritten := false
 	rdxWritten := false
 	xmm0Written := false
 	xmm1Written := false
+
+	// raw register names at the write site for width inference
+	var raxRawName, rdxRawName string
 
 	// find the ret instruction and scan backwards
 	retIdx := -1
@@ -297,13 +317,20 @@ func (a *SystemVAnalyzer) IdentifyReturnValues(insns []*disasm.Instruction) []Re
 		if !ok {
 			continue
 		}
-		canonical := canonicalizeRegister(strings.ToLower(destOp.Name))
+		rawName := strings.ToLower(destOp.Name)
+		canonical := canonicalizeRegister(rawName)
 
 		switch canonical {
 		case regRax:
-			raxWritten = true
+			if !raxWritten {
+				raxWritten = true
+				raxRawName = rawName
+			}
 		case regRdx:
-			rdxWritten = true
+			if !rdxWritten {
+				rdxWritten = true
+				rdxRawName = rawName
+			}
 		case regXmm0:
 			xmm0Written = true
 		case regXmm1:
@@ -325,14 +352,17 @@ func (a *SystemVAnalyzer) IdentifyReturnValues(insns []*disasm.Instruction) []Re
 			})
 		}
 	} else if raxWritten {
+		// infer return type width from the sub-register written before ret.
+		// eax -> 32-bit, rax -> 64-bit, ax -> 16-bit, al -> 8-bit.
+		raxWidth := RegisterWidthFromName(raxRawName)
 		retVals = append(retVals, ReturnValue{
-			Type:     ir.IntType{Width: ir.Size8, Signed: false},
+			Type:     ir.IntType{Width: raxWidth, Signed: false},
 			Register: regRax,
 		})
 		if rdxWritten {
-			// 128-bit integer return (e.g., __int128 or struct returned in regs)
+			rdxWidth := RegisterWidthFromName(rdxRawName)
 			retVals = append(retVals, ReturnValue{
-				Type:     ir.IntType{Width: ir.Size8, Signed: false},
+				Type:     ir.IntType{Width: rdxWidth, Signed: false},
 				Register: regRdx,
 			})
 		}

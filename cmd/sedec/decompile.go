@@ -671,8 +671,11 @@ func renameRegisterVariables(irFunc *ir.Function, funcABI *abi.FunctionABI) {
 		}
 	}
 
-	// step 2: synthetic name counter and lazy assignment map
+	// step 2: synthetic name counter and lazy assignment map.
+	// use canonical (64-bit) register names as keys so that sub-register aliases
+	// (eax, ax, al) map to the same synthetic variable as their parent (rax).
 	syntheticNames := make(map[string]string)
+	aliasMap := buildAliasMap()
 	varCounter := 0
 
 	// renameVar maps a single variable to its renamed form.
@@ -685,12 +688,17 @@ func renameRegisterVariables(irFunc *ir.Function, funcABI *abi.FunctionABI) {
 		if name, ok := regToName[lower]; ok {
 			return ir.Variable{Name: name, Type: v.Type, Version: v.Version}
 		}
-		if name, ok := syntheticNames[lower]; ok {
+		// canonicalize to 64-bit form so eax/ax/al all share the same synthetic name as rax
+		canonical := lower
+		if canon, ok := aliasMap[lower]; ok {
+			canonical = canon
+		}
+		if name, ok := syntheticNames[canonical]; ok {
 			return ir.Variable{Name: name, Type: v.Type, Version: v.Version}
 		}
 		name := fmt.Sprintf("var_%d", varCounter)
 		varCounter++
-		syntheticNames[lower] = name
+		syntheticNames[canonical] = name
 		return ir.Variable{Name: name, Type: v.Type, Version: v.Version}
 	}
 
@@ -885,10 +893,18 @@ func decompileInstructions(functionName string, instructions []*disasm.Instructi
 	// replace absolute address constants with symbolic references from the database
 	symbolizeAddresses(irFunc, db, instructions)
 
+	// recover stack variables: replace rbp-relative memory accesses with named locals.
+	// must run before register renaming so rbp is still identifiable.
+	analysis.RecoverStackVariables(irFunc)
+
 	// rename raw x86-64 register variables to human-readable c names (arg0, var_0, etc.)
 	if funcABI != nil {
 		renameRegisterVariables(irFunc, funcABI)
 	}
+
+	// propagate return values: trace last assignment to return register and
+	// substitute the actual expression into Return instructions.
+	analysis.PropagateReturnValues(irFunc)
 
 	// compute dominator tree (lengauer-tarjan via gonum)
 	domTree, err := cfgBuilder.ComputeDominators()
@@ -917,6 +933,11 @@ func decompileInstructions(functionName string, instructions []*disasm.Instructi
 		_ = cfErr
 	}
 
+	// recover high-level conditions: collapse flag-based expressions (zf, sf, of)
+	// into relational operators (<=, >, <, >=, ==, !=).
+	// must run after constant folding so that of=false is already simplified.
+	analysis.RecoverConditions(irFunc)
+
 	// run dead code elimination: removes dead assignments (xor reg,reg after folding, etc.)
 	if _, dceErr := analysis.EliminateDeadCode(irFunc, cfgGraph, irDomTree); dceErr != nil {
 		_ = dceErr
@@ -939,6 +960,11 @@ func decompileInstructions(functionName string, instructions []*disasm.Instructi
 	// apply expression condensation: inline single-use temps, merge nested ifs,
 	// de morgan simplification, early-return hoisting
 	ast = structuring.CondenseExpressions(ast)
+
+	// recover high-level conditions in the structured ast: the structuring engine
+	// copies branch conditions from ir into ast nodes, so we must also recover
+	// conditions at the ast level (if/while/for condition expressions).
+	analysis.RecoverASTConditions(ast)
 
 	// generate c pseudocode with scope minimization and traceability annotations
 	gen := codegen.NewTraceableGenerator()

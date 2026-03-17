@@ -262,7 +262,7 @@ func (e *Engine) collapseBlockWithInlined(blockID cfg.BlockID, collapsed map[cfg
 
 	case 1:
 		// linear region: this block followed by its single successor
-		return e.collapseLinear(blockID, succs[0], collapsed)
+		return e.collapseLinearWithInlined(blockID, succs[0], collapsed, inlined)
 
 	case 2:
 		// conditional branch: if-then or if-then-else
@@ -296,24 +296,40 @@ func (e *Engine) nonBackEdgeSuccessors(blockID cfg.BlockID) []cfg.BlockID {
 // collapseLinear handles a block with a single non-back-edge successor.
 // it emits the current block's IR and then the successor's statement.
 func (e *Engine) collapseLinear(blockID, succID cfg.BlockID, collapsed map[cfg.BlockID]Statement) (Statement, error) {
-	current := e.buildIRBlock(blockID)
+	return e.collapseLinearWithInlined(blockID, succID, collapsed, nil)
+}
 
-	// if successor is already collapsed (dominated by another block), just emit current
-	if _, alreadyCollapsed := collapsed[succID]; alreadyCollapsed {
-		// successor will be emitted separately in pre-order traversal
-		return current, nil
-	}
+// collapseLinearWithInlined is the internal implementation that accepts an
+// optional inlined set for marking blocks that have been inlined into a
+// parent statement.
+func (e *Engine) collapseLinearWithInlined(blockID, succID cfg.BlockID, collapsed map[cfg.BlockID]Statement, inlined map[cfg.BlockID]bool) (Statement, error) {
+	current := e.buildIRBlock(blockID)
 
 	// guard against re-entrant collapse of the same successor:
 	// if succID is not strictly dominated by blockID, it will be handled
 	// by the top-level post-order pass — emit a goto instead of inlining.
 	if !e.dt.StrictlyDominates(blockID, succID) {
+		// if successor is already collapsed, it will be emitted separately
+		if _, alreadyCollapsed := collapsed[succID]; alreadyCollapsed {
+			return current, nil
+		}
 		label := e.getOrCreateLabel(succID)
 		return e.mergeSequential(current, GotoStatement{Target: succID, Label: label}), nil
 	}
 
-	// successor is dominated by this block: inline it
-	succStmt, err := e.collapseBlock(succID, collapsed)
+	// successor is dominated by this block: inline it.
+	// mark as inlined so pre-order traversal skips it.
+	if inlined != nil {
+		inlined[succID] = true
+	}
+
+	// if already collapsed by post-order processing, reuse the statement.
+	if succStmt, alreadyCollapsed := collapsed[succID]; alreadyCollapsed {
+		return e.mergeSequential(current, succStmt), nil
+	}
+
+	// not yet collapsed: recursively collapse
+	succStmt, err := e.collapseBlockWithInlined(succID, collapsed, inlined)
 	if err != nil {
 		return nil, err
 	}
@@ -399,11 +415,20 @@ func (e *Engine) collapseConditional(
 	// this ensures the convergence block is emitted exactly once, after the
 	// closing brace of the if/else, rather than being duplicated by both branches.
 	if convergence != e.cfgraph.Entry && convergence != blockID {
-		convStmt, convErr := e.collapseBlock(convergence, collapsed)
-		if convErr != nil {
-			return nil, convErr
+		// mark convergence as inlined so pre-order traversal skips it
+		if inlined != nil {
+			inlined[convergence] = true
 		}
-		collapsed[convergence] = convStmt
+		// reuse already-collapsed statement if available
+		convStmt, alreadyCollapsed := collapsed[convergence]
+		if !alreadyCollapsed {
+			var convErr error
+			convStmt, convErr = e.collapseBlockWithInlined(convergence, collapsed, inlined)
+			if convErr != nil {
+				return nil, convErr
+			}
+			collapsed[convergence] = convStmt
+		}
 		result = e.mergeSequential(result, convStmt)
 	}
 
@@ -501,6 +526,12 @@ func (e *Engine) collapseMultiWay(
 
 // buildBranch builds the structured statement for a branch from startID
 // up to (but not including) convergenceID.
+//
+// the branch is represented by a single recursive collapse of startID:
+// collapseBlock will inline all blocks dominated by startID (via
+// collapseLinear and collapseConditional), so we do not need to iterate
+// over every block in the branch — that would re-emit blocks already
+// inlined by the recursive collapse.
 func (e *Engine) buildBranch(
 	startID cfg.BlockID,
 	convergenceID cfg.BlockID,
@@ -511,41 +542,19 @@ func (e *Engine) buildBranch(
 		return Block{Stmts: nil}, nil
 	}
 
-	// collect all blocks in this branch (dominated by startID, before convergence)
-	branchBlocks := e.collectBranchBlocks(startID, convergenceID)
-
-	if len(branchBlocks) == 0 {
-		return Block{Stmts: nil}, nil
+	// if startID was already collapsed by a prior pass, return its statement
+	if stmt, ok := collapsed[startID]; ok {
+		return stmt, nil
 	}
 
-	// recursively structure the branch subgraph
-	stmts := make([]Statement, 0, len(branchBlocks))
-	for _, bid := range branchBlocks {
-		if stmt, ok := collapsed[bid]; ok {
-			stmts = append(stmts, stmt)
-			continue
-		}
-
-		// only inline blocks that are strictly dominated by startID;
-		// others will be emitted by the top-level pass via goto.
-		if bid != startID && !e.dt.StrictlyDominates(startID, bid) {
-			label := e.getOrCreateLabel(bid)
-			stmts = append(stmts, GotoStatement{Target: bid, Label: label})
-			continue
-		}
-
-		stmt, err := e.collapseBlock(bid, collapsed)
-		if err != nil {
-			return nil, err
-		}
-		collapsed[bid] = stmt
-		stmts = append(stmts, stmt)
+	// recursively collapse startID; this will inline all dominated successors
+	// up to the convergence point (which is not dominated by startID)
+	stmt, err := e.collapseBlock(startID, collapsed)
+	if err != nil {
+		return nil, err
 	}
-
-	if len(stmts) == 1 {
-		return stmts[0], nil
-	}
-	return Block{Stmts: stmts}, nil
+	collapsed[startID] = stmt
+	return stmt, nil
 }
 
 // collectBranchBlocks returns all blocks dominated by startID that are
@@ -632,36 +641,87 @@ func (e *Engine) buildLoopBody(
 	return Block{Stmts: stmts}, nil
 }
 
-// findConvergencePoint finds the immediate post-dominator of two blocks.
-// this is the first block that both paths must pass through.
-// we approximate this by walking up the dominator tree from both sides.
+// findConvergencePoint finds the convergence (merge) block where two
+// branch paths rejoin. this is the immediate post-dominator of the
+// branch point, approximated via forward BFS reachability on the CFG.
+//
+// algorithm:
+//  1. if b is reachable from a (without back-edges), b is the convergence
+//     (if-then pattern: a is the then-branch, b is the fallthrough).
+//  2. if a is reachable from b, a is the convergence (symmetric case).
+//  3. otherwise, collect all blocks reachable from both a and b, and
+//     return the first common block that is not strictly dominated by
+//     either branch root.
+//
+// when no common reachable block exists (e.g. both paths end with
+// return), the entry block is returned as a sentinel meaning "no
+// convergence".
 func (e *Engine) findConvergencePoint(a, b cfg.BlockID) cfg.BlockID {
-	// collect dominator path from a to entry
-	pathA := make(map[cfg.BlockID]bool)
-	current := a
-	for {
-		pathA[current] = true
-		idom, exists := e.dt.Idom[current]
-		if !exists || idom == current {
-			break
+	// bfs collects all blocks reachable from start via forward non-back-edges,
+	// recording the bfs visit order (which approximates topological order).
+	bfs := func(start cfg.BlockID) (map[cfg.BlockID]bool, []cfg.BlockID) {
+		visited := map[cfg.BlockID]bool{start: true}
+		queue := []cfg.BlockID{start}
+		order := []cfg.BlockID{start}
+		for len(queue) > 0 {
+			cur := queue[0]
+			queue = queue[1:]
+			block, exists := e.cfgraph.Blocks[cur]
+			if !exists {
+				continue
+			}
+			for _, succ := range block.Successors {
+				if visited[succ] || e.isBackEdge(cur, succ) {
+					continue
+				}
+				visited[succ] = true
+				queue = append(queue, succ)
+				order = append(order, succ)
+			}
 		}
-		current = idom
+		return visited, order
 	}
 
-	// walk up from b until we hit a block in pathA
-	current = b
-	for {
-		if pathA[current] {
-			return current
-		}
-		idom, exists := e.dt.Idom[current]
-		if !exists || idom == current {
-			break
-		}
-		current = idom
+	reachA, _ := bfs(a)
+	reachB, orderB := bfs(b)
+
+	// case 1: b is directly reachable from a → if-then pattern (b is convergence)
+	if reachA[b] {
+		return b
+	}
+	// case 2: a is directly reachable from b → symmetric if-then
+	if reachB[a] {
+		return a
 	}
 
-	// fallback: return entry block
+	// case 3: find the first common block in b's bfs order that is also
+	// reachable from a and not strictly dominated by either branch root.
+	for _, bid := range orderB {
+		if bid == a || bid == b {
+			continue
+		}
+		if !reachA[bid] {
+			continue
+		}
+		// candidate must not be strictly dominated by either branch root;
+		// a block dominated by one side is still "inside" that branch.
+		if e.dt.StrictlyDominates(a, bid) || e.dt.StrictlyDominates(b, bid) {
+			continue
+		}
+		return bid
+	}
+
+	// relaxed pass: accept any common block even if dominated by one side
+	for _, bid := range orderB {
+		if bid == a || bid == b {
+			continue
+		}
+		if reachA[bid] {
+			return bid
+		}
+	}
+
+	// no common successor: both paths terminate independently
 	return e.cfgraph.Entry
 }
 
