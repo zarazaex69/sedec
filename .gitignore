@@ -11,7 +11,7 @@
 *.ilk
 *.map
 *.exp
-
+test_decompiler_*
 # Precompiled Headers
 *.gch
 *.pch
