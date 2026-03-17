@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -31,6 +32,54 @@ var (
 	// errDecompileNoExecutableSections indicates no executable sections found
 	errDecompileNoExecutableSections = errors.New("no executable sections found in binary")
 )
+
+// validCIdentifierRegex matches strings that are already valid c identifiers.
+// a valid c identifier starts with a letter or underscore, followed by letters, digits, or underscores.
+var validCIdentifierRegex = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
+// invalidCIdentifierCharRegex matches any character that is not valid in a c identifier.
+var invalidCIdentifierCharRegex = regexp.MustCompile(`[^a-zA-Z0-9_]`)
+
+// sanitizeFunctionName converts an arbitrary string into a valid c identifier.
+//
+// rules applied in order:
+//  1. if name already matches /^[a-zA-Z_][a-zA-Z0-9_]*$/, return it unchanged (preservation guarantee)
+//  2. strip elf version suffix: remove everything from '@' when followed by an uppercase letter
+//     (e.g., printf@GLIBC_2.2.5 → printf, but error@plt → error_plt via rule 3)
+//  3. replace all characters not in [a-zA-Z0-9_] with '_'
+//  4. if the result begins with a digit or is empty, prepend "fn_"
+//  5. if the result is still empty after all transformations, use fmt.Sprintf("sub_%08x", addr)
+func sanitizeFunctionName(name string, addr uint64) string {
+	// preservation guarantee: already-valid identifiers are returned unchanged
+	if validCIdentifierRegex.MatchString(name) {
+		return name
+	}
+
+	// rule 1: strip elf version suffix — only when '@' is followed by an uppercase letter
+	// (e.g., @GLIBC_2.2.5, @CXXABI_1.3, @GCC_3.0) — these are elf symbol versioning suffixes
+	// names like "error@plt" are not version suffixes; '@' is replaced by '_' in rule 2
+	if idx := strings.IndexByte(name, '@'); idx >= 0 && idx+1 < len(name) {
+		next := name[idx+1]
+		if next >= 'A' && next <= 'Z' {
+			name = name[:idx]
+		}
+	}
+
+	// rule 2: replace all non-[a-zA-Z0-9_] characters with '_'
+	name = invalidCIdentifierCharRegex.ReplaceAllString(name, "_")
+
+	// rule 3: if result begins with a digit or is empty, prepend "fn_"
+	if len(name) == 0 || (name[0] >= '0' && name[0] <= '9') {
+		name = "fn_" + name
+	}
+
+	// rule 4: if still empty (e.g., original was all invalid chars stripped to nothing), use address
+	if name == "" || name == "fn_" {
+		return fmt.Sprintf("sub_%08x", addr)
+	}
+
+	return name
+}
 
 // decompileConfig holds configuration for decompile subcommand
 type decompileConfig struct {
@@ -210,7 +259,10 @@ func decompileFunction(
 	// trim instructions to function boundary using symbol size when available
 	instructions = trimFunctionInstructions(instructions, target.address, binaryInfo.Symbols)
 
-	cCode, err := decompileInstructions(target.name, instructions)
+	// sanitize the function name to ensure it is a valid c identifier
+	safeFuncName := sanitizeFunctionName(target.name, uint64(target.address))
+
+	cCode, err := decompileInstructions(safeFuncName, instructions)
 	if err != nil {
 		return fmt.Errorf("failed to decompile function %s: %w", target.name, err)
 	}
@@ -381,7 +433,7 @@ func splitSectionIntoFunctions(
 				continue
 			}
 			chunks = append(chunks, funcChunk{
-				name:         sym.name,
+				name:         sanitizeFunctionName(sym.name, uint64(sym.addr)),
 				instructions: instructions[startIdx:endIdx],
 			})
 		}
@@ -401,11 +453,14 @@ func splitOnRetBoundaries(instructions []*disasm.Instruction, sectionName string
 	start := 0
 	chunkIdx := 0
 
+	// sanitize the section name once; all chunk names share the same base
+	safeName := sanitizeFunctionName(sectionName, 0)
+
 	for i, instr := range instructions {
 		m := strings.ToLower(instr.Mnemonic)
 		if m == "ret" || m == "retn" {
 			if i >= start {
-				name := fmt.Sprintf("%s_func%d", sectionName, chunkIdx)
+				name := fmt.Sprintf("%s_func%d", safeName, chunkIdx)
 				chunks = append(chunks, funcChunk{
 					name:         name,
 					instructions: instructions[start : i+1],
@@ -418,7 +473,7 @@ func splitOnRetBoundaries(instructions []*disasm.Instruction, sectionName string
 
 	// trailing instructions after last ret (if any)
 	if start < len(instructions) {
-		name := fmt.Sprintf("%s_func%d", sectionName, chunkIdx)
+		name := fmt.Sprintf("%s_func%d", safeName, chunkIdx)
 		chunks = append(chunks, funcChunk{
 			name:         name,
 			instructions: instructions[start:],
