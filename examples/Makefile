@@ -1,4 +1,4 @@
-CC      = gcc
+CC      = zig cc
 CFLAGS_DBG = -O0 -g -fno-omit-frame-pointer -Wall -Wextra
 CFLAGS_OPT = -O2 -fno-omit-frame-pointer -Wall -Wextra
 SEDEC   = ../sedec
