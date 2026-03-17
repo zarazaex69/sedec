@@ -173,6 +173,10 @@ func (s *generatorState) genBlock(b structuring.Block, depth int) string {
 	var sb strings.Builder
 	for _, stmt := range b.Stmts {
 		sb.WriteString(s.genStatement(stmt, depth))
+		// stop emitting after a return-containing statement
+		if statementContainsReturn(stmt) {
+			break
+		}
 	}
 	return sb.String()
 }
@@ -187,8 +191,47 @@ func (s *generatorState) genIRBlock(b structuring.IRBlock, depth int) string {
 		sb.WriteString(indent(depth))
 		sb.WriteString(line)
 		sb.WriteString("\n")
+		// stop emitting after a return instruction
+		if _, ok := ir.AsReturn(instr); ok {
+			break
+		}
 	}
 	return sb.String()
+}
+
+// statementContainsReturn reports whether stmt contains a return path.
+// for IfStatement, both branches must contain returns for the scope to terminate.
+func statementContainsReturn(stmt structuring.Statement) bool {
+	if stmt == nil {
+		return false
+	}
+	switch n := stmt.(type) {
+	case structuring.ReturnStatement:
+		return true
+	case structuring.IRBlock:
+		for _, instr := range n.Instructions {
+			if _, ok := ir.AsReturn(instr); ok {
+				return true
+			}
+		}
+		return false
+	case structuring.Block:
+		for _, child := range n.Stmts {
+			if statementContainsReturn(child) {
+				return true
+			}
+		}
+		return false
+	case structuring.IfStatement:
+		// only terminates if both branches return
+		if n.Else == nil {
+			return false
+		}
+		return statementContainsReturn(n.Then) && statementContainsReturn(n.Else)
+	default:
+		// loops, gotos, labels, var decls — do not guarantee termination
+		return false
+	}
 }
 
 func (s *generatorState) genIf(n structuring.IfStatement, depth int) string {

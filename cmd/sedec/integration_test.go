@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -348,4 +349,282 @@ int main() {
 	if !strings.Contains(output2, "function: add") {
 		t.Errorf("missing add function")
 	}
+}
+
+// compileTestDecompilerBinary compiles examples/test_decompiler.c and returns
+// the path to the resulting binary. it skips the test if gcc is unavailable or
+// the source file cannot be found.
+func compileTestDecompilerBinary(t *testing.T) string {
+	t.Helper()
+
+	if _, err := exec.LookPath("gcc"); err != nil {
+		t.Skip("gcc not available, skipping integration test")
+	}
+
+	// the test package is in cmd/sedec, so walk up two levels to reach the workspace root
+	srcFile := filepath.Join("..", "..", "examples", "test_decompiler.c")
+	if _, err := os.Stat(srcFile); err != nil {
+		t.Skipf("examples/test_decompiler.c not found at %s: %v", srcFile, err)
+	}
+
+	binaryPath := filepath.Join(t.TempDir(), "test_decompiler")
+	//nolint:gosec,noctx // test code runs gcc with controlled arguments
+	compileCmd := exec.Command("gcc", "-O0", "-g", "-o", binaryPath, srcFile)
+	if out, err := compileCmd.CombinedOutput(); err != nil {
+		t.Fatalf("failed to compile test_decompiler.c: %v\n%s", err, out)
+	}
+
+	return binaryPath
+}
+
+// decompileSingleFunc runs the decompiler on a single function from the given
+// binary and returns the output string. it fails the test on any error.
+func decompileSingleFunc(t *testing.T, binaryPath, funcName string) string {
+	t.Helper()
+
+	var outBuf, errBuf bytes.Buffer
+	if err := runDecompile([]string{"--function", funcName, binaryPath}, nil, &outBuf, &errBuf); err != nil {
+		t.Fatalf("runDecompile --function %s failed: %v\nstderr: %s", funcName, err, errBuf.String())
+	}
+
+	output := outBuf.String()
+	if output == "" {
+		t.Fatalf("decompiler produced empty output for function %s", funcName)
+	}
+
+	return output
+}
+
+// checkNoDuplicateConsecutiveLines asserts that no function body in the output
+// contains the same non-empty statement on two consecutive lines.
+func checkNoDuplicateConsecutiveLines(t *testing.T, output string) {
+	t.Helper()
+
+	lines := strings.Split(output, "\n")
+	inBody := false
+	var prev string
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasSuffix(trimmed, "{") {
+			inBody = true
+			prev = ""
+			continue
+		}
+		if trimmed == "}" {
+			inBody = false
+			prev = ""
+			continue
+		}
+		if !inBody || trimmed == "" {
+			continue
+		}
+		if trimmed == prev {
+			t.Errorf("duplicate consecutive line %q at line %d", trimmed, i+1)
+			return
+		}
+		prev = trimmed
+	}
+}
+
+// stripCComments removes c-style block comments (/* ... */) from the output
+// so that register names inside disassembly annotations are not false positives.
+func stripCComments(s string) string {
+	commentPattern := regexp.MustCompile(`/\*[^*]*\*+(?:[^/*][^*]*\*+)*/`)
+	return commentPattern.ReplaceAllString(s, "")
+}
+
+// checkNoRawRegisterNames asserts that no x86-64 register name appears as a
+// standalone c identifier token in the output (excluding comments).
+func checkNoRawRegisterNames(t *testing.T, output string) {
+	t.Helper()
+
+	// strip comments so that disassembly annotations like
+	// "/* 0x116d: mov [rbp - 0x4], edi */" do not cause false positives
+	stripped := stripCComments(output)
+
+	registerPattern := regexp.MustCompile(
+		`\b(rax|rbx|rcx|rdx|rsi|rdi|rbp|rsp|r8|r9|r10|r11|r12|r13|r14|r15)\b`)
+	if loc := registerPattern.FindStringIndex(stripped); loc != nil {
+		ctxStart := max(loc[0]-40, 0)
+		ctxEnd := min(loc[1]+40, len(stripped))
+		t.Errorf("raw register name found in output near: %q", stripped[ctxStart:ctxEnd])
+	}
+}
+
+// checkNoFrameArtifacts asserts that no stack frame prologue/epilogue artifacts
+// appear in the output.
+func checkNoFrameArtifacts(t *testing.T, output string) {
+	t.Helper()
+
+	frameArtifacts := []string{
+		"rsp = (rsp - 8U)",
+		"rbp = rsp",
+		"*(uint64_t*)(rsp) = rbp",
+	}
+	for _, artifact := range frameArtifacts {
+		if strings.Contains(output, artifact) {
+			t.Errorf("frame artifact found in output: %q", artifact)
+		}
+	}
+}
+
+// TestDecompileRealBinary_OutputQuality validates all eight output-quality fixes
+// against a real ELF binary compiled from examples/test_decompiler.c.
+// each sub-test decompiles a specific function using --function to avoid hangs
+// on functions with complex switch-like cfgs.
+//
+// Validates: Requirements 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 2.10, 2.15, 2.16
+func TestDecompileRealBinary_OutputQuality(t *testing.T) {
+	binaryPath := compileTestDecompilerBinary(t)
+
+	// ------------------------------------------------------------------ //
+	// fix 1: no function body contains the same statement sequence more   //
+	// than once (no duplicate consecutive lines within a function body).  //
+	// test classify_int which has if/else chains that exercise the        //
+	// structuring engine's convergence logic.                             //
+	// ------------------------------------------------------------------ //
+	t.Run("Fix1_NoDuplicateConsecutiveLines", func(t *testing.T) {
+		output := decompileSingleFunc(t, binaryPath, "classify_int")
+		checkNoDuplicateConsecutiveLines(t, output)
+	})
+
+	// ------------------------------------------------------------------ //
+	// fix 2: main() must not have double arg0 / double arg1 in its        //
+	// signature -- main takes no parameters (or int argc, char **argv).   //
+	// ------------------------------------------------------------------ //
+	t.Run("Fix2_NoDoubleArgsInMainSignature", func(t *testing.T) {
+		output := decompileSingleFunc(t, binaryPath, "main")
+		for _, line := range strings.Split(output, "\n") {
+			if strings.Contains(line, "main") && strings.Contains(line, "(") {
+				if strings.Contains(line, "double arg0") || strings.Contains(line, "double arg1") {
+					t.Errorf("Fix 2 violation: main signature contains double parameter: %q", line)
+				}
+			}
+		}
+	})
+
+	// ------------------------------------------------------------------ //
+	// fix 3: no raw x86-64 register names appear as standalone c tokens.  //
+	// test add and max -- simple functions where register names should     //
+	// have been replaced by the variable-naming pass.                      //
+	// ------------------------------------------------------------------ //
+	t.Run("Fix3_NoRawRegisterNames_add", func(t *testing.T) {
+		output := decompileSingleFunc(t, binaryPath, "add")
+		checkNoRawRegisterNames(t, output)
+	})
+
+	t.Run("Fix3_NoRawRegisterNames_max", func(t *testing.T) {
+		output := decompileSingleFunc(t, binaryPath, "max")
+		checkNoRawRegisterNames(t, output)
+	})
+
+	// ------------------------------------------------------------------ //
+	// fix 4: no non-whitespace content after return before closing brace. //
+	// test abs_val which has an early return via ternary.                  //
+	// ------------------------------------------------------------------ //
+	t.Run("Fix4_NoDeadCodeAfterReturn", func(t *testing.T) {
+		output := decompileSingleFunc(t, binaryPath, "abs_val")
+		// strip comments to avoid false positives from annotation text
+		stripped := stripCComments(output)
+		// check that no non-whitespace statement follows a return in the same scope.
+		// the pattern looks for a return statement followed by a non-empty, non-brace line.
+		deadCodePattern := regexp.MustCompile(`(?m)return[^;]*;\s*$\n\s*[^}\s\n]`)
+		if deadCodePattern.MatchString(stripped) {
+			loc := deadCodePattern.FindStringIndex(stripped)
+			ctxEnd := min(loc[1]+20, len(stripped))
+			t.Errorf("Fix 4 violation: dead code after return statement near: %q",
+				stripped[loc[0]:ctxEnd])
+		}
+	})
+
+	// ------------------------------------------------------------------ //
+	// fix 5: every function name matches a valid c identifier pattern.    //
+	// check across multiple decompiled functions.                         //
+	// ------------------------------------------------------------------ //
+	t.Run("Fix5_ValidFunctionNames", func(t *testing.T) {
+		funcNamePattern := regexp.MustCompile(`(?m)^(?:void|int|uint\w*|char|double|float|\w+)\s+(\w+)\s*\(`)
+		validIdentifier := regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
+		// decompile several functions and check all emitted function names
+		for _, fn := range []string{"add", "max", "abs_val", "classify_int"} {
+			output := decompileSingleFunc(t, binaryPath, fn)
+			for _, m := range funcNamePattern.FindAllStringSubmatch(output, -1) {
+				if len(m) < 2 {
+					continue
+				}
+				name := strings.TrimSpace(m[1])
+				if name == "" {
+					continue
+				}
+				if !validIdentifier.MatchString(name) {
+					t.Errorf("Fix 5 violation: invalid C identifier %q in function %s output (match: %q)",
+						name, fn, m[0])
+				}
+			}
+		}
+	})
+
+	// ------------------------------------------------------------------ //
+	// fix 8: no stack frame prologue/epilogue artifacts in output.        //
+	// test add -- a simple function whose prologue/epilogue should be     //
+	// fully suppressed.                                                   //
+	// ------------------------------------------------------------------ //
+	t.Run("Fix8_NoFrameArtifacts", func(t *testing.T) {
+		output := decompileSingleFunc(t, binaryPath, "add")
+		checkNoFrameArtifacts(t, output)
+	})
+}
+
+// TestDecompileRealBinary_SymbolResolution validates that call targets are
+// resolved to symbol names (fix 6) and that large decimal integer literals
+// do not appear as memory addresses (fix 7).
+//
+// Validates: Requirements 2.11, 2.12, 2.13, 2.14
+func TestDecompileRealBinary_SymbolResolution(t *testing.T) {
+	binaryPath := compileTestDecompilerBinary(t)
+
+	// decompile main which calls printf and many other functions
+	output := decompileSingleFunc(t, binaryPath, "main")
+
+	// ------------------------------------------------------------------ //
+	// fix 6: output must contain resolved symbol names for call targets,  //
+	// not raw numeric addresses. main calls many local functions which     //
+	// should be resolved via the symbol table.                             //
+	// ------------------------------------------------------------------ //
+	t.Run("Fix6_ResolvedCallTargets", func(t *testing.T) {
+		// main calls local functions like add, sub, mul -- at least some must
+		// appear as resolved symbol names rather than raw numeric addresses.
+		resolvedCalls := []string{"add(", "sub(", "mul(", "max(", "fib("}
+		foundResolved := 0
+		for _, sym := range resolvedCalls {
+			if strings.Contains(output, sym) {
+				foundResolved++
+			}
+		}
+		if foundResolved == 0 {
+			t.Errorf("Fix 6 violation: no resolved call targets found in main output")
+		}
+
+		// no raw numeric address with 6+ digits followed by '(' (unresolved call target
+		// pattern for non-pie binaries where addresses are large)
+		rawCallPattern := regexp.MustCompile(`\b\d{6,}\s*\(`)
+		if loc := rawCallPattern.FindStringIndex(output); loc != nil {
+			ctxEnd := min(loc[1]+30, len(output))
+			t.Errorf("Fix 6 violation: raw numeric call target found near: %q", output[loc[0]:ctxEnd])
+		}
+	})
+
+	// ------------------------------------------------------------------ //
+	// fix 7: output must not contain large decimal integer literals used   //
+	// as memory addresses in dereference expressions.                     //
+	// ------------------------------------------------------------------ //
+	t.Run("Fix7_NoLargeDecimalAddresses", func(t *testing.T) {
+		// pattern: *(uintN_t*)(LARGE_DECIMAL) where the decimal has 6+ digits
+		largeAddrPattern := regexp.MustCompile(`\*\(uint\d+_t\*\)\(\d{6,}\)`)
+		if loc := largeAddrPattern.FindStringIndex(output); loc != nil {
+			ctxEnd := min(loc[1]+20, len(output))
+			t.Errorf("Fix 7 violation: large decimal address in dereference near: %q",
+				output[loc[0]:ctxEnd])
+		}
+	})
 }

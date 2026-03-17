@@ -619,3 +619,93 @@ func TestIndent(t *testing.T) {
 		t.Errorf("indent(2) = %q, want 8 spaces", indent(2))
 	}
 }
+
+// TestGenIRBlockTruncatesAfterReturn verifies that genIRBlock stops emitting
+// instructions after the first ir.Return instruction.
+func TestGenIRBlockTruncatesAfterReturn(t *testing.T) {
+	retVar := ir.Variable{Name: "rax", Type: ir.IntType{Width: ir.Size8, Signed: false}}
+	var1 := ir.Variable{Name: "var1", Type: ir.IntType{Width: ir.Size8, Signed: false}}
+	var2 := ir.Variable{Name: "var2", Type: ir.IntType{Width: ir.Size8, Signed: false}}
+
+	retVal := retVar
+	irBlock := structuring.IRBlock{
+		BlockID: 0,
+		Instructions: []ir.IRInstruction{
+			// first: a normal assign
+			ir.Assign{
+				Dest:   var1,
+				Source: ir.ConstantExpr{Value: ir.IntConstant{Value: 1, Width: ir.Size8}},
+			},
+			// second: return
+			ir.Return{Value: &retVal},
+			// third: dead assign after return
+			ir.Assign{
+				Dest:   var2,
+				Source: ir.ConstantExpr{Value: ir.IntConstant{Value: 2, Width: ir.Size8}},
+			},
+		},
+	}
+
+	fn := &ir.Function{
+		Name:      "test_func",
+		Signature: ir.FunctionType{ReturnType: ir.VoidType{}},
+		Blocks:    map[ir.BlockID]*ir.BasicBlock{},
+	}
+	ast := &structuring.StructuredAST{Body: irBlock, FunctionID: 0}
+	state := newGeneratorState(fn, ast)
+
+	output := state.genIRBlock(irBlock, 0)
+
+	// must contain the first assign and the return
+	if !strings.Contains(output, "var1") {
+		t.Errorf("expected var1 assignment in output, got:\n%s", output)
+	}
+	if !strings.Contains(output, "return") {
+		t.Errorf("expected return statement in output, got:\n%s", output)
+	}
+	// must NOT contain the dead assign after return
+	if strings.Contains(output, "var2") {
+		t.Errorf("dead code after return: var2 should not appear in output, got:\n%s", output)
+	}
+}
+
+// TestGenBlockTruncatesAfterReturnStatement verifies that genBlock stops
+// emitting sibling statements after a return-containing IRBlock.
+func TestGenBlockTruncatesAfterReturnStatement(t *testing.T) {
+	retVar := ir.Variable{Name: "rax", Type: ir.IntType{Width: ir.Size8, Signed: false}}
+	deadVar := ir.Variable{Name: "dead_var", Type: ir.IntType{Width: ir.Size8, Signed: false}}
+
+	retVal := retVar
+	retBlock := structuring.IRBlock{
+		BlockID:      0,
+		Instructions: []ir.IRInstruction{ir.Return{Value: &retVal}},
+	}
+	deadBlock := structuring.IRBlock{
+		BlockID: 1,
+		Instructions: []ir.IRInstruction{
+			ir.Assign{
+				Dest:   deadVar,
+				Source: ir.ConstantExpr{Value: ir.IntConstant{Value: 99, Width: ir.Size8}},
+			},
+		},
+	}
+
+	block := structuring.Block{Stmts: []structuring.Statement{retBlock, deadBlock}}
+
+	fn := &ir.Function{
+		Name:      "test_func",
+		Signature: ir.FunctionType{ReturnType: ir.VoidType{}},
+		Blocks:    map[ir.BlockID]*ir.BasicBlock{},
+	}
+	ast := &structuring.StructuredAST{Body: block, FunctionID: 0}
+	state := newGeneratorState(fn, ast)
+
+	output := state.genBlock(block, 0)
+
+	if !strings.Contains(output, "return") {
+		t.Errorf("expected return in output, got:\n%s", output)
+	}
+	if strings.Contains(output, "dead_var") {
+		t.Errorf("dead code after return: dead_var should not appear in output, got:\n%s", output)
+	}
+}

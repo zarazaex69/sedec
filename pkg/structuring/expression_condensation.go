@@ -517,9 +517,22 @@ func flattenToBlock(stmts []Statement) Statement {
 //   - the variable is defined exactly once in the block
 //   - the variable is used exactly once across all subsequent statements
 //   - the defining expression has no side effects (no Call, Load, Store)
+//
+// maxInlineDepth guards against pathologically deep ASTs (e.g. switch tables
+// with many cases) that would otherwise cause unbounded recursion.
+const maxInlineDepth = 512
+
 func inlineSingleUseTemps(stmt Statement) Statement {
+	return inlineSingleUseTempsDepth(stmt, 0)
+}
+
+func inlineSingleUseTempsDepth(stmt Statement, depth int) Statement {
 	if stmt == nil {
 		return nil
+	}
+	// bail out on pathologically deep nesting to avoid stack overflow
+	if depth > maxInlineDepth {
+		return stmt
 	}
 
 	switch s := stmt.(type) {
@@ -527,7 +540,7 @@ func inlineSingleUseTemps(stmt Statement) Statement {
 		// first recurse into children
 		stmts := make([]Statement, len(s.Stmts))
 		for i, child := range s.Stmts {
-			stmts[i] = inlineSingleUseTemps(child)
+			stmts[i] = inlineSingleUseTempsDepth(child, depth+1)
 		}
 
 		// collect single-definition candidates from IRBlock nodes.
@@ -655,32 +668,32 @@ func inlineSingleUseTemps(stmt Statement) Statement {
 		return Block{Stmts: final}
 
 	case IfStatement:
-		then := inlineSingleUseTemps(s.Then)
+		then := inlineSingleUseTempsDepth(s.Then, depth+1)
 		var els Statement
 		if s.Else != nil {
-			els = inlineSingleUseTemps(s.Else)
+			els = inlineSingleUseTempsDepth(s.Else, depth+1)
 		}
 		return IfStatement{Condition: s.Condition, Then: then, Else: els}
 
 	case WhileStatement:
-		return WhileStatement{Condition: s.Condition, Body: inlineSingleUseTemps(s.Body)}
+		return WhileStatement{Condition: s.Condition, Body: inlineSingleUseTempsDepth(s.Body, depth+1)}
 
 	case DoWhileStatement:
-		return DoWhileStatement{Body: inlineSingleUseTemps(s.Body), Condition: s.Condition}
+		return DoWhileStatement{Body: inlineSingleUseTempsDepth(s.Body, depth+1), Condition: s.Condition}
 
 	case ForStatement:
 		var init, post Statement
 		if s.Init != nil {
-			init = inlineSingleUseTemps(s.Init)
+			init = inlineSingleUseTempsDepth(s.Init, depth+1)
 		}
 		if s.Post != nil {
-			post = inlineSingleUseTemps(s.Post)
+			post = inlineSingleUseTempsDepth(s.Post, depth+1)
 		}
 		return ForStatement{
 			Init:      init,
 			Condition: s.Condition,
 			Post:      post,
-			Body:      inlineSingleUseTemps(s.Body),
+			Body:      inlineSingleUseTempsDepth(s.Body, depth+1),
 		}
 
 	default:
@@ -760,13 +773,20 @@ func isPureExpr(expr ir.Expression) bool {
 // countVarUses walks a Statement and increments useCount for every
 // VariableExpr encountered in expressions.
 func countVarUses(stmt Statement, useCount map[string]int) {
-	if stmt == nil {
+	countVarUsesDepth(stmt, useCount, 0)
+}
+
+// maxCountDepth guards against pathologically deep ASTs in countVarUses.
+const maxCountDepth = 1024
+
+func countVarUsesDepth(stmt Statement, useCount map[string]int, depth int) {
+	if stmt == nil || depth > maxCountDepth {
 		return
 	}
 	switch s := stmt.(type) {
 	case Block:
 		for _, child := range s.Stmts {
-			countVarUses(child, useCount)
+			countVarUsesDepth(child, useCount, depth+1)
 		}
 	case IRBlock:
 		for _, instr := range s.Instructions {
@@ -774,25 +794,25 @@ func countVarUses(stmt Statement, useCount map[string]int) {
 		}
 	case IfStatement:
 		countVarUsesInExpr(s.Condition, useCount)
-		countVarUses(s.Then, useCount)
+		countVarUsesDepth(s.Then, useCount, depth+1)
 		if s.Else != nil {
-			countVarUses(s.Else, useCount)
+			countVarUsesDepth(s.Else, useCount, depth+1)
 		}
 	case WhileStatement:
 		countVarUsesInExpr(s.Condition, useCount)
-		countVarUses(s.Body, useCount)
+		countVarUsesDepth(s.Body, useCount, depth+1)
 	case DoWhileStatement:
-		countVarUses(s.Body, useCount)
+		countVarUsesDepth(s.Body, useCount, depth+1)
 		countVarUsesInExpr(s.Condition, useCount)
 	case ForStatement:
 		if s.Init != nil {
-			countVarUses(s.Init, useCount)
+			countVarUsesDepth(s.Init, useCount, depth+1)
 		}
 		countVarUsesInExpr(s.Condition, useCount)
 		if s.Post != nil {
-			countVarUses(s.Post, useCount)
+			countVarUsesDepth(s.Post, useCount, depth+1)
 		}
-		countVarUses(s.Body, useCount)
+		countVarUsesDepth(s.Body, useCount, depth+1)
 	case ReturnStatement:
 		if s.Value != nil {
 			countVarUsesInExpr(s.Value, useCount)
