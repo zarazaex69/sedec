@@ -11,17 +11,13 @@ import (
 // systemV integer parameter registers in order (System V AMD64 ABI §3.2.3)
 var systemVIntParamRegs = []string{"rdi", "rsi", "rdx", "rcx", "r8", "r9"}
 
-// systemV float parameter registers in order (xmm0–xmm7)
+// systemV float parameter registers in order (xmm0-xmm7)
 var systemVFloatParamRegs = []string{
 	"xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7",
 }
 
 // systemV callee-saved registers (System V AMD64 ABI §3.2.1 table 3.4)
 var systemVCalleeSaved = []string{"rbx", "rbp", "r12", "r13", "r14", "r15"}
-
-// systemV return value registers (used for documentation; logic is inline)
-// integer: rax (primary), rdx (secondary for 128-bit)
-// float:   xmm0 (primary), xmm1 (secondary for complex/128-bit)
 
 // SystemVAnalyzer implements ABI analysis for the System V AMD64 calling convention.
 // This is the standard ABI on Linux, macOS, FreeBSD, and other Unix-like systems.
@@ -55,22 +51,54 @@ func isReadModifyWrite(mnemonic string) bool {
 	return false
 }
 
+// isVarargsSaveInstruction returns true when the instruction is a System V §3.5.7
+// register save area write: movaps/movdqa/vmovaps/movups/movdqu [rsp+N>=48], xmmK.
+// these instructions save xmm parameter registers to the varargs register save area
+// and must NOT be treated as genuine float parameter reads.
+func isVarargsSaveInstruction(insn *disasm.Instruction) bool {
+	// check mnemonic - only vector store mnemonics used for varargs saves
+	switch strings.ToLower(insn.Mnemonic) {
+	case "movaps", "movdqa", "vmovaps", "movups", "movdqu":
+		// valid mnemonic - continue checking
+	default:
+		return false
+	}
+
+	// must have exactly two operands: [rsp+N] as destination, xmmK as source
+	if len(insn.Operands) != 2 {
+		return false
+	}
+
+	// operand[0] must be a memory operand with base=rsp and disp>=48
+	memOp, isMem := insn.Operands[0].(disasm.MemoryOperand)
+	if !isMem {
+		return false
+	}
+	if strings.ToLower(memOp.Base) != regRsp || memOp.Disp < 48 {
+		return false
+	}
+
+	// operand[1] must be a register operand whose canonical name is in systemVFloatParamRegs
+	regOp, isReg := insn.Operands[1].(disasm.RegisterOperand)
+	if !isReg {
+		return false
+	}
+	canonical := canonicalizeRegister(strings.ToLower(regOp.Name))
+	for _, xmmReg := range systemVFloatParamRegs {
+		if canonical == xmmReg {
+			return true
+		}
+	}
+	return false
+}
+
 // IdentifyParameters extracts function parameters from a sequence of instructions.
 // It scans the function prologue and call sites to determine which argument
 // registers and stack slots are used as parameters.
 //
 // System V AMD64 parameter passing rules (§3.2.3):
-//   - Integer/pointer args 1–6: RDI, RSI, RDX, RCX, R8, R9
-//   - Float/SSE args 1–8: XMM0–XMM7
-//   - Additional args: pushed on stack right-to-left, 8-byte aligned
-//
-// IdentifyParameters extracts function parameters from a sequence of instructions.
-// It scans the function prologue and call sites to determine which argument
-// registers and stack slots are used as parameters.
-//
-// System V AMD64 parameter passing rules (§3.2.3):
-//   - Integer/pointer args 1–6: RDI, RSI, RDX, RCX, R8, R9
-//   - Float/SSE args 1–8: XMM0–XMM7
+//   - Integer/pointer args 1-6: RDI, RSI, RDX, RCX, R8, R9
+//   - Float/SSE args 1-8: XMM0-XMM7
 //   - Additional args: pushed on stack right-to-left, 8-byte aligned
 //   - Variadic functions: AL must contain the number of XMM registers used
 func (a *SystemVAnalyzer) IdentifyParameters(insns []*disasm.Instruction) []Parameter {
@@ -100,9 +128,19 @@ func (a *SystemVAnalyzer) IdentifyParameters(insns []*disasm.Instruction) []Para
 	for _, insn := range insns {
 		mnemonic := strings.ToLower(insn.Mnemonic)
 
-		// stop scanning at first call or ret — we only care about prologue reads
+		// stop scanning at first call or ret - we only care about prologue reads
 		if mnemonic == mnemonicCall || mnemonic == mnemonicRet || mnemonic == mnemonicRetn {
 			break
+		}
+
+		// detect varargs save area writes: movaps [rsp+N>=48], xmmK.
+		// pre-mark all xmm registers as written so matchFloatParam will skip them.
+		// this prevents xmm save-area stores from being misclassified as float params.
+		if isVarargsSaveInstruction(insn) {
+			for _, xmmReg := range systemVFloatParamRegs {
+				floatRegWritten[xmmReg] = true
+			}
+			continue
 		}
 
 		rmw := isReadModifyWrite(mnemonic)
@@ -136,7 +174,8 @@ func (a *SystemVAnalyzer) IdentifyParameters(insns []*disasm.Instruction) []Para
 				base := strings.ToLower(typedOp.Base)
 				if base == regRsp && typedOp.Disp >= 16 && !stackParamsSeen[typedOp.Disp] {
 					stackParamsSeen[typedOp.Disp] = true
-					totalIdx := intParamIdx + floatParamIdx + stackParamIdx
+					// use len(params) to avoid gaps when float params are skipped
+					totalIdx := len(params)
 					params = append(params, Parameter{
 						Name:        fmt.Sprintf("arg%d", totalIdx),
 						Type:        ir.IntType{Width: ir.Size8, Signed: false},
@@ -235,7 +274,7 @@ func (a *SystemVAnalyzer) IdentifyReturnValues(insns []*disasm.Instruction) []Re
 	}
 
 	if retIdx < 0 {
-		// no ret found — function may be a noreturn or tail-call
+		// no ret found - function may be a noreturn or tail-call
 		return nil
 	}
 
@@ -244,7 +283,7 @@ func (a *SystemVAnalyzer) IdentifyReturnValues(insns []*disasm.Instruction) []Re
 		insn := insns[i]
 		mnemonic := strings.ToLower(insn.Mnemonic)
 
-		// stop at call boundaries — return value must be set after last call
+		// stop at call boundaries - return value must be set after last call
 		if mnemonic == mnemonicCall {
 			break
 		}
@@ -312,7 +351,7 @@ func (a *SystemVAnalyzer) IdentifyReturnValues(insns []*disasm.Instruction) []Re
 //
 // A register is considered "clobbered" (not preserved) if it is written
 // without a prior save to the stack. Any write to the register's destination
-// operand counts as a modification — not just push/pop.
+// operand counts as a modification - not just push/pop.
 func (a *SystemVAnalyzer) VerifyCalleeSavedRegisters(insns []*disasm.Instruction) []CalleeSavedRegisterStatus {
 	return verifyCalleeSavedRegistersCommon(insns, systemVCalleeSaved)
 }
@@ -321,13 +360,13 @@ func (a *SystemVAnalyzer) VerifyCalleeSavedRegisters(insns []*disasm.Instruction
 // It computes the RSP offset relative to function entry at each instruction address.
 //
 // The algorithm processes instructions sequentially and updates the running offset:
-//   - sub rsp, N  → offset -= N
-//   - add rsp, N  → offset += N
-//   - push        → offset -= 8
-//   - pop         → offset += 8
-//   - call        → offset -= 8 (return address pushed), then +8 after return
-//   - and rsp, -N → alignment: new offset = offset & (-N), computed symbolically
-//   - sub rsp, reg → symbolic offset (alloca-style dynamic allocation)
+//   - sub rsp, N  -> offset -= N
+//   - add rsp, N  -> offset += N
+//   - push        -> offset -= 8
+//   - pop         -> offset += 8
+//   - call        -> offset -= 8 (return address pushed), then +8 after return
+//   - and rsp, -N -> alignment: new offset = offset & (-N), computed symbolically
+//   - sub rsp, reg -> symbolic offset (alloca-style dynamic allocation)
 func (a *SystemVAnalyzer) TrackStackPointer(insns []*disasm.Instruction) *SymbolicStackTracker {
 	tracker := NewSymbolicStackTracker()
 
@@ -366,7 +405,7 @@ func (a *SystemVAnalyzer) TrackStackPointer(insns []*disasm.Instruction) *Symbol
 			currentOffset = adjustOffset(currentOffset, size)
 
 		case mnemonicCall:
-			// after the call returns, RSP is restored — we model the net effect as 0.
+			// after the call returns, RSP is restored - we model the net effect as 0.
 			// (the callee is responsible for its own frame)
 			// no change to currentOffset from caller's perspective
 
@@ -414,7 +453,7 @@ func (a *SystemVAnalyzer) handleSubInstruction(
 		return adjustOffset(current, -immOp.Value)
 	}
 
-	// sub rsp, register — dynamic allocation (alloca)
+	// sub rsp, register - dynamic allocation (alloca)
 	if regOp, ok := insn.Operands[1].(disasm.RegisterOperand); ok {
 		varName := strings.ToLower(regOp.Name)
 		base := current.BaseOffset()
@@ -443,7 +482,7 @@ func (a *SystemVAnalyzer) handleAddInstruction(
 		return current
 	}
 
-	// add rsp, immediate — frame deallocation
+	// add rsp, immediate - frame deallocation
 	if immOp, ok := insn.Operands[1].(disasm.ImmediateOperand); ok {
 		return adjustOffset(current, immOp.Value)
 	}

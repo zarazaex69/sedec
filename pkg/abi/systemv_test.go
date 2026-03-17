@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/zarazaex69/sedec/pkg/disasm"
+	"github.com/zarazaex69/sedec/pkg/ir"
 )
 
 // buildInsn is a test helper that creates a minimal Instruction
@@ -544,5 +545,147 @@ func TestSystemVAnalyzer_Analyze_Complete(t *testing.T) {
 		if (s.Register == "rbx" || s.Register == "rbp") && !s.Preserved {
 			t.Errorf("register %s should be preserved", s.Register)
 		}
+	}
+}
+
+// TestIdentifyParametersVariadicNoFloatMisclassification verifies that a variadic
+// function prologue containing movaps [rsp+N], xmmK BEFORE integer register reads
+// does NOT produce float-typed parameters for the integer registers.
+//
+// sequence under test:
+//
+//	movaps [rsp+48], xmm0   ; varargs save area write - NOT a float param
+//	movaps [rsp+64], xmm1   ; varargs save area write - NOT a float param
+//	mov    [rsp+8],  rdi    ; first integer argument save
+//	mov    [rsp+16], rsi    ; second integer argument save
+//	ret
+func TestIdentifyParametersVariadicNoFloatMisclassification(t *testing.T) {
+	insns := []*disasm.Instruction{
+		// varargs register save area writes (System V §3.5.7)
+		{
+			Address:  0x1000,
+			Mnemonic: "movaps",
+			Operands: []disasm.Operand{
+				disasm.MemoryOperand{Base: "rsp", Disp: 48, Size: disasm.Size64},
+				disasm.RegisterOperand{Name: "xmm0", Size: disasm.Size64},
+			},
+			Length: 5,
+		},
+		{
+			Address:  0x1005,
+			Mnemonic: "movaps",
+			Operands: []disasm.Operand{
+				disasm.MemoryOperand{Base: "rsp", Disp: 64, Size: disasm.Size64},
+				disasm.RegisterOperand{Name: "xmm1", Size: disasm.Size64},
+			},
+			Length: 5,
+		},
+		// integer argument register saves
+		{
+			Address:  0x100a,
+			Mnemonic: "mov",
+			Operands: []disasm.Operand{
+				disasm.MemoryOperand{Base: "rsp", Disp: 8, Size: disasm.Size64},
+				disasm.RegisterOperand{Name: "rdi", Size: disasm.Size64},
+			},
+			Length: 4,
+		},
+		{
+			Address:  0x100e,
+			Mnemonic: "mov",
+			Operands: []disasm.Operand{
+				disasm.MemoryOperand{Base: "rsp", Disp: 16, Size: disasm.Size64},
+				disasm.RegisterOperand{Name: "rsi", Size: disasm.Size64},
+			},
+			Length: 4,
+		},
+		buildInsn(0x1012, "ret"),
+	}
+
+	a := SystemVAnalyzer{}
+	params := a.IdentifyParameters(insns)
+
+	// assert rdi parameter has IntType
+	var rdiParam, rsiParam *Parameter
+	for i := range params {
+		switch params[i].Register {
+		case "rdi":
+			rdiParam = &params[i]
+		case "rsi":
+			rsiParam = &params[i]
+		}
+	}
+
+	expectedIntType := ir.IntType{Width: ir.Size8, Signed: false}
+
+	if rdiParam == nil {
+		t.Error("rdi not detected as parameter")
+	} else if rdiParam.Type != expectedIntType {
+		t.Errorf("rdi type: expected IntType{Size8,false}, got %T(%v)", rdiParam.Type, rdiParam.Type)
+	}
+
+	if rsiParam == nil {
+		t.Error("rsi not detected as parameter")
+	} else if rsiParam.Type != expectedIntType {
+		t.Errorf("rsi type: expected IntType{Size8,false}, got %T(%v)", rsiParam.Type, rsiParam.Type)
+	}
+
+	// assert no parameter has FloatType - xmm0/xmm1 were saved, not read as args
+	for _, p := range params {
+		if _, isFloat := p.Type.(ir.FloatType); isFloat {
+			t.Errorf("parameter %s (register=%s) has FloatType - varargs save misclassified as float param",
+				p.Name, p.Register)
+		}
+	}
+}
+
+// TestIdentifyParametersGenuineFloatPreservation verifies that a genuine float
+// argument prologue (xmm0 read before any integer register) still produces
+// ir.FloatType for xmm0. this is the preservation test for the varargs fix.
+//
+// sequence under test:
+//
+//	movsd xmm1, xmm0   ; reads xmm0 as source - genuine float argument
+//	mov   rax, rdi     ; reads rdi - integer argument
+//	ret
+func TestIdentifyParametersGenuineFloatPreservation(t *testing.T) {
+	insns := []*disasm.Instruction{
+		// movsd xmm1, xmm0 - reads xmm0 as a genuine float argument
+		{
+			Address:  0x1000,
+			Mnemonic: "movsd",
+			Operands: []disasm.Operand{
+				disasm.RegisterOperand{Name: "xmm1", Size: disasm.Size64},
+				disasm.RegisterOperand{Name: "xmm0", Size: disasm.Size64},
+			},
+			Length: 4,
+		},
+		// mov rax, rdi - reads rdi as integer argument
+		buildInsn(0x1004, "mov",
+			disasm.RegisterOperand{Name: "rax", Size: disasm.Size64},
+			disasm.RegisterOperand{Name: "rdi", Size: disasm.Size64},
+		),
+		buildInsn(0x1007, "ret"),
+	}
+
+	a := SystemVAnalyzer{}
+	params := a.IdentifyParameters(insns)
+
+	// xmm0 must be classified as FloatType - it was read as a genuine float arg
+	var xmm0Param *Parameter
+	for i := range params {
+		if params[i].Register == "xmm0" {
+			xmm0Param = &params[i]
+			break
+		}
+	}
+
+	if xmm0Param == nil {
+		t.Fatal("xmm0 not detected as parameter in genuine float prologue")
+	}
+
+	expectedFloatType := ir.FloatType{Width: ir.Size8}
+	if xmm0Param.Type != expectedFloatType {
+		t.Errorf("xmm0 type: expected FloatType{Size8}, got %T(%v)", xmm0Param.Type, xmm0Param.Type)
 	}
 }
