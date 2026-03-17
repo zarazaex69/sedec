@@ -1,0 +1,26 @@
+# 2026/03/17 23:06:10.423437 [TestProperty8_BugCondition_RapidFrameArtifacts] [rapid] draw frameSize: 16
+# 2026/03/17 23:06:10.423445 [TestProperty8_BugCondition_RapidFrameArtifacts] [rapid] draw baseAddr: 0x401000
+# 2026/03/17 23:06:10.423613 [TestProperty8_BugCondition_RapidFrameArtifacts] counterexample: frameSize=0x10, baseAddr=0x401000
+# output contains frame management artifact: "rsp = (rsp - 8U);"
+# the ir lifter emits push rbp as:
+#   rsp = (rsp - 8U);
+#   *(uint64_t*)(rsp) = rbp;
+# and mov rbp, rsp as:
+#   rbp = rsp;
+# no pass in the unfixed pipeline marks these as frame artifacts
+# or suppresses them — they appear verbatim in the generated c output.
+# generated output:
+# uint64_t rapid_frame_func_401000()
+# {
+#     rsp = (rsp - 8U); /* 0x401000: push rbp */
+#     *(uint64_t*)(rsp) = rbp; /* 0x401000: push rbp */
+#     return rax; /* 0x40100f: ret */
+# 
+# }
+# 
+v0.4.8#3756841388812325745
+0x0
+0x0
+0x0
+0x0
+0x0
