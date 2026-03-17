@@ -10,6 +10,39 @@ import (
 	"github.com/zarazaex69/sedec/pkg/ir"
 )
 
+// x86_64RegisterNames is the complete set of x86-64 register names (lowercase).
+// used by the register variable renaming pass to identify variables that must be renamed.
+var x86_64RegisterNames = map[string]bool{
+	// 64-bit general purpose
+	"rax": true, "rbx": true, "rcx": true, "rdx": true,
+	"rsi": true, "rdi": true, "rbp": true, "rsp": true,
+	"r8": true, "r9": true, "r10": true, "r11": true,
+	"r12": true, "r13": true, "r14": true, "r15": true,
+	// 32-bit general purpose
+	"eax": true, "ebx": true, "ecx": true, "edx": true,
+	"esi": true, "edi": true, "ebp": true, "esp": true,
+	"r8d": true, "r9d": true, "r10d": true, "r11d": true,
+	"r12d": true, "r13d": true, "r14d": true, "r15d": true,
+	// 16-bit general purpose
+	"ax": true, "bx": true, "cx": true, "dx": true,
+	"si": true, "di": true, "bp": true, "sp": true,
+	"r8w": true, "r9w": true, "r10w": true, "r11w": true,
+	"r12w": true, "r13w": true, "r14w": true, "r15w": true,
+	// 8-bit general purpose
+	"al": true, "ah": true, "bl": true, "bh": true,
+	"cl": true, "ch": true, "dl": true, "dh": true,
+	"sil": true, "dil": true, "bpl": true, "spl": true,
+	"r8b": true, "r9b": true, "r10b": true, "r11b": true,
+	"r12b": true, "r13b": true, "r14b": true, "r15b": true,
+	// xmm registers (128-bit sse/avx)
+	"xmm0": true, "xmm1": true, "xmm2": true, "xmm3": true,
+	"xmm4": true, "xmm5": true, "xmm6": true, "xmm7": true,
+	"xmm8": true, "xmm9": true, "xmm10": true, "xmm11": true,
+	"xmm12": true, "xmm13": true, "xmm14": true, "xmm15": true,
+	// instruction pointer and flags
+	"rip": true, "eip": true, "rflags": true, "eflags": true,
+}
+
 // systemVIntArgRegs is the ordered list of integer argument registers for System V AMD64.
 // arguments are passed left-to-right in these registers (§3.2.3 of the ABI spec).
 var systemVIntArgRegs = []string{"rdi", "rsi", "rdx", "rcx", "r8", "r9"}
@@ -23,14 +56,15 @@ var msX64IntArgRegs = []string{"rcx", "rdx", "r8", "r9"}
 // it also sets the function signature (parameters and return type) on irFunc.
 // db is the ground-truth database used to resolve call target addresses to symbol names;
 // it may be nil (e.g., in unit tests), in which case no resolution is performed.
-func applyABIPass(irFunc *ir.Function, rawInsns []*disasm.Instruction, db *binfmt.GroundTruthDatabase) {
+// returns the FunctionABI result for use by downstream passes (e.g., renameRegisterVariables).
+func applyABIPass(irFunc *ir.Function, rawInsns []*disasm.Instruction, db *binfmt.GroundTruthDatabase) *abi.FunctionABI {
 	// detect calling convention from binary format / platform heuristic.
 	// for now we default to system v amd64 (linux/macos); windows binaries
 	// would need pe format detection to switch to microsoft x64.
 	convention := abi.CallingConventionSystemVAMD64
 	analyzer, err := abi.NewAnalyzer(convention)
 	if err != nil {
-		return
+		return nil
 	}
 
 	// run full abi analysis on the raw instruction stream
@@ -119,6 +153,8 @@ func applyABIPass(irFunc *ir.Function, rawInsns []*disasm.Instruction, db *binfm
 			}
 		}
 	}
+
+	return funcABI
 }
 
 // collectCallArgsResult holds the result of collectCallArgs.

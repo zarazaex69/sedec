@@ -29,11 +29,11 @@ import (
 	"pgregory.net/rapid"
 )
 
-// x86_64RegisterNames is the complete set of x86-64 hardware register names
+// x86_64RegisterNamesList is the complete set of x86-64 hardware register names
 // that must never appear as standalone c identifier tokens in generated output.
 // this covers all general-purpose registers in all widths, xmm registers,
 // and all sub-register aliases.
-var x86_64RegisterNames = []string{
+var x86_64RegisterNamesList = []string{
 	// 64-bit general purpose
 	"rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp",
 	"r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
@@ -63,7 +63,7 @@ func buildRegisterBoundaryPattern(regName string) *regexp.Regexp {
 // any x86-64 register name as a standalone identifier token.
 // returns the first offending register name found, or empty string if clean.
 func containsRegisterToken(cSource string) string {
-	for _, reg := range x86_64RegisterNames {
+	for _, reg := range x86_64RegisterNamesList {
 		pat := buildRegisterBoundaryPattern(reg)
 		if pat.MatchString(cSource) {
 			return reg
@@ -167,8 +167,8 @@ func TestProperty3_BugCondition_ConcreteMovRaxRdi(t *testing.T) {
 // registerNameGenerator is a rapid generator that draws a random x86-64 register name.
 func registerNameGenerator() *rapid.Generator[string] {
 	return rapid.Custom(func(t *rapid.T) string {
-		idx := rapid.IntRange(0, len(x86_64RegisterNames)-1).Draw(t, "regIdx")
-		return x86_64RegisterNames[idx]
+		idx := rapid.IntRange(0, len(x86_64RegisterNamesList)-1).Draw(t, "regIdx")
+		return x86_64RegisterNamesList[idx]
 	})
 }
 

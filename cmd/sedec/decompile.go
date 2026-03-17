@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/zarazaex69/sedec/pkg/abi"
 	"github.com/zarazaex69/sedec/pkg/analysis"
 	binfmt "github.com/zarazaex69/sedec/pkg/binary"
 	"github.com/zarazaex69/sedec/pkg/cfg"
@@ -645,6 +646,230 @@ func symbolizeExpr(
 	}
 }
 
+// renameRegisterVariables replaces raw x86-64 register names in irFunc with
+// human-readable c variable names.
+//
+// step 1: map parameter registers to argN names from funcABI.
+// step 2: assign synthetic var_N names to all other register-named variables.
+// step 3: walk all ir instructions and rename every variable occurrence.
+// step 4: rebuild irFunc.Variables with the renamed names.
+func renameRegisterVariables(irFunc *ir.Function, funcABI *abi.FunctionABI) {
+	// step 1: build register → parameter name map from abi analysis
+	regToName := make(map[string]string)
+	for _, param := range funcABI.Parameters {
+		if param.Location != abi.ParameterLocationRegister || param.Register == "" {
+			continue
+		}
+		argName := fmt.Sprintf("arg%d", param.Index)
+		canonical := strings.ToLower(param.Register)
+		regToName[canonical] = argName
+		// also map all sub-register aliases to the same arg name
+		for alias, canon := range buildAliasMap() {
+			if canon == canonical {
+				regToName[alias] = argName
+			}
+		}
+	}
+
+	// step 2: synthetic name counter and lazy assignment map
+	syntheticNames := make(map[string]string)
+	varCounter := 0
+
+	// renameVar maps a single variable to its renamed form.
+	// parameter registers → argN; other registers → var_N; non-registers → unchanged.
+	renameVar := func(v ir.Variable) ir.Variable {
+		lower := strings.ToLower(v.Name)
+		if !x86_64RegisterNames[lower] {
+			return v
+		}
+		if name, ok := regToName[lower]; ok {
+			return ir.Variable{Name: name, Type: v.Type, Version: v.Version}
+		}
+		if name, ok := syntheticNames[lower]; ok {
+			return ir.Variable{Name: name, Type: v.Type, Version: v.Version}
+		}
+		name := fmt.Sprintf("var_%d", varCounter)
+		varCounter++
+		syntheticNames[lower] = name
+		return ir.Variable{Name: name, Type: v.Type, Version: v.Version}
+	}
+
+	// renameExpr recursively renames all variable references in an expression.
+	var renameExpr func(expr ir.Expression) ir.Expression
+	renameExpr = func(expr ir.Expression) ir.Expression {
+		if expr == nil {
+			return expr
+		}
+		switch e := expr.(type) {
+		case ir.VariableExpr:
+			return ir.VariableExpr{Var: renameVar(e.Var)}
+		case *ir.VariableExpr:
+			return ir.VariableExpr{Var: renameVar(e.Var)}
+		case ir.BinaryOp:
+			return ir.BinaryOp{Op: e.Op, Left: renameExpr(e.Left), Right: renameExpr(e.Right)}
+		case *ir.BinaryOp:
+			return ir.BinaryOp{Op: e.Op, Left: renameExpr(e.Left), Right: renameExpr(e.Right)}
+		case ir.UnaryOp:
+			return ir.UnaryOp{Op: e.Op, Operand: renameExpr(e.Operand)}
+		case *ir.UnaryOp:
+			return ir.UnaryOp{Op: e.Op, Operand: renameExpr(e.Operand)}
+		case ir.Cast:
+			return ir.Cast{Expr: renameExpr(e.Expr), TargetType: e.TargetType}
+		case *ir.Cast:
+			return ir.Cast{Expr: renameExpr(e.Expr), TargetType: e.TargetType}
+		case ir.LoadExpr:
+			return ir.LoadExpr{Address: renameExpr(e.Address), Size: e.Size}
+		case *ir.LoadExpr:
+			return ir.LoadExpr{Address: renameExpr(e.Address), Size: e.Size}
+		default:
+			return expr
+		}
+	}
+
+	// renameInstr renames all variable references in a single ir instruction.
+	renameInstr := func(instr ir.IRInstruction) ir.IRInstruction {
+		switch typed := instr.(type) {
+		case *ir.Assign:
+			typed.Dest = renameVar(typed.Dest)
+			typed.Source = renameExpr(typed.Source)
+		case ir.Assign:
+			updated := typed
+			updated.Dest = renameVar(typed.Dest)
+			updated.Source = renameExpr(typed.Source)
+			return updated
+		case *ir.Load:
+			typed.Dest = renameVar(typed.Dest)
+			typed.Address = renameExpr(typed.Address)
+		case ir.Load:
+			updated := typed
+			updated.Dest = renameVar(typed.Dest)
+			updated.Address = renameExpr(typed.Address)
+			return updated
+		case *ir.Store:
+			typed.Address = renameExpr(typed.Address)
+			typed.Value = renameExpr(typed.Value)
+		case ir.Store:
+			updated := typed
+			updated.Address = renameExpr(typed.Address)
+			updated.Value = renameExpr(typed.Value)
+			return updated
+		case *ir.Call:
+			if typed.Dest != nil {
+				renamed := renameVar(*typed.Dest)
+				typed.Dest = &renamed
+			}
+			typed.Target = renameExpr(typed.Target)
+			for i, arg := range typed.Args {
+				typed.Args[i] = renameVar(arg)
+			}
+			for i, argExpr := range typed.ArgExprs {
+				typed.ArgExprs[i] = renameExpr(argExpr)
+			}
+		case ir.Call:
+			updated := typed
+			if typed.Dest != nil {
+				renamed := renameVar(*typed.Dest)
+				updated.Dest = &renamed
+			}
+			updated.Target = renameExpr(typed.Target)
+			newArgs := make([]ir.Variable, len(typed.Args))
+			for i, arg := range typed.Args {
+				newArgs[i] = renameVar(arg)
+			}
+			updated.Args = newArgs
+			newArgExprs := make([]ir.Expression, len(typed.ArgExprs))
+			for i, argExpr := range typed.ArgExprs {
+				newArgExprs[i] = renameExpr(argExpr)
+			}
+			updated.ArgExprs = newArgExprs
+			return updated
+		case *ir.Return:
+			if typed.Value != nil {
+				renamed := renameVar(*typed.Value)
+				typed.Value = &renamed
+			}
+		case ir.Return:
+			updated := typed
+			if typed.Value != nil {
+				renamed := renameVar(*typed.Value)
+				updated.Value = &renamed
+			}
+			return updated
+		case *ir.Phi:
+			typed.Dest = renameVar(typed.Dest)
+			for i, src := range typed.Sources {
+				typed.Sources[i].Var = renameVar(src.Var)
+			}
+		case ir.Phi:
+			updated := typed
+			updated.Dest = renameVar(typed.Dest)
+			newSrcs := make([]ir.PhiSource, len(typed.Sources))
+			for i, src := range typed.Sources {
+				newSrcs[i] = ir.PhiSource{Block: src.Block, Var: renameVar(src.Var)}
+			}
+			updated.Sources = newSrcs
+			return updated
+		case *ir.Branch:
+			typed.Condition = renameExpr(typed.Condition)
+		case ir.Branch:
+			updated := typed
+			updated.Condition = renameExpr(typed.Condition)
+			return updated
+		}
+		return instr
+	}
+
+	// step 3: walk all blocks and rename every instruction
+	for _, block := range irFunc.Blocks {
+		for i, instr := range block.Instructions {
+			block.Instructions[i] = renameInstr(instr)
+		}
+	}
+
+	// step 4: rebuild irFunc.Variables with renamed names
+	seen := make(map[string]bool)
+	newVars := make([]ir.Variable, 0, len(irFunc.Variables))
+	for _, v := range irFunc.Variables {
+		renamed := renameVar(v)
+		if !seen[renamed.Name] {
+			seen[renamed.Name] = true
+			newVars = append(newVars, renamed)
+		}
+	}
+	irFunc.Variables = newVars
+}
+
+// buildAliasMap returns a map from every x86-64 register alias to its 64-bit canonical name.
+// used by renameRegisterVariables to map sub-register aliases to the same parameter name.
+func buildAliasMap() map[string]string {
+	m := make(map[string]string, 128)
+	groups := [][]string{
+		{"rax", "eax", "ax", "al", "ah"},
+		{"rbx", "ebx", "bx", "bl", "bh"},
+		{"rcx", "ecx", "cx", "cl", "ch"},
+		{"rdx", "edx", "dx", "dl", "dh"},
+		{"rsi", "esi", "si", "sil"},
+		{"rdi", "edi", "di", "dil"},
+		{"rbp", "ebp", "bp", "bpl"},
+		{"rsp", "esp", "sp", "spl"},
+		{"r8", "r8d", "r8w", "r8b"},
+		{"r9", "r9d", "r9w", "r9b"},
+		{"r10", "r10d", "r10w", "r10b"},
+		{"r11", "r11d", "r11w", "r11b"},
+		{"r12", "r12d", "r12w", "r12b"},
+		{"r13", "r13d", "r13w", "r13b"},
+		{"r14", "r14d", "r14w", "r14b"},
+		{"r15", "r15d", "r15w", "r15b"},
+	}
+	for _, group := range groups {
+		canonical := group[0]
+		for _, alias := range group {
+			m[alias] = canonical
+		}
+	}
+	return m
+}
+
 // decompileInstructions runs the full pipeline: lift → cfg → domtree → loops → abi → structure → codegen
 func decompileInstructions(functionName string, instructions []*disasm.Instruction, db *binfmt.GroundTruthDatabase) (string, error) {
 	// lift instructions to ir; cfgBuilder retains the built cfg internally
@@ -655,10 +880,15 @@ func decompileInstructions(functionName string, instructions []*disasm.Instructi
 
 	// run abi analysis pass: populates Call.Args, sets function signature,
 	// and infers return types from register usage at call sites.
-	applyABIPass(irFunc, instructions, db)
+	funcABI := applyABIPass(irFunc, instructions, db)
 
 	// replace absolute address constants with symbolic references from the database
 	symbolizeAddresses(irFunc, db, instructions)
+
+	// rename raw x86-64 register variables to human-readable c names (arg0, var_0, etc.)
+	if funcABI != nil {
+		renameRegisterVariables(irFunc, funcABI)
+	}
 
 	// compute dominator tree (lengauer-tarjan via gonum)
 	domTree, err := cfgBuilder.ComputeDominators()
