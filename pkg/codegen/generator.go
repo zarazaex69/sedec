@@ -436,8 +436,14 @@ func genConstant(c ir.Constant) string {
 		if v.Signed {
 			return fmt.Sprintf("%d", v.Value)
 		}
-		// unsigned: use explicit cast to avoid sign ambiguity
-		return fmt.Sprintf("%dU", uint64(v.Value)) //nolint:gosec
+		// unsigned: large values (> 0xffff) are rendered as hex to make virtual
+		// addresses recognizable; small values use decimal for readability.
+		// #nosec G115 — intentional conversion for unsigned display
+		uval := uint64(v.Value)
+		if uval > 0xffff {
+			return fmt.Sprintf("0x%xULL", uval)
+		}
+		return fmt.Sprintf("%dU", uval)
 	case ir.FloatConstant:
 		switch v.Width {
 		case ir.Size4:

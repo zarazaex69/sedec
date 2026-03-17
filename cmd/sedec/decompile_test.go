@@ -6,6 +6,10 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	binfmt "github.com/zarazaex69/sedec/pkg/binary"
+	"github.com/zarazaex69/sedec/pkg/disasm"
+	"github.com/zarazaex69/sedec/pkg/ir"
 )
 
 // cIdentRegex is the canonical c identifier pattern used in sanitize tests.
@@ -158,4 +162,158 @@ func TestDecompile_HelpInMainUsage(t *testing.T) {
 	if !strings.Contains(output, "decompile") {
 		t.Errorf("expected 'decompile' in main help output, got: %s", output)
 	}
+}
+
+// TestSymbolizeAddresses verifies the six canonical cases for symbolizeAddresses.
+func TestSymbolizeAddresses(t *testing.T) {
+	// helper: build a minimal ir.Function with a single Load instruction
+	makeLoadFunc := func(addr ir.Address) (*ir.Function, *ir.Load) {
+		load := &ir.Load{
+			Dest:    ir.Variable{Name: "t0", Type: ir.IntType{Width: ir.Size8}},
+			Address: ir.ConstantExpr{Value: ir.IntConstant{Value: int64(addr), Width: ir.Size8}},
+			Size:    ir.Size8,
+		}
+		load.Loc.Address = 0x1000
+		block := &ir.BasicBlock{
+			ID:           0,
+			Instructions: []ir.IRInstruction{load},
+		}
+		fn := &ir.Function{
+			Name:       "test",
+			EntryBlock: 0,
+			Blocks:     map[ir.BlockID]*ir.BasicBlock{0: block},
+		}
+		return fn, load
+	}
+
+	t.Run("case1_load_address_symbolized", func(t *testing.T) {
+		// ir.Load with address 0x27e90 → db has __environ at that address
+		fn, load := makeLoadFunc(0x27e90)
+		db := binfmt.NewGroundTruthDatabase()
+		db.SymbolsByAddress[0x27e90] = "__environ"
+
+		symbolizeAddresses(fn, db, nil)
+
+		varExpr, ok := load.Address.(ir.VariableExpr)
+		if !ok {
+			t.Fatalf("case1: expected VariableExpr, got %T", load.Address)
+		}
+		if varExpr.Var.Name != "&__environ" {
+			t.Errorf("case1: expected &__environ, got %q", varExpr.Var.Name)
+		}
+	})
+
+	t.Run("case2_store_address_via_imports", func(t *testing.T) {
+		// ir.Store with address 0x601020 → db.Imports has stderr
+		store := &ir.Store{
+			Address: ir.ConstantExpr{Value: ir.IntConstant{Value: 0x601020, Width: ir.Size8}},
+			Value:   ir.ConstantExpr{Value: ir.IntConstant{Value: 0, Width: ir.Size8}},
+			Size:    ir.Size8,
+		}
+		store.Loc.Address = 0x1000
+		block := &ir.BasicBlock{
+			ID:           0,
+			Instructions: []ir.IRInstruction{store},
+		}
+		fn := &ir.Function{
+			Name:       "test",
+			EntryBlock: 0,
+			Blocks:     map[ir.BlockID]*ir.BasicBlock{0: block},
+		}
+		db := binfmt.NewGroundTruthDatabase()
+		db.Imports[0x601020] = &binfmt.Import{Name: "stderr"}
+
+		symbolizeAddresses(fn, db, nil)
+
+		varExpr, ok := store.Address.(ir.VariableExpr)
+		if !ok {
+			t.Fatalf("case2: expected VariableExpr, got %T", store.Address)
+		}
+		if varExpr.Var.Name != "&stderr" {
+			t.Errorf("case2: expected &stderr, got %q", varExpr.Var.Name)
+		}
+	})
+
+	t.Run("case3_rip_relative_resolved", func(t *testing.T) {
+		// rip-relative: instrAddr=0x1000, instrLen=7, disp=0x100
+		// rip = 0x1007, target = 0x1107 → db has "global_var" at 0x1107
+		const instrAddr disasm.Address = 0x1000
+		const instrLen = 7
+		const disp int64 = 0x100
+		const targetAddr = uint64(instrAddr) + instrLen + uint64(disp)
+
+		ripExpr := ir.BinaryOp{
+			Op:    ir.BinOpAdd,
+			Left:  ir.VariableExpr{Var: ir.Variable{Name: "rip", Type: ir.IntType{Width: ir.Size8}}},
+			Right: ir.ConstantExpr{Value: ir.IntConstant{Value: disp, Width: ir.Size8}},
+		}
+		load := &ir.Load{
+			Dest:    ir.Variable{Name: "t0", Type: ir.IntType{Width: ir.Size8}},
+			Address: ripExpr,
+			Size:    ir.Size8,
+		}
+		load.Loc.Address = ir.Address(instrAddr)
+		block := &ir.BasicBlock{
+			ID:           0,
+			Instructions: []ir.IRInstruction{load},
+		}
+		fn := &ir.Function{
+			Name:       "test",
+			EntryBlock: 0,
+			Blocks:     map[ir.BlockID]*ir.BasicBlock{0: block},
+		}
+		db := binfmt.NewGroundTruthDatabase()
+		db.SymbolsByAddress[binfmt.Address(targetAddr)] = "global_var"
+
+		rawInsns := []*disasm.Instruction{
+			{Address: instrAddr, Length: instrLen, Mnemonic: "mov"},
+		}
+		symbolizeAddresses(fn, db, rawInsns)
+
+		varExpr, ok := load.Address.(ir.VariableExpr)
+		if !ok {
+			t.Fatalf("case3: expected VariableExpr, got %T", load.Address)
+		}
+		if varExpr.Var.Name != "&global_var" {
+			t.Errorf("case3: expected &global_var, got %q", varExpr.Var.Name)
+		}
+	})
+
+	t.Run("case4_small_constant_unchanged", func(t *testing.T) {
+		// constant 0x1234 (≤ 0xffff) must not be symbolized
+		fn, load := makeLoadFunc(0x1234)
+		db := binfmt.NewGroundTruthDatabase()
+		db.SymbolsByAddress[0x1234] = "some_sym"
+
+		symbolizeAddresses(fn, db, nil)
+
+		// address must remain a ConstantExpr
+		if _, ok := load.Address.(ir.ConstantExpr); !ok {
+			t.Errorf("case4: small constant should remain ConstantExpr, got %T", load.Address)
+		}
+	})
+
+	t.Run("case5_unknown_large_constant_unchanged", func(t *testing.T) {
+		// large constant not in db → expression unchanged
+		fn, load := makeLoadFunc(0xdeadbeef)
+		db := binfmt.NewGroundTruthDatabase()
+
+		symbolizeAddresses(fn, db, nil)
+
+		if _, ok := load.Address.(ir.ConstantExpr); !ok {
+			t.Errorf("case5: unknown address should remain ConstantExpr, got %T", load.Address)
+		}
+	})
+
+	t.Run("case6_nil_database_unchanged", func(t *testing.T) {
+		// nil database → no changes
+		fn, load := makeLoadFunc(0x27e90)
+		origAddr := load.Address
+
+		symbolizeAddresses(fn, nil, nil)
+
+		if load.Address != origAddr {
+			t.Errorf("case6: nil db should leave address unchanged")
+		}
+	})
 }

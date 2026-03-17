@@ -29,6 +29,7 @@ import (
 
 	binfmt "github.com/zarazaex69/sedec/pkg/binary"
 	"github.com/zarazaex69/sedec/pkg/codegen"
+	"github.com/zarazaex69/sedec/pkg/disasm"
 	"github.com/zarazaex69/sedec/pkg/ir"
 	"github.com/zarazaex69/sedec/pkg/structuring"
 	"pgregory.net/rapid"
@@ -252,6 +253,7 @@ func TestProperty7_BugCondition_ConcreteEnvironLoad(t *testing.T) {
 	//
 	// since symbolizeAddresses does not exist, we run the full codegen pipeline
 	// directly on the unmodified ir.Function and check the output.
+	symbolizeAddresses(irFunc, db, nil)
 	cOutput := generateCOutputForFunction(irFunc)
 
 	// assert: output must NOT contain the decimal literal 163472
@@ -290,8 +292,8 @@ func TestProperty7_BugCondition_ConcreteStderrLoad(t *testing.T) {
 	irFunc := buildLoadIRFunction(stderrAddr)
 
 	db := buildSymbolizeDB(stderrAddr, "stderr")
-	_ = db
 
+	symbolizeAddresses(irFunc, db, nil)
 	cOutput := generateCOutputForFunction(irFunc)
 
 	// assert: output must NOT contain the decimal literal
@@ -327,28 +329,53 @@ func TestProperty7_BugCondition_ConcreteStderrLoad(t *testing.T) {
 // the rip-relative expression "(rip + 141195)" is emitted verbatim in the output
 // instead of being resolved to the target symbol name.
 func TestProperty7_BugCondition_RIPRelativeAddressNotResolved(t *testing.T) {
-	// rip-relative: instruction at 0x401234, length 7, disp = 0x227e90 - (0x401234 + 7)
-	// for simplicity, use a concrete disp that resolves to a known symbol address
-	const ripValue = uint64(0x401234)
-	const disp = int64(141195)           // 0x227e90 - 0x401234 - 7 ≈ 141195 (approximate)
+	// choose values so that: instrAddr + instrLen + disp = resolvedAddr
+	// instrAddr = 0x1000, instrLen = 7, resolvedAddr = 0x27e90
+	// disp = 0x27e90 - (0x1000 + 7) = 0x27e90 - 0x1007 = 0x26e89 = 158345
+	const instrAddr = uint64(0x1000)
+	const instrLen = 7
 	const resolvedAddr = uint64(0x27e90) // __environ address
+	const disp = int64(resolvedAddr - instrAddr - instrLen)
 
-	irFunc := buildRIPRelativeLoadIRFunction(ripValue, disp, resolvedAddr)
+	irFunc := buildRIPRelativeLoadIRFunction(instrAddr, disp, resolvedAddr)
 
 	db := buildSymbolizeDB(resolvedAddr, "__environ")
-	_ = db
 
+	// rawInsns provides the rip-next-address map: rip = instrAddr + instrLen
+	rawInsns := []*disasm.Instruction{
+		{Address: disasm.Address(instrAddr), Length: instrLen, Mnemonic: "mov"},
+	}
+
+	// patch the load instruction address to match instrAddr so symbolizeAddresses
+	// can look up the rip-next value from rawInsns
+	if block, ok := irFunc.Blocks[irFunc.EntryBlock]; ok {
+		for i, instr := range block.Instructions {
+			if load, ok := instr.(ir.Load); ok {
+				load.Loc.Address = ir.Address(instrAddr)
+				block.Instructions[i] = load
+			}
+		}
+	}
+
+	symbolizeAddresses(irFunc, db, rawInsns)
 	cOutput := generateCOutputForFunction(irFunc)
 
-	// assert: output must NOT contain "rip" as a raw variable name in an address expression
-	// on unfixed code, "(rip + 141195)" appears verbatim in the output
-	if strings.Contains(cOutput, "rip") {
+	// assert: the load expression must use the symbolic reference, not rip+disp
+	// check that the output contains "&__environ" (the resolved symbol)
+	if !strings.Contains(cOutput, "&__environ") {
 		t.Errorf(
-			"bug confirmed: output contains raw \"rip\" variable in address expression\n"+
-				"rip-relative address (rip + %d) was not resolved to symbolic reference\n"+
+			"bug confirmed: rip-relative address (rip + %d) was not resolved to symbolic reference\n"+
 				"generated output:\n%s\n"+
 				"symbolizeAddresses does not exist — rip-relative addresses are emitted\n"+
 				"as raw register expressions, producing unreadable decompiler output.",
+			disp, cOutput,
+		)
+	}
+	// assert: the load expression must NOT contain the raw rip+disp pattern
+	if strings.Contains(cOutput, fmt.Sprintf("(rip + %d)", disp)) {
+		t.Errorf(
+			"bug confirmed: output contains raw rip-relative expression \"(rip + %d)\"\n"+
+				"generated output:\n%s",
 			disp, cOutput,
 		)
 	}
@@ -419,12 +446,11 @@ func TestProperty7_BugCondition_RapidSymbolizeAddresses(t *testing.T) {
 
 		irFunc := buildLoadIRFunction(loadAddr)
 
-		// build the ground truth database — unfixed pipeline ignores this
+		// build the ground truth database and apply symbolizeAddresses
 		db := buildSymbolizeDB(loadAddr, symbolName)
-		_ = db
+		symbolizeAddresses(irFunc, db, nil)
 
-		// run the full codegen pipeline on the unmodified ir.Function
-		// (symbolizeAddresses does not exist on unfixed code)
+		// run codegen on the symbolized ir.Function
 		cOutput := generateCOutputForFunction(irFunc)
 
 		// property: output must NOT contain the decimal literal of the address

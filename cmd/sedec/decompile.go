@@ -483,6 +483,168 @@ func splitOnRetBoundaries(instructions []*disasm.Instruction, sectionName string
 	return chunks
 }
 
+// symbolizeAddresses replaces absolute constant addresses in ir expressions with
+// symbolic references from the ground-truth database.
+//
+// two patterns are resolved:
+//  1. ir.ConstantExpr with Value > 0xffff that matches a symbol address →
+//     replaced with ir.VariableExpr{Name: "&symbolName"}
+//  2. ir.BinaryOp{Add, VariableExpr{"rip"}, ConstantExpr{disp}} where
+//     rip+disp resolves to a symbol → replaced with ir.VariableExpr{Name: "&symbolName"}
+//
+// the pass walks Load.Address, Store.Address, Store.Value, and Assign.Source expressions.
+// call targets are already resolved by applyABIPass (Fix 6) and are not touched here.
+func symbolizeAddresses(irFunc *ir.Function, db *binfmt.GroundTruthDatabase, rawInsns []*disasm.Instruction) {
+	if db == nil {
+		return
+	}
+
+	// build rip-next-address map: for each instruction, rip = address + length
+	ripNextAddr := make(map[ir.Address]uint64, len(rawInsns))
+	for _, insn := range rawInsns {
+		ripNextAddr[ir.Address(insn.Address)] = uint64(insn.Address) + uint64(insn.Length)
+	}
+
+	for _, block := range irFunc.Blocks {
+		for i, instr := range block.Instructions {
+			instrAddr := ir.Address(instr.Location().Address)
+			switch typed := instr.(type) {
+			case *ir.Load:
+				typed.Address = symbolizeExpr(typed.Address, instrAddr, db, ripNextAddr)
+			case ir.Load:
+				newAddr := symbolizeExpr(typed.Address, instrAddr, db, ripNextAddr)
+				if newAddr != typed.Address {
+					updated := typed
+					updated.Address = newAddr
+					block.Instructions[i] = updated
+				}
+			case *ir.Store:
+				typed.Address = symbolizeExpr(typed.Address, instrAddr, db, ripNextAddr)
+				typed.Value = symbolizeExpr(typed.Value, instrAddr, db, ripNextAddr)
+			case ir.Store:
+				newAddr := symbolizeExpr(typed.Address, instrAddr, db, ripNextAddr)
+				newVal := symbolizeExpr(typed.Value, instrAddr, db, ripNextAddr)
+				if newAddr != typed.Address || newVal != typed.Value {
+					updated := typed
+					updated.Address = newAddr
+					updated.Value = newVal
+					block.Instructions[i] = updated
+				}
+			case *ir.Assign:
+				typed.Source = symbolizeExpr(typed.Source, instrAddr, db, ripNextAddr)
+			case ir.Assign:
+				newSrc := symbolizeExpr(typed.Source, instrAddr, db, ripNextAddr)
+				if newSrc != typed.Source {
+					updated := typed
+					updated.Source = newSrc
+					block.Instructions[i] = updated
+				}
+			}
+		}
+	}
+}
+
+// symbolizeExpr recursively walks expr and replaces absolute address constants
+// with symbolic references from the ground-truth database.
+func symbolizeExpr(
+	expr ir.Expression,
+	instrAddr ir.Address,
+	db *binfmt.GroundTruthDatabase,
+	ripNextAddr map[ir.Address]uint64,
+) ir.Expression {
+	if expr == nil {
+		return expr
+	}
+
+	switch e := expr.(type) {
+	case ir.ConstantExpr:
+		intConst, ok := e.Value.(ir.IntConstant)
+		if !ok {
+			return expr
+		}
+		// only symbolize large constants (> 0xffff) to avoid false positives
+		// #nosec G115 — intentional conversion: addresses are unsigned
+		addr := uint64(intConst.Value)
+		if addr <= 0xffff {
+			return expr
+		}
+		bAddr := binfmt.Address(addr)
+		if name, ok := db.SymbolsByAddress[bAddr]; ok && name != "" {
+			return ir.VariableExpr{Var: ir.Variable{
+				Name: "&" + name,
+				Type: ir.PointerType{Pointee: ir.VoidType{}},
+			}}
+		}
+		if imp, ok := db.Imports[bAddr]; ok && imp != nil && imp.Name != "" {
+			return ir.VariableExpr{Var: ir.Variable{
+				Name: "&" + imp.Name,
+				Type: ir.PointerType{Pointee: ir.VoidType{}},
+			}}
+		}
+		return expr
+
+	case ir.BinaryOp:
+		// detect rip-relative pattern: rip + disp
+		if e.Op == ir.BinOpAdd {
+			if leftVar, ok := e.Left.(ir.VariableExpr); ok {
+				if leftVar.Var.Name == "rip" {
+					if rightConst, ok := e.Right.(ir.ConstantExpr); ok {
+						if disp, ok := rightConst.Value.(ir.IntConstant); ok {
+							if ripNext, exists := ripNextAddr[instrAddr]; exists {
+								// #nosec G115 — intentional conversion
+								targetAddr := binfmt.Address(ripNext + uint64(disp.Value))
+								if name, ok := db.SymbolsByAddress[targetAddr]; ok && name != "" {
+									return ir.VariableExpr{Var: ir.Variable{
+										Name: "&" + name,
+										Type: ir.PointerType{Pointee: ir.VoidType{}},
+									}}
+								}
+								if imp, ok := db.Imports[targetAddr]; ok && imp != nil && imp.Name != "" {
+									return ir.VariableExpr{Var: ir.Variable{
+										Name: "&" + imp.Name,
+										Type: ir.PointerType{Pointee: ir.VoidType{}},
+									}}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		// recurse into both operands
+		newLeft := symbolizeExpr(e.Left, instrAddr, db, ripNextAddr)
+		newRight := symbolizeExpr(e.Right, instrAddr, db, ripNextAddr)
+		if newLeft == e.Left && newRight == e.Right {
+			return expr
+		}
+		return ir.BinaryOp{Op: e.Op, Left: newLeft, Right: newRight}
+
+	case ir.UnaryOp:
+		newOperand := symbolizeExpr(e.Operand, instrAddr, db, ripNextAddr)
+		if newOperand == e.Operand {
+			return expr
+		}
+		return ir.UnaryOp{Op: e.Op, Operand: newOperand}
+
+	case ir.Cast:
+		newInner := symbolizeExpr(e.Expr, instrAddr, db, ripNextAddr)
+		if newInner == e.Expr {
+			return expr
+		}
+		return ir.Cast{Expr: newInner, TargetType: e.TargetType}
+
+	case ir.LoadExpr:
+		newAddr := symbolizeExpr(e.Address, instrAddr, db, ripNextAddr)
+		if newAddr == e.Address {
+			return expr
+		}
+		return ir.LoadExpr{Address: newAddr, Size: e.Size}
+
+	default:
+		return expr
+	}
+}
+
 // decompileInstructions runs the full pipeline: lift → cfg → domtree → loops → abi → structure → codegen
 func decompileInstructions(functionName string, instructions []*disasm.Instruction, db *binfmt.GroundTruthDatabase) (string, error) {
 	// lift instructions to ir; cfgBuilder retains the built cfg internally
@@ -494,6 +656,9 @@ func decompileInstructions(functionName string, instructions []*disasm.Instructi
 	// run abi analysis pass: populates Call.Args, sets function signature,
 	// and infers return types from register usage at call sites.
 	applyABIPass(irFunc, instructions, db)
+
+	// replace absolute address constants with symbolic references from the database
+	symbolizeAddresses(irFunc, db, instructions)
 
 	// compute dominator tree (lengauer-tarjan via gonum)
 	domTree, err := cfgBuilder.ComputeDominators()
