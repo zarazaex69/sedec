@@ -39,6 +39,8 @@ type Engine struct {
 	gotoCounter int
 	// gotoLabels maps block ids that are goto targets to their label names
 	gotoLabels map[cfg.BlockID]string
+	// inProgress tracks blocks currently being collapsed to detect re-entrancy
+	inProgress map[cfg.BlockID]bool
 }
 
 // New creates a new structuring engine.
@@ -68,6 +70,7 @@ func New(
 		loopInfo:   loopInfo,
 		irBlocks:   irBlocks,
 		gotoLabels: make(map[cfg.BlockID]string),
+		inProgress: make(map[cfg.BlockID]bool),
 	}, nil
 }
 
@@ -225,6 +228,15 @@ func (e *Engine) collapseBlock(blockID cfg.BlockID, collapsed map[cfg.BlockID]St
 		return nil, fmt.Errorf("block %d not found in cfg", blockID)
 	}
 
+	// re-entrancy guard: if we are already collapsing this block (cycle in the
+	// non-back-edge subgraph that the dominator check missed), emit a goto.
+	if e.inProgress[blockID] {
+		label := e.getOrCreateLabel(blockID)
+		return GotoStatement{Target: blockID, Label: label}, nil
+	}
+	e.inProgress[blockID] = true
+	defer func() { delete(e.inProgress, blockID) }()
+
 	// check if this block is a loop header
 	if e.loopInfo.IsLoopHeader(blockID) {
 		return e.collapseLoop(blockID, block, collapsed)
@@ -280,6 +292,14 @@ func (e *Engine) collapseLinear(blockID, succID cfg.BlockID, collapsed map[cfg.B
 	if _, alreadyCollapsed := collapsed[succID]; alreadyCollapsed {
 		// successor will be emitted separately in pre-order traversal
 		return current, nil
+	}
+
+	// guard against re-entrant collapse of the same successor:
+	// if succID is not strictly dominated by blockID, it will be handled
+	// by the top-level post-order pass — emit a goto instead of inlining.
+	if !e.dt.StrictlyDominates(blockID, succID) {
+		label := e.getOrCreateLabel(succID)
+		return e.mergeSequential(current, GotoStatement{Target: succID, Label: label}), nil
 	}
 
 	// successor is dominated by this block: inline it
@@ -458,6 +478,14 @@ func (e *Engine) buildBranch(
 	for _, bid := range branchBlocks {
 		if stmt, ok := collapsed[bid]; ok {
 			stmts = append(stmts, stmt)
+			continue
+		}
+
+		// only inline blocks that are strictly dominated by startID;
+		// others will be emitted by the top-level pass via goto.
+		if bid != startID && !e.dt.StrictlyDominates(startID, bid) {
+			label := e.getOrCreateLabel(bid)
+			stmts = append(stmts, GotoStatement{Target: bid, Label: label})
 			continue
 		}
 

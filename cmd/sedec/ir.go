@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
+	"sync"
 
 	binfmt "github.com/zarazaex69/sedec/pkg/binary"
 	"github.com/zarazaex69/sedec/pkg/cfg"
@@ -235,6 +237,9 @@ func liftFunction(binaryInfo *binfmt.BinaryInfo, disassembler *disasm.Disassembl
 		return fmt.Errorf("failed to disassemble function %s: %w", target.name, err)
 	}
 
+	// trim to function boundary using symbol size when available, else first ret
+	instructions = trimFunctionInstructions(instructions, target.address, binaryInfo.Symbols)
+
 	// lift to ir
 	function, cfgBuilder, err := liftInstructionsToIR(target.name, instructions)
 	if err != nil {
@@ -252,73 +257,96 @@ func liftFunction(binaryInfo *binfmt.BinaryInfo, disassembler *disasm.Disassembl
 	return printIRFunction(function, output)
 }
 
-// liftAllSections lifts all executable sections to ir
+// liftAllSections lifts all executable sections to ir.
+// functions are split by symbol table (with ret-boundary fallback) and lifted in parallel.
 func liftAllSections(binaryInfo *binfmt.BinaryInfo, disassembler *disasm.Disassembler, ssaForm bool, output, stderr io.Writer) error {
 	executableSections := 0
 
+	// collect all function chunks across all executable sections
+	var allChunks []funcChunk
+
 	for _, section := range binaryInfo.Sections {
-		// only lift executable sections
 		if !section.IsExecutable {
 			continue
 		}
-
 		executableSections++
 
-		if _, writeErr := fmt.Fprintf(output, "; section: %s\n", section.Name); writeErr != nil {
-			return fmt.Errorf("failed to write output: %w", writeErr)
-		}
-
-		if _, writeErr := fmt.Fprintf(output, "; address: 0x%x\n", section.Address); writeErr != nil {
-			return fmt.Errorf("failed to write output: %w", writeErr)
-		}
-
-		if _, writeErr := fmt.Fprintf(output, "; size: %d bytes\n", section.Size); writeErr != nil {
-			return fmt.Errorf("failed to write output: %w", writeErr)
-		}
-		if _, writeErr := fmt.Fprintf(output, "\n"); writeErr != nil {
-			return fmt.Errorf("failed to write output: %w", writeErr)
-		}
-
-		// disassemble section
 		instructions, err := disassembler.DisassembleBytes(section.Data, disasm.Address(section.Address))
 		if err != nil {
-			// log warning but continue with other sections
-			//nolint:errcheck // warning output is informational, section name is from trusted parser
+			//nolint:errcheck // warning output is informational
 			fmt.Fprintf(stderr, "warning: failed to disassemble section %s: %v\n", section.Name, err)
 			continue
 		}
 
-		// lift to ir (use section name as function name)
-		function, cfgBuilder, err := liftInstructionsToIR(section.Name, instructions)
-		if err != nil {
-			// log warning but continue with other sections
-			//nolint:errcheck // warning output is informational, section name is from trusted parser
-			fmt.Fprintf(stderr, "warning: failed to lift section %s to ir: %v\n", section.Name, err)
-			continue
-		}
-
-		// optionally transform to ssa
-		if ssaForm {
-			if err := transformToSSA(function, cfgBuilder); err != nil {
-				// log warning but continue with other sections
-				//nolint:errcheck // warning output is informational, section name is from trusted parser
-				fmt.Fprintf(stderr, "warning: failed to transform section %s to ssa: %v\n", section.Name, err)
-				continue
-			}
-		}
-
-		// print ir
-		if printErr := printIRFunction(function, output); printErr != nil {
-			return printErr
-		}
-
-		if _, writeErr := fmt.Fprintf(output, "\n"); writeErr != nil {
-			return fmt.Errorf("failed to write output: %w", writeErr)
-		}
+		chunks := splitSectionIntoFunctions(instructions, binaryInfo.Symbols, section.Name)
+		allChunks = append(allChunks, chunks...)
 	}
 
 	if executableSections == 0 {
 		return errIRNoExecutableSections
+	}
+
+	if len(allChunks) == 0 {
+		return nil
+	}
+
+	// lift all chunks in parallel
+	type irResult struct {
+		function *ir.Function
+		name     string
+		err      error
+	}
+
+	workers := runtime.NumCPU()
+	if workers > len(allChunks) {
+		workers = len(allChunks)
+	}
+
+	jobs := make(chan int, len(allChunks))
+	results := make([]irResult, len(allChunks))
+
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range jobs {
+				chunk := allChunks[idx]
+				fn, cfgBuilder, err := liftInstructionsToIR(chunk.name, chunk.instructions)
+				if err != nil {
+					results[idx] = irResult{name: chunk.name, err: err}
+					continue
+				}
+				if ssaForm {
+					if ssaErr := transformToSSA(fn, cfgBuilder); ssaErr != nil {
+						results[idx] = irResult{name: chunk.name, err: ssaErr}
+						continue
+					}
+				}
+				results[idx] = irResult{function: fn, name: chunk.name}
+			}
+		}()
+	}
+
+	for i := range allChunks {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+
+	// write results in original order
+	for i, r := range results {
+		if r.err != nil {
+			//nolint:errcheck // warning output is informational
+			fmt.Fprintf(stderr, "warning: failed to lift %s: %v\n", allChunks[i].name, r.err)
+			continue
+		}
+		if printErr := printIRFunction(r.function, output); printErr != nil {
+			return printErr
+		}
+		if _, writeErr := fmt.Fprintf(output, "\n"); writeErr != nil {
+			return fmt.Errorf("failed to write output: %w", writeErr)
+		}
 	}
 
 	return nil

@@ -213,11 +213,14 @@ func (li *LoopInfo) computeLoopNesting() {
 		}
 	}
 
-	// compute nesting depth
+	// compute nesting depth; use a visited set to break cycles in parent chain
+	// (can occur with irreducible loops that share headers)
 	for _, loop := range li.Loops {
 		depth := 0
 		current := loop.ParentLoop
-		for current != nil {
+		visited := make(map[*Loop]bool)
+		for current != nil && !visited[current] {
+			visited[current] = true
 			depth++
 			current = current.ParentLoop
 		}

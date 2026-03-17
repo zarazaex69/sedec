@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
+	"sort"
 	"strings"
+	"sync"
 
 	"github.com/zarazaex69/sedec/pkg/analysis"
 	binfmt "github.com/zarazaex69/sedec/pkg/binary"
@@ -204,8 +207,8 @@ func decompileFunction(
 		return fmt.Errorf("failed to disassemble function %s: %w", target.name, err)
 	}
 
-	// trim instructions to function boundary: stop after the first ret/retn
-	instructions = trimToFunctionBoundary(instructions)
+	// trim instructions to function boundary using symbol size when available
+	instructions = trimFunctionInstructions(instructions, target.address, binaryInfo.Symbols)
 
 	cCode, err := decompileInstructions(target.name, instructions)
 	if err != nil {
@@ -218,7 +221,14 @@ func decompileFunction(
 	return nil
 }
 
-// decompileAllSections decompiles all executable sections
+// funcChunk is a named slice of instructions representing one function.
+type funcChunk struct {
+	name         string
+	instructions []*disasm.Instruction
+}
+
+// decompileAllSections decompiles all executable sections.
+// functions are split by symbol table when available, then decompiled in parallel.
 func decompileAllSections(
 	binaryInfo *binfmt.BinaryInfo,
 	disassembler *disasm.Disassembler,
@@ -226,12 +236,16 @@ func decompileAllSections(
 ) error {
 	executableSections := 0
 
+	// collect all function chunks across all executable sections
+	var allChunks []funcChunk
+
 	for _, section := range binaryInfo.Sections {
 		if !section.IsExecutable {
 			continue
 		}
 		executableSections++
 
+		// disassemble the whole section once
 		instructions, err := disassembler.DisassembleBytes(section.Data, disasm.Address(section.Address))
 		if err != nil {
 			//nolint:errcheck // warning output is informational
@@ -239,14 +253,61 @@ func decompileAllSections(
 			continue
 		}
 
-		cCode, err := decompileInstructions(section.Name, instructions)
-		if err != nil {
+		// split into per-function chunks using symbol table, falling back to ret-boundary heuristic
+		chunks := splitSectionIntoFunctions(instructions, binaryInfo.Symbols, section.Name)
+		allChunks = append(allChunks, chunks...)
+	}
+
+	if executableSections == 0 {
+		return errDecompileNoExecutableSections
+	}
+
+	if len(allChunks) == 0 {
+		return nil
+	}
+
+	// decompile all chunks in parallel using a bounded worker pool
+	type result struct {
+		index int
+		code  string
+		err   error
+	}
+
+	workers := runtime.NumCPU()
+	if workers > len(allChunks) {
+		workers = len(allChunks)
+	}
+
+	jobs := make(chan int, len(allChunks))
+	results := make([]result, len(allChunks))
+
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range jobs {
+				chunk := allChunks[idx]
+				code, err := decompileInstructions(chunk.name, chunk.instructions)
+				results[idx] = result{index: idx, code: code, err: err}
+			}
+		}()
+	}
+
+	for i := range allChunks {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+
+	// write results in original order to preserve deterministic output
+	for i, r := range results {
+		if r.err != nil {
 			//nolint:errcheck // warning output is informational
-			fmt.Fprintf(stderr, "warning: failed to decompile section %s: %v\n", section.Name, err)
+			fmt.Fprintf(stderr, "warning: failed to decompile %s: %v\n", allChunks[i].name, r.err)
 			continue
 		}
-
-		if _, writeErr := fmt.Fprint(output, cCode); writeErr != nil {
+		if _, writeErr := fmt.Fprint(output, r.code); writeErr != nil {
 			return fmt.Errorf("failed to write output: %w", writeErr)
 		}
 		if _, writeErr := fmt.Fprint(output, "\n"); writeErr != nil {
@@ -254,11 +315,117 @@ func decompileAllSections(
 		}
 	}
 
-	if executableSections == 0 {
-		return errDecompileNoExecutableSections
+	return nil
+}
+
+// splitSectionIntoFunctions partitions a flat instruction slice into per-function chunks.
+// strategy:
+//  1. collect function-type symbols that fall within the instruction address range
+//  2. sort them by address and use them as function start boundaries
+//  3. if no symbols are available, fall back to splitting on ret instructions
+func splitSectionIntoFunctions(
+	instructions []*disasm.Instruction,
+	symbols []*binfmt.Symbol,
+	sectionName string,
+) []funcChunk {
+	if len(instructions) == 0 {
+		return nil
 	}
 
-	return nil
+	sectionStart := instructions[0].Address
+	sectionEnd := instructions[len(instructions)-1].Address
+
+	// build address → index map for O(1) lookup
+	addrToIdx := make(map[disasm.Address]int, len(instructions))
+	for i, instr := range instructions {
+		addrToIdx[instr.Address] = i
+	}
+
+	// collect function symbols within this section's address range
+	type funcSym struct {
+		name string
+		addr disasm.Address
+	}
+	var funcSyms []funcSym
+	for _, sym := range symbols {
+		if sym.Type != binfmt.SymbolTypeFunction {
+			continue
+		}
+		addr := disasm.Address(sym.Address)
+		if addr < sectionStart || addr > sectionEnd {
+			continue
+		}
+		if _, ok := addrToIdx[addr]; !ok {
+			continue
+		}
+		funcSyms = append(funcSyms, funcSym{name: sym.Name, addr: addr})
+	}
+
+	// sort by address ascending
+	sort.Slice(funcSyms, func(i, j int) bool {
+		return funcSyms[i].addr < funcSyms[j].addr
+	})
+
+	// if we have symbol information, split by symbol boundaries
+	if len(funcSyms) > 0 {
+		chunks := make([]funcChunk, 0, len(funcSyms))
+		for i, sym := range funcSyms {
+			startIdx := addrToIdx[sym.addr]
+			endIdx := len(instructions)
+			if i+1 < len(funcSyms) {
+				if nextIdx, ok := addrToIdx[funcSyms[i+1].addr]; ok {
+					endIdx = nextIdx
+				}
+			}
+			if startIdx >= endIdx {
+				continue
+			}
+			chunks = append(chunks, funcChunk{
+				name:         sym.name,
+				instructions: instructions[startIdx:endIdx],
+			})
+		}
+		if len(chunks) > 0 {
+			return chunks
+		}
+	}
+
+	// fallback: split on ret instruction boundaries
+	return splitOnRetBoundaries(instructions, sectionName)
+}
+
+// splitOnRetBoundaries splits instructions into chunks at each ret/retn instruction.
+// used when no symbol table is available (stripped binaries).
+func splitOnRetBoundaries(instructions []*disasm.Instruction, sectionName string) []funcChunk {
+	var chunks []funcChunk
+	start := 0
+	chunkIdx := 0
+
+	for i, instr := range instructions {
+		m := strings.ToLower(instr.Mnemonic)
+		if m == "ret" || m == "retn" {
+			if i >= start {
+				name := fmt.Sprintf("%s_func%d", sectionName, chunkIdx)
+				chunks = append(chunks, funcChunk{
+					name:         name,
+					instructions: instructions[start : i+1],
+				})
+				chunkIdx++
+			}
+			start = i + 1
+		}
+	}
+
+	// trailing instructions after last ret (if any)
+	if start < len(instructions) {
+		name := fmt.Sprintf("%s_func%d", sectionName, chunkIdx)
+		chunks = append(chunks, funcChunk{
+			name:         name,
+			instructions: instructions[start:],
+		})
+	}
+
+	return chunks
 }
 
 // decompileInstructions runs the full pipeline: lift → cfg → domtree → loops → abi → structure → codegen
@@ -375,4 +542,79 @@ func trimToFunctionBoundary(instructions []*disasm.Instruction) []*disasm.Instru
 		}
 	}
 	return instructions
+}
+
+// trimFunctionInstructions trims instructions to the precise function boundary.
+// strategy:
+//  1. if a symbol with a non-zero size exists for funcAddr, use size as hard limit
+//  2. otherwise find the next function symbol address and stop before it
+//  3. fallback: stop after the last ret before the next function starts
+func trimFunctionInstructions(instructions []*disasm.Instruction, funcAddr disasm.Address, symbols []*binfmt.Symbol) []*disasm.Instruction {
+	if len(instructions) == 0 {
+		return instructions
+	}
+
+	// find the symbol for this function address
+	var funcSize uint64
+	var nextFuncAddr disasm.Address
+
+	for _, sym := range symbols {
+		if sym.Type != binfmt.SymbolTypeFunction {
+			continue
+		}
+		if disasm.Address(sym.Address) == funcAddr && sym.Size > 0 {
+			funcSize = sym.Size
+			break
+		}
+	}
+
+	if funcSize > 0 {
+		// hard limit: include only instructions within [funcAddr, funcAddr+funcSize)
+		end := funcAddr + disasm.Address(funcSize)
+		for i, instr := range instructions {
+			if instr.Address >= end {
+				return instructions[:i]
+			}
+		}
+		return instructions
+	}
+
+	// find the next function symbol after funcAddr
+	nextFuncAddr = 0
+	for _, sym := range symbols {
+		if sym.Type != binfmt.SymbolTypeFunction {
+			continue
+		}
+		addr := disasm.Address(sym.Address)
+		if addr <= funcAddr {
+			continue
+		}
+		if nextFuncAddr == 0 || addr < nextFuncAddr {
+			nextFuncAddr = addr
+		}
+	}
+
+	if nextFuncAddr > 0 {
+		// stop before the next function starts; also stop after last ret before that boundary
+		lastRet := -1
+		for i, instr := range instructions {
+			if instr.Address >= nextFuncAddr {
+				// stop here regardless
+				if lastRet >= 0 {
+					return instructions[:lastRet+1]
+				}
+				return instructions[:i]
+			}
+			m := strings.ToLower(instr.Mnemonic)
+			if m == "ret" || m == "retn" {
+				lastRet = i
+			}
+		}
+		if lastRet >= 0 {
+			return instructions[:lastRet+1]
+		}
+	}
+
+	// final fallback: first ret
+	return trimToFunctionBoundary(instructions)
 }
