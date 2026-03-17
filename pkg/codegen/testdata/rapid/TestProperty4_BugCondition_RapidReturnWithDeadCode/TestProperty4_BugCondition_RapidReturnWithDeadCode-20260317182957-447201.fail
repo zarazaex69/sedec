@@ -1,0 +1,32 @@
+# 2026/03/17 18:29:57.096417 [TestProperty4_BugCondition_RapidReturnWithDeadCode] [rapid] draw numBefore: 0
+# 2026/03/17 18:29:57.096423 [TestProperty4_BugCondition_RapidReturnWithDeadCode] [rapid] draw numAfter: 1
+# 2026/03/17 18:29:57.096425 [TestProperty4_BugCondition_RapidReturnWithDeadCode] [rapid] draw ret_retvar: 0
+# 2026/03/17 18:29:57.096427 [TestProperty4_BugCondition_RapidReturnWithDeadCode] [rapid] draw after_y_dest: 0
+# 2026/03/17 18:29:57.096429 [TestProperty4_BugCondition_RapidReturnWithDeadCode] [rapid] draw after_y_src: 0
+# 2026/03/17 18:29:57.096430 [TestProperty4_BugCondition_RapidReturnWithDeadCode] [rapid] draw after_y_bid: 1
+# 2026/03/17 18:29:57.096436 [TestProperty4_BugCondition_RapidReturnWithDeadCode] counterexample: dead code emitted after return statement
+# numBefore=0 numAfter=1
+# offending snippet: "return rax;\nv0 = v0;\n"
+# full generated block:
+# return rax;
+# v0 = v0;
+# 
+v0.4.8#6458982638754958502
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
