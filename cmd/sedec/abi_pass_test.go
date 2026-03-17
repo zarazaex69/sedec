@@ -1,8 +1,10 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/zarazaex69/sedec/pkg/abi"
 	binfmt "github.com/zarazaex69/sedec/pkg/binary"
 	"github.com/zarazaex69/sedec/pkg/disasm"
 	"github.com/zarazaex69/sedec/pkg/ir"
@@ -236,5 +238,120 @@ func TestMarkFrameArtifacts(t *testing.T) {
 		if loc.IsFrameArtifact != expected {
 			t.Errorf("addr 0x%x: IsFrameArtifact=%v, want %v", addr, loc.IsFrameArtifact, expected)
 		}
+	}
+}
+
+// TestRenameRegisterVariables verifies that renameRegisterVariables correctly
+// maps parameter registers to argN names and other registers to var_N names,
+// while leaving non-register variable names unchanged.
+func TestRenameRegisterVariables(t *testing.T) {
+	// build a minimal ir.Function with register-named and synthetic variables
+	raxVar := ir.Variable{Name: "rax", Type: ir.IntType{Width: ir.Size8, Signed: false}}
+	rdiVar := ir.Variable{Name: "rdi", Type: ir.IntType{Width: ir.Size8, Signed: false}}
+	rbpVar := ir.Variable{Name: "rbp", Type: ir.IntType{Width: ir.Size8, Signed: false}}
+	t1Var := ir.Variable{Name: "t1", Type: ir.IntType{Width: ir.Size8, Signed: false}}
+	local8Var := ir.Variable{Name: "local_8", Type: ir.IntType{Width: ir.Size8, Signed: false}}
+
+	// build a block with assignments that use all variables
+	block := &ir.BasicBlock{
+		ID: 0,
+		Instructions: []ir.IRInstruction{
+			// rax = rdi
+			&ir.Assign{
+				Dest:   raxVar,
+				Source: ir.VariableExpr{Var: rdiVar},
+			},
+			// rbp = rax
+			&ir.Assign{
+				Dest:   rbpVar,
+				Source: ir.VariableExpr{Var: raxVar},
+			},
+			// t1 = local_8
+			&ir.Assign{
+				Dest:   t1Var,
+				Source: ir.VariableExpr{Var: local8Var},
+			},
+		},
+	}
+
+	irFunc := &ir.Function{
+		Name:       "test_rename",
+		EntryBlock: 0,
+		Blocks:     map[ir.BlockID]*ir.BasicBlock{0: block},
+		Variables:  []ir.Variable{raxVar, rdiVar, rbpVar, t1Var, local8Var},
+		Signature: ir.FunctionType{
+			ReturnType: ir.VoidType{},
+		},
+	}
+
+	// build funcABI: rdi is arg0 (index 0)
+	funcABI := &abi.FunctionABI{
+		Parameters: []abi.Parameter{
+			{
+				Name:     "arg0",
+				Register: "rdi",
+				Location: abi.ParameterLocationRegister,
+				Index:    0,
+				Type:     ir.IntType{Width: ir.Size8, Signed: false},
+			},
+		},
+	}
+
+	renameRegisterVariables(irFunc, funcABI)
+
+	// verify no variable in irFunc.Variables has a name in x86_64RegisterNames
+	for _, v := range irFunc.Variables {
+		lower := strings.ToLower(v.Name)
+		if x86_64RegisterNames[lower] {
+			t.Errorf("variable %q is still a raw register name after renaming", v.Name)
+		}
+	}
+
+	// verify rdi was renamed to arg0
+	foundArg0 := false
+	for _, v := range irFunc.Variables {
+		if v.Name == "arg0" {
+			foundArg0 = true
+		}
+	}
+	if !foundArg0 {
+		t.Error("expected variable named arg0 (from rdi) but not found")
+	}
+
+	// verify t1 and local_8 are unchanged
+	foundT1 := false
+	foundLocal8 := false
+	for _, v := range irFunc.Variables {
+		if v.Name == "t1" {
+			foundT1 = true
+		}
+		if v.Name == "local_8" {
+			foundLocal8 = true
+		}
+	}
+	if !foundT1 {
+		t.Error("expected variable t1 to be unchanged but not found")
+	}
+	if !foundLocal8 {
+		t.Error("expected variable local_8 to be unchanged but not found")
+	}
+
+	// verify rax and rbp were renamed to synthetic var_N names
+	for _, v := range irFunc.Variables {
+		if v.Name == "rax" || v.Name == "rbp" {
+			t.Errorf("variable %q was not renamed from raw register name", v.Name)
+		}
+	}
+
+	// verify instructions were also renamed: first assign dest should be arg0 or var_N
+	firstAssign, ok := block.Instructions[0].(*ir.Assign)
+	if !ok {
+		t.Fatal("first instruction is not *ir.Assign")
+	}
+	if x86_64RegisterNames[strings.ToLower(firstAssign.Dest.Name)] {
+		t.Errorf("first assign dest %q is still a raw register name", firstAssign.Dest.Name)
+	}
+	if x86_64RegisterNames[strings.ToLower(firstAssign.Source.(ir.VariableExpr).Var.Name)] {
+		t.Errorf("first assign source %q is still a raw register name", firstAssign.Source.(ir.VariableExpr).Var.Name)
 	}
 }

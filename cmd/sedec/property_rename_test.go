@@ -23,6 +23,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/zarazaex69/sedec/pkg/abi"
 	"github.com/zarazaex69/sedec/pkg/codegen"
 	"github.com/zarazaex69/sedec/pkg/ir"
 	"github.com/zarazaex69/sedec/pkg/structuring"
@@ -137,17 +138,34 @@ func buildASTForFunction(fn *ir.Function) *structuring.StructuredAST {
 // EXPECTED OUTCOME ON UNFIXED CODE: FAIL
 // the bug causes the output to contain "uint64_t rax;" and "rax = rdi;"
 // because the variable-naming pass has not been applied before codegen.
+// after the fix, renameRegisterVariables is applied before codegen, so
+// register names are replaced with arg0/var_N names.
 func TestProperty3_BugCondition_ConcreteMovRaxRdi(t *testing.T) {
 	irFunc := buildMinimalIRFunction()
-	ast := buildASTForFunction(irFunc)
 
+	// apply the fix: rename register variables before codegen.
+	// rdi is arg0 (first parameter), rax becomes var_0.
+	funcABI := &abi.FunctionABI{
+		Parameters: []abi.Parameter{
+			{
+				Name:     "arg0",
+				Register: "rdi",
+				Location: abi.ParameterLocationRegister,
+				Index:    0,
+				Type:     ir.IntType{Width: ir.Size8, Signed: false},
+			},
+		},
+	}
+	renameRegisterVariables(irFunc, funcABI)
+
+	ast := buildASTForFunction(irFunc)
 	decl := codegen.New().GenerateFunction(irFunc, ast)
 	body := decl.Body
 
 	// check the body for any register name token
 	if offender := containsRegisterToken(body); offender != "" {
 		t.Errorf(
-			"bug confirmed: generated c body contains raw register name %q as c identifier\n"+
+			"bug not fixed: generated c body contains raw register name %q as c identifier\n"+
 				"body:\n%s",
 			offender, body,
 		)
@@ -157,7 +175,7 @@ func TestProperty3_BugCondition_ConcreteMovRaxRdi(t *testing.T) {
 	fullOutput := codegen.RenderDecl(decl)
 	if offender := containsRegisterToken(fullOutput); offender != "" {
 		t.Errorf(
-			"bug confirmed: full c output contains raw register name %q as c identifier\n"+
+			"bug not fixed: full c output contains raw register name %q as c identifier\n"+
 				"full output:\n%s",
 			offender, fullOutput,
 		)
@@ -243,8 +261,11 @@ func TestProperty3_BugCondition_RapidRegisterVariables(t *testing.T) {
 		}
 
 		irFunc := buildRandomRegisterFunction(regNames)
-		ast := buildASTForFunction(irFunc)
 
+		// apply the fix: rename register variables before codegen (empty abi = all become var_N)
+		renameRegisterVariables(irFunc, &abi.FunctionABI{})
+
+		ast := buildASTForFunction(irFunc)
 		decl := codegen.New().GenerateFunction(irFunc, ast)
 		fullOutput := codegen.RenderDecl(decl)
 
@@ -272,8 +293,11 @@ func TestProperty3_BugCondition_AllCommonRegisters(t *testing.T) {
 	commonRegs := []string{"rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp"}
 
 	irFunc := buildRandomRegisterFunction(commonRegs)
-	ast := buildASTForFunction(irFunc)
 
+	// apply the fix: rename register variables before codegen (empty abi = all become var_N)
+	renameRegisterVariables(irFunc, &abi.FunctionABI{})
+
+	ast := buildASTForFunction(irFunc)
 	decl := codegen.New().GenerateFunction(irFunc, ast)
 	fullOutput := codegen.RenderDecl(decl)
 
