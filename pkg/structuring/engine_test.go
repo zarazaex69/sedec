@@ -734,3 +734,178 @@ func containsLoopStatement(stmt Statement) bool {
 	}
 	return false
 }
+
+// TestCollapseConditionalNoBlockDuplication verifies that the structuring engine
+// emits each block's ir instructions exactly once for a diamond cfg.
+// this is the unit test for fix 1 (defect 1: block duplication).
+func TestCollapseConditionalNoBlockDuplication(t *testing.T) {
+	// build a simple diamond: entry(0) -> then(1) -> convergence(3)
+	//                          entry(0) -> else(2) -> convergence(3)
+	g := cfg.NewCFG()
+	g.Entry = 0
+
+	for _, id := range []cfg.BlockID{0, 1, 2, 3} {
+		g.AddBlock(&cfg.BasicBlock{ID: id})
+	}
+	g.AddEdge(0, 1, cfg.EdgeTypeConditional)
+	g.AddEdge(0, 2, cfg.EdgeTypeConditional)
+	g.AddEdge(1, 3, cfg.EdgeTypeFallthrough)
+	g.AddEdge(2, 3, cfg.EdgeTypeFallthrough)
+	g.Exits = []cfg.BlockID{3}
+
+	// each block has a unique sentinel assign so occurrences are countable
+	irBlocks := IRBlockMap{
+		0: {ir.Assign{Dest: ir.Variable{Name: "entry_var"}, Source: ir.ConstantExpr{Value: ir.IntConstant{Value: 0, Width: ir.Size8}}}},
+		1: {ir.Assign{Dest: ir.Variable{Name: "then_var"}, Source: ir.ConstantExpr{Value: ir.IntConstant{Value: 1, Width: ir.Size8}}}},
+		2: {ir.Assign{Dest: ir.Variable{Name: "else_var"}, Source: ir.ConstantExpr{Value: ir.IntConstant{Value: 2, Width: ir.Size8}}}},
+		3: {ir.Assign{Dest: ir.Variable{Name: "conv_var"}, Source: ir.ConstantExpr{Value: ir.IntConstant{Value: 3, Width: ir.Size8}}}},
+	}
+
+	dt, err := cfg.ComputeDominatorsForCFG(g)
+	if err != nil {
+		t.Fatalf("compute dominators: %v", err)
+	}
+	li := cfg.NewLoopInfo(g, dt)
+
+	engine, err := New(g, dt, li, irBlocks)
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+
+	ast, err := engine.Structure()
+	if err != nil {
+		t.Fatalf("structure: %v", err)
+	}
+
+	// count occurrences of each sentinel variable in the ast
+	countVar := func(stmt Statement, name string) int {
+		if stmt == nil {
+			return 0
+		}
+		var walk func(Statement) int
+		walk = func(s Statement) int {
+			switch n := s.(type) {
+			case IRBlock:
+				c := 0
+				for _, instr := range n.Instructions {
+					if a, ok := instr.(ir.Assign); ok && a.Dest.Name == name {
+						c++
+					}
+				}
+				return c
+			case Block:
+				c := 0
+				for _, child := range n.Stmts {
+					c += walk(child)
+				}
+				return c
+			case IfStatement:
+				return walk(n.Then) + walk(n.Else)
+			default:
+				return 0
+			}
+		}
+		return walk(stmt)
+	}
+
+	for _, tc := range []struct {
+		varName string
+		blockID cfg.BlockID
+	}{
+		{"entry_var", 0},
+		{"then_var", 1},
+		{"else_var", 2},
+		{"conv_var", 3},
+	} {
+		count := countVar(ast.Body, tc.varName)
+		if count != 1 {
+			t.Errorf("block bb%d (%s): emitted %d times, expected 1\nast:\n%s",
+				tc.blockID, tc.varName, count, ast.Body.String())
+		}
+	}
+}
+
+// TestCollapseConditionalNoBlockDuplication_Extended tests a diamond with
+// two sub-blocks on the then-arm before reaching convergence.
+func TestCollapseConditionalNoBlockDuplication_Extended(t *testing.T) {
+	// entry(0) -> then(1) -> extra(4) -> convergence(3)
+	// entry(0) -> else(2) -> convergence(3)
+	g := cfg.NewCFG()
+	g.Entry = 0
+
+	for _, id := range []cfg.BlockID{0, 1, 2, 3, 4} {
+		g.AddBlock(&cfg.BasicBlock{ID: id})
+	}
+	g.AddEdge(0, 1, cfg.EdgeTypeConditional)
+	g.AddEdge(0, 2, cfg.EdgeTypeConditional)
+	g.AddEdge(1, 4, cfg.EdgeTypeFallthrough)
+	g.AddEdge(4, 3, cfg.EdgeTypeFallthrough)
+	g.AddEdge(2, 3, cfg.EdgeTypeFallthrough)
+	g.Exits = []cfg.BlockID{3}
+
+	irBlocks := IRBlockMap{
+		0: {ir.Assign{Dest: ir.Variable{Name: "entry_var"}, Source: ir.ConstantExpr{Value: ir.IntConstant{Value: 0, Width: ir.Size8}}}},
+		1: {ir.Assign{Dest: ir.Variable{Name: "then_var"}, Source: ir.ConstantExpr{Value: ir.IntConstant{Value: 1, Width: ir.Size8}}}},
+		2: {ir.Assign{Dest: ir.Variable{Name: "else_var"}, Source: ir.ConstantExpr{Value: ir.IntConstant{Value: 2, Width: ir.Size8}}}},
+		3: {ir.Assign{Dest: ir.Variable{Name: "conv_var"}, Source: ir.ConstantExpr{Value: ir.IntConstant{Value: 3, Width: ir.Size8}}}},
+		4: {ir.Assign{Dest: ir.Variable{Name: "extra_var"}, Source: ir.ConstantExpr{Value: ir.IntConstant{Value: 4, Width: ir.Size8}}}},
+	}
+
+	dt, err := cfg.ComputeDominatorsForCFG(g)
+	if err != nil {
+		t.Fatalf("compute dominators: %v", err)
+	}
+	li := cfg.NewLoopInfo(g, dt)
+
+	engine, err := New(g, dt, li, irBlocks)
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+
+	ast, err := engine.Structure()
+	if err != nil {
+		t.Fatalf("structure: %v", err)
+	}
+
+	countVar := func(stmt Statement, name string) int {
+		var walk func(Statement) int
+		walk = func(s Statement) int {
+			if s == nil {
+				return 0
+			}
+			switch n := s.(type) {
+			case IRBlock:
+				c := 0
+				for _, instr := range n.Instructions {
+					if a, ok := instr.(ir.Assign); ok && a.Dest.Name == name {
+						c++
+					}
+				}
+				return c
+			case Block:
+				c := 0
+				for _, child := range n.Stmts {
+					c += walk(child)
+				}
+				return c
+			case IfStatement:
+				return walk(n.Then) + walk(n.Else)
+			default:
+				return 0
+			}
+		}
+		return walk(stmt)
+	}
+
+	for _, tc := range []struct {
+		varName string
+	}{
+		{"entry_var"}, {"then_var"}, {"else_var"}, {"conv_var"}, {"extra_var"},
+	} {
+		count := countVar(ast.Body, tc.varName)
+		if count != 1 {
+			t.Errorf("%s: emitted %d times, expected 1\nast:\n%s",
+				tc.varName, count, ast.Body.String())
+		}
+	}
+}

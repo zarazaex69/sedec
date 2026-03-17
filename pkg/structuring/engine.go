@@ -162,10 +162,13 @@ func (e *Engine) isBackEdge(from, to cfg.BlockID) bool {
 func (e *Engine) collapseRegions(postOrder []cfg.BlockID) ([]Statement, error) {
 	// collapsed maps each block id to its structured statement once collapsed
 	collapsed := make(map[cfg.BlockID]Statement)
+	// inlined tracks blocks that have been inlined into a parent statement
+	// and must not be emitted as top-level statements by the pre-order pass.
+	inlined := make(map[cfg.BlockID]bool)
 
 	// process each block in post-order (bottom-up)
 	for _, blockID := range postOrder {
-		stmt, err := e.collapseBlock(blockID, collapsed)
+		stmt, err := e.collapseBlockWithInlined(blockID, collapsed, inlined)
 		if err != nil {
 			return nil, err
 		}
@@ -179,12 +182,12 @@ func (e *Engine) collapseRegions(postOrder []cfg.BlockID) ([]Statement, error) {
 	result := make([]Statement, 0)
 
 	for _, blockID := range preOrder {
-		if seen[blockID] {
+		if seen[blockID] || inlined[blockID] {
 			continue
 		}
 		seen[blockID] = true
 
-		if stmt, ok := collapsed[blockID]; ok {
+		if stmt, ok := collapsed[blockID]; ok && stmt != nil {
 			result = append(result, stmt)
 		}
 	}
@@ -223,6 +226,13 @@ func (e *Engine) preOrderBlocks(start cfg.BlockID) []cfg.BlockID {
 // collapseBlock determines the structural pattern at blockID and returns
 // the corresponding Statement. it uses already-collapsed child statements.
 func (e *Engine) collapseBlock(blockID cfg.BlockID, collapsed map[cfg.BlockID]Statement) (Statement, error) {
+	return e.collapseBlockWithInlined(blockID, collapsed, nil)
+}
+
+// collapseBlockWithInlined is the internal implementation of collapseBlock.
+// inlined tracks blocks that have been inlined into a parent statement;
+// it may be nil (treated as empty set).
+func (e *Engine) collapseBlockWithInlined(blockID cfg.BlockID, collapsed map[cfg.BlockID]Statement, inlined map[cfg.BlockID]bool) (Statement, error) {
 	block, exists := e.cfgraph.Blocks[blockID]
 	if !exists {
 		return nil, fmt.Errorf("block %d not found in cfg", blockID)
@@ -256,7 +266,7 @@ func (e *Engine) collapseBlock(blockID cfg.BlockID, collapsed map[cfg.BlockID]St
 
 	case 2:
 		// conditional branch: if-then or if-then-else
-		return e.collapseConditional(blockID, block, succs, collapsed)
+		return e.collapseConditional(blockID, block, succs, collapsed, inlined)
 
 	default:
 		// more than 2 successors: indirect jump or switch (emit as goto targets)
@@ -319,6 +329,7 @@ func (e *Engine) collapseConditional(
 	block *cfg.BasicBlock,
 	succs []cfg.BlockID,
 	collapsed map[cfg.BlockID]Statement,
+	inlined map[cfg.BlockID]bool,
 ) (Statement, error) {
 	// extract branch condition from the last IR instruction of this block
 	cond := e.extractBranchCondition(blockID)
@@ -329,6 +340,26 @@ func (e *Engine) collapseConditional(
 	// find the immediate post-dominator (convergence point)
 	// this is the block where both branches merge
 	convergence := e.findConvergencePoint(trueTarget, falseTarget)
+
+	// pre-mark branch targets and convergence as inlined so that
+	// the pre-order traversal in collapseRegions does not emit them as top-level
+	// statements after they have been inlined into the if-statement body.
+	if inlined != nil {
+		// mark all blocks in the then-branch subtree
+		for _, bid := range e.collectBranchBlocks(trueTarget, convergence) {
+			inlined[bid] = true
+		}
+		// mark all blocks in the else-branch subtree
+		if falseTarget != convergence {
+			for _, bid := range e.collectBranchBlocks(falseTarget, convergence) {
+				inlined[bid] = true
+			}
+		}
+		// mark convergence block as inlined (will be emitted after the if-statement)
+		if convergence != e.cfgraph.Entry && convergence != blockID {
+			inlined[convergence] = true
+		}
+	}
 
 	// build then-branch: blocks dominated by trueTarget up to convergence
 	thenStmt, err := e.buildBranch(trueTarget, convergence, collapsed)
@@ -354,7 +385,7 @@ func (e *Engine) collapseConditional(
 		Else:      elseStmt,
 	}
 
-	// mark branch targets as collapsed so pre-order traversal skips them
+	// update collapsed with the actual built statements
 	if thenStmt != nil {
 		collapsed[trueTarget] = thenStmt
 	}
@@ -362,7 +393,21 @@ func (e *Engine) collapseConditional(
 		collapsed[falseTarget] = elseStmt
 	}
 
-	return e.mergeSequential(headerIR, ifStmt), nil
+	result := e.mergeSequential(headerIR, ifStmt)
+
+	// emit convergence block as a sequential statement after the if-statement.
+	// this ensures the convergence block is emitted exactly once, after the
+	// closing brace of the if/else, rather than being duplicated by both branches.
+	if convergence != e.cfgraph.Entry && convergence != blockID {
+		convStmt, convErr := e.collapseBlock(convergence, collapsed)
+		if convErr != nil {
+			return nil, convErr
+		}
+		collapsed[convergence] = convStmt
+		result = e.mergeSequential(result, convStmt)
+	}
+
+	return result, nil
 }
 
 // collapseLoop handles a loop header block. it uses loopClassifier to determine
