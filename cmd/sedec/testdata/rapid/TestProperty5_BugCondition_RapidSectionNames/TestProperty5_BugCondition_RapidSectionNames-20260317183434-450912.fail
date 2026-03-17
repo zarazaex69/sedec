@@ -1,0 +1,17 @@
+# 2026/03/17 18:34:34.787700 [TestProperty5_BugCondition_RapidSectionNames] [rapid] draw sectionName: ".a"
+# 2026/03/17 18:34:34.787707 [TestProperty5_BugCondition_RapidSectionNames] counterexample: sectionName=".a" produces invalid c identifier ".a_func0"
+# chunk name does not match /^[a-zA-Z_][a-zA-Z0-9_]*$/
+# 
+v0.4.8#10234027989650746665
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0

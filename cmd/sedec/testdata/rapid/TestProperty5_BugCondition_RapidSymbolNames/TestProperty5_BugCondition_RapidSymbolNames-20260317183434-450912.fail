@@ -1,0 +1,20 @@
+# 2026/03/17 18:34:34.788720 [TestProperty5_BugCondition_RapidSymbolNames] [rapid] draw prefixLen: 0
+# 2026/03/17 18:34:34.788723 [TestProperty5_BugCondition_RapidSymbolNames] [rapid] draw invalidCharIdx: 0
+# 2026/03/17 18:34:34.788728 [TestProperty5_BugCondition_RapidSymbolNames] [rapid] draw suffixLen: 1
+# 2026/03/17 18:34:34.788729 [TestProperty5_BugCondition_RapidSymbolNames] [rapid] draw suffixChar: 0
+# 2026/03/17 18:34:34.788732 [TestProperty5_BugCondition_RapidSymbolNames] counterexample: symbol name "@a" produces invalid c identifier "@a"
+# chunk name does not match /^[a-zA-Z_][a-zA-Z0-9_]*$/
+# 
+v0.4.8#2426642049138121108
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
