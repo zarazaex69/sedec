@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/zarazaex69/sedec/pkg/abi"
+	binfmt "github.com/zarazaex69/sedec/pkg/binary"
 	"github.com/zarazaex69/sedec/pkg/disasm"
 	"github.com/zarazaex69/sedec/pkg/ir"
 )
@@ -20,7 +21,9 @@ var msX64IntArgRegs = []string{"rcx", "rdx", "r8", "r9"}
 // it detects the calling convention, then for each call site in the IR
 // determines which argument registers are live and populates Call.Args.
 // it also sets the function signature (parameters and return type) on irFunc.
-func applyABIPass(irFunc *ir.Function, rawInsns []*disasm.Instruction) {
+// db is the ground-truth database used to resolve call target addresses to symbol names;
+// it may be nil (e.g., in unit tests), in which case no resolution is performed.
+func applyABIPass(irFunc *ir.Function, rawInsns []*disasm.Instruction, db *binfmt.GroundTruthDatabase) {
 	// detect calling convention from binary format / platform heuristic.
 	// for now we default to system v amd64 (linux/macos); windows binaries
 	// would need pe format detection to switch to microsoft x64.
@@ -32,6 +35,10 @@ func applyABIPass(irFunc *ir.Function, rawInsns []*disasm.Instruction) {
 
 	// run full abi analysis on the raw instruction stream
 	funcABI := analyzer.Analyze(rawInsns)
+
+	// mark frame prologue/epilogue instructions as artifacts so codegen suppresses them
+	frameAddrs := collectFrameArtifactAddresses(rawInsns, funcABI.Frame, funcABI.CalleeSavedRegs)
+	markFrameArtifacts(irFunc, frameAddrs)
 
 	// update function signature from abi analysis
 	applyFunctionSignature(irFunc, funcABI)
@@ -64,6 +71,10 @@ func applyABIPass(irFunc *ir.Function, rawInsns []*disasm.Instruction) {
 			// to find the last writes to each argument register.
 			callResult := collectCallArgs(callAddr, rawInsns, insnByAddr, argRegs)
 			callNode.Args = callResult.args
+
+			// resolve call target: replace numeric address constants with symbol names
+			// using the ground-truth database (got/plt, symbol table, imports).
+			callNode.Target = resolveCallTarget(callNode.Target, db)
 
 			// determine return value: if rax is written by the call target,
 			// assign a fresh temp as the call destination.
@@ -410,4 +421,202 @@ func removeAbsorbedPushInstrs(block *ir.BasicBlock, absorbedAddrs map[disasm.Add
 		}
 	}
 	block.Instructions = kept
+}
+
+// collectFrameArtifactAddresses identifies the addresses of frame prologue/epilogue
+// instructions in rawInsns. it returns a set of addresses that should be marked
+// as frame artifacts in the ir so the code generator can suppress them.
+//
+// identified patterns:
+//   - push rbp  (frame pointer save)
+//   - mov rbp, rsp  (frame pointer establishment)
+//   - sub rsp, N  (first stack allocation after mov rbp,rsp — not alloca)
+//   - pop rbp  (frame pointer restore)
+//   - leave  (equivalent to mov rsp,rbp; pop rbp)
+//
+// additionally, callee-saved register spill/restore sites from funcABI are included.
+func collectFrameArtifactAddresses(
+	rawInsns []*disasm.Instruction,
+	frame *abi.StackFrame,
+	calleeSaved []abi.CalleeSavedRegisterStatus,
+) map[disasm.Address]bool {
+	addrs := make(map[disasm.Address]bool)
+
+	// track whether we have seen "mov rbp, rsp" to gate the sub rsp detection
+	seenMovRbpRsp := false
+	// track whether we have already absorbed the first sub rsp (frame allocation)
+	absorbedSubRsp := false
+
+	for _, insn := range rawInsns {
+		m := strings.ToLower(insn.Mnemonic)
+
+		switch m {
+		case "push":
+			// push rbp — frame pointer save
+			if len(insn.Operands) == 1 {
+				if reg, ok := insn.Operands[0].(disasm.RegisterOperand); ok {
+					if strings.ToLower(reg.Name) == "rbp" {
+						addrs[insn.Address] = true
+					}
+				}
+			}
+
+		case "mov":
+			// mov rbp, rsp — frame pointer establishment
+			if len(insn.Operands) == 2 {
+				dest, destOk := insn.Operands[0].(disasm.RegisterOperand)
+				src, srcOk := insn.Operands[1].(disasm.RegisterOperand)
+				if destOk && srcOk &&
+					strings.ToLower(dest.Name) == "rbp" &&
+					strings.ToLower(src.Name) == "rsp" {
+					addrs[insn.Address] = true
+					seenMovRbpRsp = true
+					absorbedSubRsp = false // reset for this function
+				}
+			}
+
+		case "sub":
+			// sub rsp, N — first stack allocation after mov rbp,rsp is the frame artifact
+			if seenMovRbpRsp && !absorbedSubRsp && len(insn.Operands) == 2 {
+				dest, destOk := insn.Operands[0].(disasm.RegisterOperand)
+				_, immOk := insn.Operands[1].(disasm.ImmediateOperand)
+				if destOk && immOk && strings.ToLower(dest.Name) == "rsp" {
+					addrs[insn.Address] = true
+					absorbedSubRsp = true
+				}
+			}
+
+		case "pop":
+			// pop rbp — frame pointer restore
+			if len(insn.Operands) == 1 {
+				if reg, ok := insn.Operands[0].(disasm.RegisterOperand); ok {
+					if strings.ToLower(reg.Name) == "rbp" {
+						addrs[insn.Address] = true
+					}
+				}
+			}
+
+		case "leave":
+			// leave = mov rsp,rbp; pop rbp
+			addrs[insn.Address] = true
+		}
+	}
+
+	// include callee-saved register spill/restore sites from abi analysis
+	for _, cs := range calleeSaved {
+		if cs.SaveSite != 0 {
+			addrs[cs.SaveSite] = true
+		}
+		if cs.RestoreSite != 0 {
+			addrs[cs.RestoreSite] = true
+		}
+	}
+
+	// frame parameter is reserved for future use (e.g., alloca detection)
+	_ = frame
+
+	return addrs
+}
+
+// markFrameArtifacts walks all ir instructions in irFunc and sets IsFrameArtifact = true
+// on every instruction whose source address is in frameAddrs.
+// only pointer-receiver instruction types are handled because the lifter emits pointers.
+func markFrameArtifacts(irFunc *ir.Function, frameAddrs map[disasm.Address]bool) {
+	if len(frameAddrs) == 0 {
+		return
+	}
+
+	for _, block := range irFunc.Blocks {
+		for _, instr := range block.Instructions {
+			loc := instr.Location()
+			if !frameAddrs[disasm.Address(loc.Address)] {
+				continue
+			}
+			// set IsFrameArtifact on the concrete pointer type via type switch
+			switch typed := instr.(type) {
+			case *ir.Assign:
+				typed.Loc.IsFrameArtifact = true
+			case *ir.Store:
+				typed.Loc.IsFrameArtifact = true
+			case *ir.Load:
+				typed.Loc.IsFrameArtifact = true
+			case *ir.Call:
+				typed.Loc.IsFrameArtifact = true
+			case *ir.Return:
+				typed.Loc.IsFrameArtifact = true
+			case *ir.Branch:
+				typed.Loc.IsFrameArtifact = true
+			case *ir.Jump:
+				typed.Loc.IsFrameArtifact = true
+			case *ir.Phi:
+				typed.Loc.IsFrameArtifact = true
+			}
+		}
+	}
+}
+
+// resolveCallTarget attempts to replace a numeric call target address with the
+// corresponding symbol name from the ground-truth database.
+//
+// resolution priority order:
+//  1. db.GOTPLT — plt stub addresses (highest priority: these are the canonical import stubs)
+//  2. db.SymbolsByAddress — static symbol table entries
+//  3. db.Imports — dynamic import table entries
+//
+// if db is nil, or if target is not a ConstantExpr with an IntConstant, or if the
+// address is not found in any map, the original target expression is returned unchanged.
+// indirect calls through registers (e.g., call rax) are left unchanged because they
+// are VariableExpr nodes, not ConstantExpr nodes.
+func resolveCallTarget(target ir.Expression, db *binfmt.GroundTruthDatabase) ir.Expression {
+	if db == nil {
+		return target
+	}
+
+	// only direct calls with a constant address can be resolved
+	constExpr, ok := target.(ir.ConstantExpr)
+	if !ok {
+		return target
+	}
+	intConst, ok := constExpr.Value.(ir.IntConstant)
+	if !ok {
+		return target
+	}
+
+	// #nosec G115 — intentional conversion: addresses are unsigned 64-bit values
+	addr := binfmt.Address(uint64(intConst.Value))
+
+	// priority 1: got/plt map — plt stub addresses resolve to imported symbol names
+	if _, inGOTPLT := db.GOTPLT[addr]; inGOTPLT {
+		if name, ok := db.SymbolsByAddress[addr]; ok && name != "" {
+			return ir.VariableExpr{
+				Var: ir.Variable{
+					Name: name,
+					Type: ir.PointerType{Pointee: ir.VoidType{}},
+				},
+			}
+		}
+	}
+
+	// priority 2: static symbol table
+	if name, ok := db.SymbolsByAddress[addr]; ok && name != "" {
+		return ir.VariableExpr{
+			Var: ir.Variable{
+				Name: name,
+				Type: ir.PointerType{Pointee: ir.VoidType{}},
+			},
+		}
+	}
+
+	// priority 3: dynamic import table
+	if imp, ok := db.Imports[addr]; ok && imp != nil && imp.Name != "" {
+		return ir.VariableExpr{
+			Var: ir.Variable{
+				Name: imp.Name,
+				Type: ir.PointerType{Pointee: ir.VoidType{}},
+			},
+		}
+	}
+
+	// address not found in any map — leave target unchanged
+	return target
 }

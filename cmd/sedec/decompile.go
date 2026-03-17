@@ -262,7 +262,7 @@ func decompileFunction(
 	// sanitize the function name to ensure it is a valid c identifier
 	safeFuncName := sanitizeFunctionName(target.name, uint64(target.address))
 
-	cCode, err := decompileInstructions(safeFuncName, instructions)
+	cCode, err := decompileInstructions(safeFuncName, instructions, binaryInfo.GroundTruthDB)
 	if err != nil {
 		return fmt.Errorf("failed to decompile function %s: %w", target.name, err)
 	}
@@ -340,7 +340,7 @@ func decompileAllSections(
 			defer wg.Done()
 			for idx := range jobs {
 				chunk := allChunks[idx]
-				code, err := decompileInstructions(chunk.name, chunk.instructions)
+				code, err := decompileInstructions(chunk.name, chunk.instructions, binaryInfo.GroundTruthDB)
 				results[idx] = result{index: idx, code: code, err: err}
 			}
 		}()
@@ -484,7 +484,7 @@ func splitOnRetBoundaries(instructions []*disasm.Instruction, sectionName string
 }
 
 // decompileInstructions runs the full pipeline: lift → cfg → domtree → loops → abi → structure → codegen
-func decompileInstructions(functionName string, instructions []*disasm.Instruction) (string, error) {
+func decompileInstructions(functionName string, instructions []*disasm.Instruction, db *binfmt.GroundTruthDatabase) (string, error) {
 	// lift instructions to ir; cfgBuilder retains the built cfg internally
 	irFunc, cfgBuilder, err := liftInstructionsToIR(functionName, instructions)
 	if err != nil {
@@ -493,7 +493,7 @@ func decompileInstructions(functionName string, instructions []*disasm.Instructi
 
 	// run abi analysis pass: populates Call.Args, sets function signature,
 	// and infers return types from register usage at call sites.
-	applyABIPass(irFunc, instructions)
+	applyABIPass(irFunc, instructions, db)
 
 	// compute dominator tree (lengauer-tarjan via gonum)
 	domTree, err := cfgBuilder.ComputeDominators()

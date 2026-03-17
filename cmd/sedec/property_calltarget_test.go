@@ -160,12 +160,11 @@ func TestProperty6_BugCondition_ConcreteCallToPrintf(t *testing.T) {
 	irFunc := buildCallTargetIRFunction(printfAddr)
 	rawInsns := buildCallRawInsns(printfAddr)
 
-	// construct the ground truth database — applyABIPass on unfixed code ignores this
+	// construct the ground truth database with printf at the plt stub address
 	db := buildGroundTruthDB(printfAddr, "printf")
-	_ = db // unfixed applyABIPass does not accept this parameter
 
-	// call applyABIPass on unfixed code — it does NOT accept a database parameter
-	applyABIPass(irFunc, rawInsns)
+	// call applyABIPass with the ground truth database
+	applyABIPass(irFunc, rawInsns, db)
 
 	// extract the call target after the abi pass
 	target := extractCallTarget(irFunc)
@@ -210,9 +209,8 @@ func TestProperty6_BugCondition_ConcreteCallToStackChkFail(t *testing.T) {
 	rawInsns := buildCallRawInsns(stackChkAddr)
 
 	db := buildGroundTruthDB(stackChkAddr, "__stack_chk_fail")
-	_ = db
 
-	applyABIPass(irFunc, rawInsns)
+	applyABIPass(irFunc, rawInsns, db)
 
 	target := extractCallTarget(irFunc)
 	if target == nil {
@@ -303,12 +301,11 @@ func TestProperty6_BugCondition_RapidCallTargetResolution(t *testing.T) {
 		irFunc := buildCallTargetIRFunction(callTargetAddr)
 		rawInsns := buildCallRawInsns(callTargetAddr)
 
-		// build the ground truth database — unfixed applyABIPass ignores this
+		// build the ground truth database with the generated address→symbol mapping
 		db := buildGroundTruthDB(callTargetAddr, symbolName)
-		_ = db
 
-		// call applyABIPass — does NOT accept database on unfixed code
-		applyABIPass(irFunc, rawInsns)
+		// call applyABIPass with the ground truth database
+		applyABIPass(irFunc, rawInsns, db)
 
 		// extract the call target after the abi pass
 		target := extractCallTarget(irFunc)
@@ -382,9 +379,8 @@ func TestPreservation6_UnknownCallTargetUnchanged(t *testing.T) {
 			return
 		}
 
-		// call applyABIPass — on unfixed code this does not modify any target
-		// on fixed code this must also leave unknown targets unchanged
-		applyABIPass(irFunc, rawInsns)
+		// call applyABIPass with an empty database — unknown address must remain unchanged
+		applyABIPass(irFunc, rawInsns, binfmt.NewGroundTruthDatabase())
 
 		// extract the target after the pass
 		resultTarget := extractCallTarget(irFunc)
@@ -420,7 +416,7 @@ func TestPreservation6_ConcreteUnknownAddressUnchanged(t *testing.T) {
 	irFunc := buildCallTargetIRFunction(unknownAddr)
 	rawInsns := buildCallRawInsns(unknownAddr)
 
-	applyABIPass(irFunc, rawInsns)
+	applyABIPass(irFunc, rawInsns, binfmt.NewGroundTruthDatabase())
 
 	target := extractCallTarget(irFunc)
 	if target == nil {

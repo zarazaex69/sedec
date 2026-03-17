@@ -157,7 +157,7 @@ func buildFramePrologueInsns(baseAddr disasm.Address, frameSize int64) []*disasm
 // this mirrors decompileInstructions but returns the output for assertion.
 func runFullPipelineAndGetCOutput(t *testing.T, funcName string, insns []*disasm.Instruction) string {
 	t.Helper()
-	cCode, err := decompileInstructions(funcName, insns)
+	cCode, err := decompileInstructions(funcName, insns, nil)
 	if err != nil {
 		// pipeline errors are acceptable — the test is about output content, not pipeline success.
 		// if the pipeline fails entirely, return empty string (no frame artifacts = no bug triggered).
@@ -383,8 +383,8 @@ func TestProperty8_BugCondition_IRLevelFrameArtifacts(t *testing.T) {
 		return
 	}
 
-	// apply abi pass — on unfixed code this does NOT suppress frame artifacts
-	applyABIPass(irFunc, insns)
+	// apply abi pass — pass nil database (no symbol resolution needed for frame test)
+	applyABIPass(irFunc, insns, nil)
 
 	// generate c output directly from the ir function using a minimal ast
 	// that wraps all blocks as ir blocks

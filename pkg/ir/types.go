@@ -22,17 +22,22 @@ const (
 
 // SourceLocation tracks the original assembly address for traceability
 type SourceLocation struct {
-	Address     Address // virtual address in binary
-	Instruction string  // original assembly mnemonic (e.g., "mov rax, rbx")
-	Function    string  // function name if known
+	Address         Address // virtual address in binary
+	Instruction     string  // original assembly mnemonic (e.g., "mov rax, rbx")
+	Function        string  // function name if known
+	IsFrameArtifact bool    // true when this instruction is a frame prologue/epilogue artifact
 }
 
 // String returns human-readable source location
 func (s SourceLocation) String() string {
-	if s.Function != "" {
-		return fmt.Sprintf("%s+0x%x: %s", s.Function, s.Address, s.Instruction)
+	var suffix string
+	if s.IsFrameArtifact {
+		suffix = " [frame]"
 	}
-	return fmt.Sprintf("0x%x: %s", s.Address, s.Instruction)
+	if s.Function != "" {
+		return fmt.Sprintf("%s+0x%x: %s%s", s.Function, s.Address, s.Instruction, suffix)
+	}
+	return fmt.Sprintf("0x%x: %s%s", s.Address, s.Instruction, suffix)
 }
 
 // ============================================================================

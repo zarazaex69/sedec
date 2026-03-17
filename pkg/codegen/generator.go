@@ -315,6 +315,10 @@ func (s *generatorState) genReturn(n structuring.ReturnStatement, depth int) str
 // Returns empty string for instructions that should be suppressed (phi nodes, jumps).
 // Both value and pointer receivers are handled since the lifter emits pointer types.
 func (s *generatorState) genIRInstruction(instr ir.IRInstruction) string {
+	// suppress frame prologue/epilogue artifacts (push rbp, mov rbp rsp, sub rsp N, etc.)
+	if instr.Location().IsFrameArtifact {
+		return ""
+	}
 	if n, ok := ir.AsAssign(instr); ok {
 		return fmt.Sprintf("%s = %s;", n.Dest.String(), s.genExpression(n.Source))
 	}
