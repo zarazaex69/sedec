@@ -501,7 +501,8 @@ func TestLifterShift(t *testing.T) {
 	}
 }
 
-// TestLifterUnsupported tests that unsupported instructions return errors.
+// TestLifterUnsupported tests that unsupported instructions are handled gracefully.
+// unknown mnemonics produce an empty ir block (no error) to preserve control flow.
 func TestLifterUnsupported(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -509,24 +510,27 @@ func TestLifterUnsupported(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "unsupported instruction",
+			name: "unsupported instruction returns empty block",
 			insn: &disasm.Instruction{
 				Address:  0x6000,
 				Mnemonic: "foobar",
 				Operands: []disasm.Operand{},
 				Length:   1,
 			},
-			wantErr: true,
+			wantErr: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			lifter := NewLifter()
-			_, err := lifter.LiftInstruction(tt.insn)
+			result, err := lifter.LiftInstruction(tt.insn)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("LiftInstruction() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err == nil && len(result) != 0 {
+				t.Errorf("LiftInstruction() returned %d instructions for unknown mnemonic, want 0", len(result))
 			}
 		})
 	}

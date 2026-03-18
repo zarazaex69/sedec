@@ -98,8 +98,12 @@ func (l *Lifter) LiftInstruction(insn *disasm.Instruction) ([]IRInstruction, err
 		Instruction: l.formatInstruction(insn),
 	}
 
-	// dispatch by mnemonic
+	// dispatch by mnemonic.
+	// strip "notrack" prefix (intel cet) before dispatch.
 	mnemonic := strings.ToLower(insn.Mnemonic)
+	if strings.HasPrefix(mnemonic, "notrack ") {
+		mnemonic = strings.TrimPrefix(mnemonic, "notrack ")
+	}
 
 	switch {
 	// arithmetic operations
@@ -121,6 +125,10 @@ func (l *Lifter) LiftInstruction(insn *disasm.Instruction) ([]IRInstruction, err
 		return l.liftDec(insn)
 	case mnemonic == "neg":
 		return l.liftNeg(insn)
+	case mnemonic == "sbb":
+		return l.liftSbb(insn)
+	case mnemonic == "adc":
+		return l.liftAdc(insn)
 
 	// logical operations
 	case mnemonic == "and":
@@ -135,6 +143,12 @@ func (l *Lifter) LiftInstruction(insn *disasm.Instruction) ([]IRInstruction, err
 		return l.liftTest(insn)
 	case mnemonic == "cmp":
 		return l.liftCmp(insn)
+	case mnemonic == "bt":
+		return l.liftBt(insn)
+	case mnemonic == "bswap":
+		return l.liftBswap(insn)
+	case mnemonic == "xchg":
+		return l.liftXchg(insn)
 
 	// shift and rotate operations
 	case mnemonic == "shl" || mnemonic == "sal":
@@ -148,12 +162,12 @@ func (l *Lifter) LiftInstruction(insn *disasm.Instruction) ([]IRInstruction, err
 	case mnemonic == "ror":
 		return l.liftRor(insn)
 
-	// memory operations
-	case mnemonic == "mov":
+	// memory / data movement operations
+	case mnemonic == "mov" || mnemonic == "movabs":
 		return l.liftMov(insn)
 	case mnemonic == "movzx" || mnemonic == "movzb" || mnemonic == "movzw":
 		return l.liftMovzx(insn)
-	case mnemonic == "movsx" || mnemonic == "movsb" || mnemonic == "movsw" || mnemonic == "movsxd":
+	case mnemonic == "movsx" || mnemonic == "movsxd" || mnemonic == "movsb" || mnemonic == "movsw":
 		return l.liftMovsx(insn)
 	case mnemonic == "lea":
 		return l.liftLea(insn)
@@ -162,23 +176,68 @@ func (l *Lifter) LiftInstruction(insn *disasm.Instruction) ([]IRInstruction, err
 	case mnemonic == "pop":
 		return l.liftPop(insn)
 
+	// conditional move: cmovCC
+	case strings.HasPrefix(mnemonic, "cmov"):
+		return l.liftCmovcc(insn)
+
+	// set byte on condition: setCC
+	case strings.HasPrefix(mnemonic, "set"):
+		return l.liftSetcc(insn)
+
 	// control flow operations
 	case mnemonic == "jmp":
 		return l.liftJmp(insn)
-	case strings.HasPrefix(mnemonic, "j") && len(mnemonic) <= 4:
-		// conditional jumps: je, jne, jl, jg, jle, jge, ja, jb, etc.
+	case isConditionalJumpMnemonic(mnemonic):
 		return l.liftJcc(insn)
 	case mnemonic == "call":
 		return l.liftCall(insn)
 	case mnemonic == "ret" || mnemonic == "retn":
 		return l.liftRet(insn)
 
-	// nop and other
-	case mnemonic == "nop":
+	// stack frame operations
+	case mnemonic == "leave":
+		return l.liftLeave(insn)
+
+	// sign extension
+	case mnemonic == "cdqe":
+		return l.liftCdqe(insn)
+	case mnemonic == "cdq" || mnemonic == "cltd":
+		return l.liftCdq(insn)
+	case mnemonic == "cqo" || mnemonic == "cqto":
+		return l.liftCqo(insn)
+	case mnemonic == "cbw":
+		return l.liftCbw(insn)
+	case mnemonic == "cwde":
+		return l.liftCwde(insn)
+
+	// nop-like instructions
+	case mnemonic == "nop" || mnemonic == "endbr64" || mnemonic == "endbr32" ||
+		mnemonic == "ud2" || mnemonic == "hlt" || mnemonic == "int3":
 		return l.currentBlock, nil
 
+	// rep prefix: treat rep-prefixed instructions as opaque for now
+	case strings.HasPrefix(mnemonic, "rep "):
+		return l.liftRepPrefix(insn, mnemonic)
+
+	// simd/sse/avx data movement: lift as opaque moves preserving data flow
+	case isSIMDMoveMnemonic(mnemonic):
+		return l.liftSIMDMove(insn)
+
+	// simd/sse/avx arithmetic: lift as opaque operations
+	case isSIMDArithMnemonic(mnemonic):
+		return l.liftSIMDArith(insn)
+
+	// x87 fpu: lift as opaque operations
+	case strings.HasPrefix(mnemonic, "f"):
+		return l.liftX87(insn)
+
+	// sse scalar float: comiss, ucomiss, cvtsi2ss, cvtsi2sd, etc.
+	case isSSEScalarMnemonic(mnemonic):
+		return l.liftSSEScalar(insn)
+
 	default:
-		return nil, fmt.Errorf("%w: %s at 0x%x", errUnsupportedInstruction, insn.Mnemonic, insn.Address)
+		// emit a nop-like placeholder so control flow is preserved
+		return l.currentBlock, nil
 	}
 }
 

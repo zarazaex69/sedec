@@ -378,6 +378,16 @@ func liftInstructionsToIR(functionName string, instructions []*disasm.Instructio
 		}
 		irInstrs, liftErr := lifter.LiftInstruction(instr)
 		if liftErr != nil {
+			// emit a nop-like assign so the instruction address is preserved
+			// in the ir block, maintaining control flow integrity
+			nopVar := ir.Variable{Name: "_", Type: ir.IntType{Width: ir.Size8, Signed: false}}
+			loc := ir.SourceLocation{
+				Address:     ir.Address(instr.Address),
+				Instruction: fmt.Sprintf("/* unsupported: %s */", instr.Mnemonic),
+			}
+			nopInstr := ir.NewAssignWithLocation(nopVar,
+				ir.ConstantExpr{Value: ir.IntConstant{Value: 0, Width: ir.Size8}}, loc)
+			allIRInstructions = append(allIRInstructions, nopInstr)
 			continue
 		}
 		allIRInstructions = append(allIRInstructions, irInstrs...)

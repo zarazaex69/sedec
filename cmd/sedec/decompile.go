@@ -394,7 +394,8 @@ func splitSectionIntoFunctions(
 		addrToIdx[instr.Address] = i
 	}
 
-	// collect function symbols within this section's address range
+	// collect function symbols within this section's address range.
+	// filter out dynamic imports (address == 0) and symbols outside the section.
 	type funcSym struct {
 		name string
 		addr disasm.Address
@@ -402,6 +403,9 @@ func splitSectionIntoFunctions(
 	var funcSyms []funcSym
 	for _, sym := range symbols {
 		if sym.Type != binfmt.SymbolTypeFunction {
+			continue
+		}
+		if sym.Address == 0 {
 			continue
 		}
 		addr := disasm.Address(sym.Address)
@@ -414,37 +418,195 @@ func splitSectionIntoFunctions(
 		funcSyms = append(funcSyms, funcSym{name: sym.Name, addr: addr})
 	}
 
-	// sort by address ascending
-	sort.Slice(funcSyms, func(i, j int) bool {
-		return funcSyms[i].addr < funcSyms[j].addr
+	// detect function prologues as additional split points for stripped binaries.
+	// this catches functions that have no symbol table entry.
+	prologueAddrs := detectFunctionPrologues(instructions, addrToIdx)
+
+	// merge symbol-based and prologue-based function starts, deduplicating
+	startSet := make(map[disasm.Address]string, len(funcSyms)+len(prologueAddrs))
+	for _, sym := range funcSyms {
+		startSet[sym.addr] = sym.name
+	}
+	for _, addr := range prologueAddrs {
+		if _, exists := startSet[addr]; !exists {
+			startSet[addr] = fmt.Sprintf("sub_%x", uint64(addr))
+		}
+	}
+
+	// collect all function start addresses and sort
+	type funcStart struct {
+		name string
+		addr disasm.Address
+	}
+	var starts []funcStart
+	for addr, name := range startSet {
+		starts = append(starts, funcStart{name: name, addr: addr})
+	}
+	sort.Slice(starts, func(i, j int) bool {
+		return starts[i].addr < starts[j].addr
 	})
 
-	// if we have symbol information, split by symbol boundaries
-	if len(funcSyms) > 0 {
-		chunks := make([]funcChunk, 0, len(funcSyms))
-		for i, sym := range funcSyms {
-			startIdx := addrToIdx[sym.addr]
-			endIdx := len(instructions)
-			if i+1 < len(funcSyms) {
-				if nextIdx, ok := addrToIdx[funcSyms[i+1].addr]; ok {
-					endIdx = nextIdx
-				}
-			}
-			if startIdx >= endIdx {
-				continue
-			}
-			chunks = append(chunks, funcChunk{
-				name:         sanitizeFunctionName(sym.name, uint64(sym.addr)),
-				instructions: instructions[startIdx:endIdx],
-			})
+	if len(starts) == 0 {
+		// absolute fallback: split on ret boundaries
+		return splitOnRetBoundaries(instructions, sectionName)
+	}
+
+	// split instructions by function boundaries
+	chunks := make([]funcChunk, 0, len(starts))
+	for i, fs := range starts {
+		startIdx, ok := addrToIdx[fs.addr]
+		if !ok {
+			continue
 		}
-		if len(chunks) > 0 {
-			return chunks
+		endIdx := len(instructions)
+		if i+1 < len(starts) {
+			if nextIdx, ok := addrToIdx[starts[i+1].addr]; ok {
+				endIdx = nextIdx
+			}
 		}
+		if startIdx >= endIdx {
+			continue
+		}
+
+		// trim trailing nop/alignment padding from the chunk
+		trimmed := trimTrailingPadding(instructions[startIdx:endIdx])
+		if len(trimmed) == 0 {
+			continue
+		}
+
+		chunks = append(chunks, funcChunk{
+			name:         sanitizeFunctionName(fs.name, uint64(fs.addr)),
+			instructions: trimmed,
+		})
+	}
+
+	if len(chunks) > 0 {
+		return chunks
 	}
 
 	// fallback: split on ret instruction boundaries
 	return splitOnRetBoundaries(instructions, sectionName)
+}
+
+// detectFunctionPrologues scans instructions for common x86_64 function prologue patterns.
+// returns addresses of detected function entry points.
+//
+// detected patterns:
+//   - [endbr64;] push rbp [; mov rbp, rsp]
+//   - [endbr64;] sub rsp, imm  (leaf function with stack frame)
+//   - instruction immediately after a ret/int3/ud2 that starts with push rbp or endbr64
+func detectFunctionPrologues(instructions []*disasm.Instruction, addrToIdx map[disasm.Address]int) []disasm.Address {
+	var result []disasm.Address
+
+	for i := 0; i < len(instructions); i++ {
+		if !isPrologueStart(instructions, i) {
+			continue
+		}
+		result = append(result, instructions[i].Address)
+	}
+
+	_ = addrToIdx
+	return result
+}
+
+// isPrologueStart checks if instruction at index i looks like a function entry.
+func isPrologueStart(instrs []*disasm.Instruction, i int) bool {
+	m := strings.ToLower(instrs[i].Mnemonic)
+
+	// must be preceded by a terminator or be the first instruction
+	if i > 0 {
+		prev := strings.ToLower(instrs[i-1].Mnemonic)
+		if prev != "ret" && prev != "retn" && prev != "int3" && prev != "ud2" &&
+			prev != "hlt" && prev != "jmp" && !strings.HasPrefix(prev, "notrack jmp") {
+			// not after a terminator -- could be mid-function
+			// exception: endbr64 after alignment nops
+			if m != "endbr64" || !isAlignmentPadding(instrs[i-1]) {
+				return false
+			}
+		}
+	}
+
+	// pattern 1: endbr64 followed by push rbp
+	if m == "endbr64" {
+		if i+1 < len(instrs) {
+			next := instrs[i+1]
+			if isPushRbp(next) {
+				return true
+			}
+			// endbr64 + sub rsp, imm (leaf function)
+			if isSubRsp(next) {
+				return true
+			}
+		}
+		// standalone endbr64 after terminator is still a function start
+		return true
+	}
+
+	// pattern 2: push rbp [; mov rbp, rsp]
+	if isPushRbp(instrs[i]) {
+		return true
+	}
+
+	// pattern 3: sub rsp, imm (leaf function without frame pointer)
+	// only if preceded by a terminator
+	if i > 0 && isSubRsp(instrs[i]) {
+		prev := strings.ToLower(instrs[i-1].Mnemonic)
+		if prev == "ret" || prev == "retn" || prev == "int3" || prev == "ud2" || prev == "jmp" {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isPushRbp checks if instruction is "push rbp"
+func isPushRbp(instr *disasm.Instruction) bool {
+	if strings.ToLower(instr.Mnemonic) != "push" {
+		return false
+	}
+	if len(instr.Operands) != 1 {
+		return false
+	}
+	reg, ok := instr.Operands[0].(disasm.RegisterOperand)
+	return ok && strings.ToLower(reg.Name) == "rbp"
+}
+
+// isSubRsp checks if instruction is "sub rsp, imm"
+func isSubRsp(instr *disasm.Instruction) bool {
+	if strings.ToLower(instr.Mnemonic) != "sub" {
+		return false
+	}
+	if len(instr.Operands) < 2 {
+		return false
+	}
+	reg, ok := instr.Operands[0].(disasm.RegisterOperand)
+	if !ok || strings.ToLower(reg.Name) != "rsp" {
+		return false
+	}
+	_, isImm := instr.Operands[1].(disasm.ImmediateOperand)
+	return isImm
+}
+
+// isAlignmentPadding checks if instruction is nop padding (nop, nop dword [...], etc.)
+func isAlignmentPadding(instr *disasm.Instruction) bool {
+	m := strings.ToLower(instr.Mnemonic)
+	return m == "nop" || m == "int3"
+}
+
+// trimTrailingPadding removes trailing nop/int3 padding from instruction slice.
+func trimTrailingPadding(instrs []*disasm.Instruction) []*disasm.Instruction {
+	end := len(instrs)
+	for end > 0 {
+		m := strings.ToLower(instrs[end-1].Mnemonic)
+		if m != "nop" && m != "int3" {
+			break
+		}
+		end--
+	}
+	if end == 0 {
+		return nil
+	}
+	return instrs[:end]
 }
 
 // splitOnRetBoundaries splits instructions into chunks at each ret/retn instruction.
