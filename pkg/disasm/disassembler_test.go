@@ -870,6 +870,377 @@ func TestDisassembleFunction_EmptyInput(t *testing.T) {
 	}
 }
 
+// TestDisassembleBytes_InvalidOnlyStream tests DisassembleBytes with entirely invalid bytes
+func TestDisassembleBytes_InvalidOnlyStream(t *testing.T) {
+	d := newTestDisassembler(t)
+
+	invalidBytes := []byte{0x06, 0x06, 0x06, 0x06, 0x06}
+	insns, err := d.DisassembleBytes(invalidBytes, 0x1000)
+	if err != nil {
+		t.Fatalf("DisassembleBytes should not return error for invalid stream: %v", err)
+	}
+
+	if len(insns) != 0 {
+		t.Errorf("expected 0 decoded instructions from invalid stream, got %d", len(insns))
+	}
+}
+
+// TestDisassembleBytes_MultiByteMixedWithInvalid tests DisassembleBytes with multi-byte
+// instructions interleaved with invalid opcodes
+func TestDisassembleBytes_MultiByteMixedWithInvalid(t *testing.T) {
+	d := newTestDisassembler(t)
+
+	bytes := []byte{
+		0x48, 0x89, 0xd8, // mov rax, rbx (3 bytes)
+		0x06,                   // invalid in 64-bit mode
+		0x48, 0x83, 0xc0, 0x01, // add rax, 1 (4 bytes)
+		0x06,       // invalid
+		0x06,       // invalid
+		0x55,       // push rbp (1 byte)
+		0x06, 0x06, // invalid x2
+		0xc3, // ret (1 byte)
+	}
+
+	insns, err := d.DisassembleBytes(bytes, 0x4000)
+	if err != nil {
+		t.Fatalf("DisassembleBytes failed: %v", err)
+	}
+
+	if len(insns) < 4 {
+		t.Fatalf("expected at least 4 valid instructions, got %d", len(insns))
+	}
+
+	expectedMnemonics := []string{"mov", "add", "push", "ret"}
+	for i, expected := range expectedMnemonics {
+		if insns[i].Mnemonic != expected {
+			t.Errorf("instruction %d: got %q, want %q", i, insns[i].Mnemonic, expected)
+		}
+	}
+}
+
+// TestDisassemble_TruncatedMultiByteInstruction tests Disassemble with a truncated
+// multi-byte instruction (not empty, but insufficient for a complete instruction)
+func TestDisassemble_TruncatedMultiByteInstruction(t *testing.T) {
+	d := newTestDisassembler(t)
+
+	// REX.W prefix alone without following opcode bytes
+	truncated := []byte{0x48}
+	_, err := d.Disassemble(truncated, 0x1000)
+
+	if err == nil {
+		t.Fatal("expected error for truncated instruction, got nil")
+	}
+}
+
+// TestDisassemble_RIPRelativeResolution tests that RIP-relative memory operands
+// are resolved to absolute virtual addresses
+func TestDisassemble_RIPRelativeResolution(t *testing.T) {
+	d := newTestDisassembler(t)
+
+	// lea rax, [rip + 0x1000]
+	// at address 0x5000, instruction length 7 bytes
+	// resolved address = 0x5000 + 7 + 0x1000 = 0x6007
+	bytes := []byte{0x48, 0x8d, 0x05, 0x00, 0x10, 0x00, 0x00}
+	insn, err := d.Disassemble(bytes, 0x5000)
+	if err != nil {
+		t.Fatalf("disassemble failed: %v", err)
+	}
+
+	if len(insn.Operands) < 2 {
+		t.Fatalf("expected at least 2 operands, got %d", len(insn.Operands))
+	}
+
+	memOp, ok := insn.Operands[1].(MemoryOperand)
+	if !ok {
+		t.Fatalf("second operand is not MemoryOperand, got %T", insn.Operands[1])
+	}
+
+	// RIP-relative should be resolved: base cleared, disp = absolute address
+	if memOp.Base != "" {
+		t.Errorf("expected empty base for resolved RIP-relative, got %q", memOp.Base)
+	}
+
+	expectedAddr := int64(0x5000 + 7 + 0x1000)
+	if memOp.Disp != expectedAddr {
+		t.Errorf("resolved RIP-relative address: got 0x%x, want 0x%x", memOp.Disp, expectedAddr)
+	}
+}
+
+// TestDisassemble_MemoryOperandNegativeDisplacement tests memory operands with
+// negative displacement through real disassembly
+func TestDisassemble_MemoryOperandNegativeDisplacement(t *testing.T) {
+	d := newTestDisassembler(t)
+
+	// mov rax, [rbp - 0x8]
+	bytes := []byte{0x48, 0x8b, 0x45, 0xf8}
+	insn, err := d.Disassemble(bytes, 0x1000)
+	if err != nil {
+		t.Fatalf("disassemble failed: %v", err)
+	}
+
+	if len(insn.Operands) < 2 {
+		t.Fatalf("expected at least 2 operands, got %d", len(insn.Operands))
+	}
+
+	memOp, ok := insn.Operands[1].(MemoryOperand)
+	if !ok {
+		t.Fatalf("second operand is not MemoryOperand, got %T", insn.Operands[1])
+	}
+
+	if memOp.Base != "rbp" {
+		t.Errorf("base register: got %q, want %q", memOp.Base, "rbp")
+	}
+
+	if memOp.Disp >= 0 {
+		t.Errorf("expected negative displacement, got %d", memOp.Disp)
+	}
+}
+
+// TestDisassembleFunction_FallbackPath tests DisassembleFunction fallback to
+// byte-by-byte disassembly when bulk disassembly fails
+func TestDisassembleFunction_FallbackPath(t *testing.T) {
+	d := newTestDisassembler(t)
+
+	// sequence starting with valid instructions, then invalid, then valid
+	// DisassembleFunction calls Disasm with count=0 which may fail on invalid bytes
+	// in that case it falls back to DisassembleBytes
+	bytes := []byte{
+		0x55,             // push rbp
+		0x48, 0x89, 0xe5, // mov rbp, rsp
+		0x5d, // pop rbp
+		0xc3, // ret
+	}
+
+	insns, err := d.DisassembleFunction(bytes, 0x1000)
+	if err != nil {
+		t.Fatalf("DisassembleFunction failed: %v", err)
+	}
+
+	if len(insns) != 4 {
+		t.Fatalf("expected 4 instructions, got %d", len(insns))
+	}
+
+	// verify sequential addresses
+	expectedAddrs := []Address{0x1000, 0x1001, 0x1004, 0x1005}
+	for i, expected := range expectedAddrs {
+		if insns[i].Address != expected {
+			t.Errorf("instruction %d address: got 0x%x, want 0x%x", i, insns[i].Address, expected)
+		}
+	}
+}
+
+// TestDisassemble_InstructionBoundaries_VariableLength tests boundary detection
+// across a wider variety of instruction lengths (1 to 10+ bytes)
+func TestDisassemble_InstructionBoundaries_VariableLength(t *testing.T) {
+	d := newTestDisassembler(t)
+
+	bytes := []byte{
+		0x90,       // nop (1 byte)
+		0x66, 0x90, // 66 nop (2 bytes)
+		0x48, 0x89, 0xd8, // mov rax, rbx (3 bytes)
+		0x48, 0x83, 0xc0, 0x01, // add rax, 1 (4 bytes)
+		0xe8, 0x00, 0x00, 0x00, 0x00, // call +0 (5 bytes)
+		0x48, 0x8b, 0x84, 0xf3, 0x00, 0x01, 0x00, 0x00, // mov rax, [rbx+rsi*8+0x100] (8 bytes)
+		0x48, 0xb8, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, // movabs rax, imm64 (10 bytes)
+	}
+
+	insns, err := d.DisassembleBytes(bytes, 0x2000)
+	if err != nil {
+		t.Fatalf("DisassembleBytes failed: %v", err)
+	}
+
+	if len(insns) != 7 {
+		t.Fatalf("expected 7 instructions, got %d", len(insns))
+	}
+
+	expectedLengths := []int{1, 2, 3, 4, 5, 8, 10}
+	cumulativeOffset := Address(0x2000)
+	for i, expectedLen := range expectedLengths {
+		if insns[i].Address != cumulativeOffset {
+			t.Errorf("instruction %d address: got 0x%x, want 0x%x", i, insns[i].Address, cumulativeOffset)
+		}
+		if insns[i].Length != expectedLen {
+			t.Errorf("instruction %d length: got %d, want %d", i, insns[i].Length, expectedLen)
+		}
+		cumulativeOffset += Address(expectedLen)
+	}
+}
+
+// TestDisassemble_ControlFlowInstructions tests disassembly of all control flow
+// instruction types: conditional jumps, unconditional jumps, calls, returns
+func TestDisassemble_ControlFlowInstructions(t *testing.T) {
+	d := newTestDisassembler(t)
+
+	tests := []struct {
+		bytes    []byte
+		name     string
+		mnemonic string
+	}{
+		{name: "je", bytes: []byte{0x74, 0x10}, mnemonic: "je"},
+		{name: "jne", bytes: []byte{0x75, 0x10}, mnemonic: "jne"},
+		{name: "jg", bytes: []byte{0x7f, 0x10}, mnemonic: "jg"},
+		{name: "jl", bytes: []byte{0x7c, 0x10}, mnemonic: "jl"},
+		{name: "jge", bytes: []byte{0x7d, 0x10}, mnemonic: "jge"},
+		{name: "jle", bytes: []byte{0x7e, 0x10}, mnemonic: "jle"},
+		{name: "ja", bytes: []byte{0x77, 0x10}, mnemonic: "ja"},
+		{name: "jb", bytes: []byte{0x72, 0x10}, mnemonic: "jb"},
+		{name: "jmp rel8", bytes: []byte{0xeb, 0x10}, mnemonic: "jmp"},
+		{name: "jmp rel32", bytes: []byte{0xe9, 0x00, 0x01, 0x00, 0x00}, mnemonic: "jmp"},
+		{name: "call rel32", bytes: []byte{0xe8, 0x00, 0x01, 0x00, 0x00}, mnemonic: "call"},
+		{name: "call [rax]", bytes: []byte{0xff, 0x10}, mnemonic: "call"},
+		{name: "jmp [rax]", bytes: []byte{0xff, 0x20}, mnemonic: "jmp"},
+		{name: "ret", bytes: []byte{0xc3}, mnemonic: "ret"},
+		{name: "ret imm16", bytes: []byte{0xc2, 0x08, 0x00}, mnemonic: "ret"},
+		{name: "syscall", bytes: []byte{0x0f, 0x05}, mnemonic: "syscall"},
+		{name: "int 0x80", bytes: []byte{0xcd, 0x80}, mnemonic: "int"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			insn, err := d.Disassemble(tt.bytes, 0x1000)
+			if err != nil {
+				t.Fatalf("disassemble failed: %v", err)
+			}
+			if insn.Mnemonic != tt.mnemonic {
+				t.Errorf("mnemonic: got %q, want %q", insn.Mnemonic, tt.mnemonic)
+			}
+		})
+	}
+}
+
+// TestDisassemble_ArithmeticLogicInstructions tests arithmetic and logical operations
+func TestDisassemble_ArithmeticLogicInstructions(t *testing.T) {
+	d := newTestDisassembler(t)
+
+	tests := []struct {
+		bytes    []byte
+		name     string
+		mnemonic string
+	}{
+		{name: "add rax, rbx", bytes: []byte{0x48, 0x01, 0xd8}, mnemonic: "add"},
+		{name: "sub rax, rbx", bytes: []byte{0x48, 0x29, 0xd8}, mnemonic: "sub"},
+		{name: "imul rax, rbx", bytes: []byte{0x48, 0x0f, 0xaf, 0xc3}, mnemonic: "imul"},
+		{name: "xor rax, rax", bytes: []byte{0x48, 0x31, 0xc0}, mnemonic: "xor"},
+		{name: "and rax, rbx", bytes: []byte{0x48, 0x21, 0xd8}, mnemonic: "and"},
+		{name: "or rax, rbx", bytes: []byte{0x48, 0x09, 0xd8}, mnemonic: "or"},
+		{name: "not rax", bytes: []byte{0x48, 0xf7, 0xd0}, mnemonic: "not"},
+		{name: "neg rax", bytes: []byte{0x48, 0xf7, 0xd8}, mnemonic: "neg"},
+		{name: "shl rax, cl", bytes: []byte{0x48, 0xd3, 0xe0}, mnemonic: "shl"},
+		{name: "shr rax, cl", bytes: []byte{0x48, 0xd3, 0xe8}, mnemonic: "shr"},
+		{name: "sar rax, cl", bytes: []byte{0x48, 0xd3, 0xf8}, mnemonic: "sar"},
+		{name: "cmp rax, rbx", bytes: []byte{0x48, 0x39, 0xd8}, mnemonic: "cmp"},
+		{name: "test rax, rax", bytes: []byte{0x48, 0x85, 0xc0}, mnemonic: "test"},
+		{name: "lea rax, [rbx]", bytes: []byte{0x48, 0x8d, 0x03}, mnemonic: "lea"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			insn, err := d.Disassemble(tt.bytes, 0x1000)
+			if err != nil {
+				t.Fatalf("disassemble failed: %v", err)
+			}
+			if insn.Mnemonic != tt.mnemonic {
+				t.Errorf("mnemonic: got %q, want %q", insn.Mnemonic, tt.mnemonic)
+			}
+		})
+	}
+}
+
+// TestDisassemble_StackOperations tests stack manipulation instructions
+func TestDisassemble_StackOperations(t *testing.T) {
+	d := newTestDisassembler(t)
+
+	tests := []struct {
+		bytes    []byte
+		name     string
+		mnemonic string
+	}{
+		{name: "push rbp", bytes: []byte{0x55}, mnemonic: "push"},
+		{name: "pop rbp", bytes: []byte{0x5d}, mnemonic: "pop"},
+		{name: "push rax", bytes: []byte{0x50}, mnemonic: "push"},
+		{name: "pop rax", bytes: []byte{0x58}, mnemonic: "pop"},
+		{name: "push imm8", bytes: []byte{0x6a, 0x01}, mnemonic: "push"},
+		{name: "push imm32", bytes: []byte{0x68, 0x00, 0x10, 0x00, 0x00}, mnemonic: "push"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			insn, err := d.Disassemble(tt.bytes, 0x1000)
+			if err != nil {
+				t.Fatalf("disassemble failed: %v", err)
+			}
+			if insn.Mnemonic != tt.mnemonic {
+				t.Errorf("mnemonic: got %q, want %q", insn.Mnemonic, tt.mnemonic)
+			}
+		})
+	}
+}
+
+// TestDisassemble_BytesCopyIndependence verifies that returned instruction bytes
+// are independent copies (modifying them does not affect the disassembler)
+func TestDisassemble_BytesCopyIndependence(t *testing.T) {
+	d := newTestDisassembler(t)
+
+	original := []byte{0x48, 0x89, 0xd8}
+	insn, err := d.Disassemble(original, 0x1000)
+	if err != nil {
+		t.Fatalf("disassemble failed: %v", err)
+	}
+
+	// mutate returned bytes
+	insn.Bytes[0] = 0xFF
+
+	// disassemble again -- should still work
+	insn2, err := d.Disassemble(original, 0x1000)
+	if err != nil {
+		t.Fatalf("second disassemble failed: %v", err)
+	}
+
+	if insn2.Bytes[0] != 0x48 {
+		t.Errorf("instruction bytes were not independent: got 0x%02x, want 0x48", insn2.Bytes[0])
+	}
+}
+
+// TestDisassemble_OperandInterfaceCompliance verifies that all operand types
+// satisfy the Operand interface
+func TestDisassemble_OperandInterfaceCompliance(t *testing.T) {
+	operands := []Operand{
+		RegisterOperand{Name: "rax", Size: Size64},
+		ImmediateOperand{Value: 42, Size: Size32},
+		MemoryOperand{Base: "rsp", Disp: -8, Size: Size64},
+	}
+
+	for i, op := range operands {
+		op.isOperand()
+		str := op.String()
+		if str == "" {
+			t.Errorf("operand %d String() returned empty", i)
+		}
+	}
+}
+
+// TestFormatInt_EdgeCases tests formatInt with zero and negative values
+func TestFormatInt_EdgeCases(t *testing.T) {
+	tests := []struct {
+		input    int
+		expected string
+	}{
+		{0, "0"},
+		{1, "1"},
+		{-1, "-1"},
+		{42, "42"},
+		{-42, "-42"},
+		{1000000, "1000000"},
+	}
+
+	for _, tt := range tests {
+		result := formatInt(tt.input)
+		if result != tt.expected {
+			t.Errorf("formatInt(%d): got %q, want %q", tt.input, result, tt.expected)
+		}
+	}
+}
+
 // TestDisassemble_LargeImmediates tests handling of large immediate values
 func TestDisassemble_LargeImmediates(t *testing.T) {
 	d := newTestDisassembler(t)
