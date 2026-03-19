@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"debug/elf"
 	"encoding/binary"
+	"os"
 	"testing"
 )
 
@@ -366,7 +367,6 @@ func TestELFCloseHandling(t *testing.T) {
 // helper functions
 
 func readTestELFBinary() ([]byte, error) {
-	// try to read test elf binary
 	testPaths := []string{
 		"testdata/binary/test_elf_x64",
 		"/bin/true",
@@ -374,18 +374,13 @@ func readTestELFBinary() ([]byte, error) {
 	}
 
 	for _, path := range testPaths {
-		data, err := readFile(path)
+		data, err := os.ReadFile(path)
 		if err == nil {
 			return data, nil
 		}
 	}
 
 	return nil, &UnsupportedFormatError{Format: "no test ELF binary found"}
-}
-
-func readFile(_ string) ([]byte, error) {
-	// simple file read wrapper
-	return []byte{}, &UnsupportedFormatError{Format: "file not found"}
 }
 
 // createELF32WithRelocations creates a minimal 32-bit ELF with relocations

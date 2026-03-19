@@ -243,8 +243,8 @@ func (p *StandardLibParser) parseELFRelocation(data []byte, elfFile *elf.File,
 	}
 
 	// resolve symbol name
-	if int(symIdx) < len(dynSyms) {
-		reloc.Symbol = dynSyms[symIdx].Name
+	if symIdx > 0 && int(symIdx-1) < len(dynSyms) {
+		reloc.Symbol = dynSyms[symIdx-1].Name
 	}
 
 	return reloc
