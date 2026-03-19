@@ -66,6 +66,7 @@ target
 
 # Contains mutation testing data
 **/mutants.out*/
+rapid/
 
 #.idea/
 
