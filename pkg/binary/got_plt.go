@@ -11,6 +11,11 @@ import (
 const (
 	// mach-o segment names.
 	segmentNameText = "__TEXT"
+
+	sectionNameGOT    = ".got"
+	sectionNameGOTPLT = ".got.plt"
+	sectionNamePLT    = ".plt"
+	sectionNamePLTGOT = ".plt.got"
 )
 
 var (
@@ -177,9 +182,9 @@ func (p *StandardLibParser) resolveELFGOT(info *BinaryInfo, gotEntries map[Addre
 func (p *StandardLibParser) findELFGOTSections(elfFile *elf.File) (gotSection, gotPltSection *elf.Section) {
 	for _, section := range elfFile.Sections {
 		switch section.Name {
-		case ".got":
+		case sectionNameGOT:
 			gotSection = section
-		case ".got.plt":
+		case sectionNameGOTPLT:
 			gotPltSection = section
 		}
 	}
@@ -368,9 +373,9 @@ func (p *StandardLibParser) resolveELFPLT(info *BinaryInfo, pltEntries map[Addre
 func (p *StandardLibParser) findELFPLTSections(elfFile *elf.File) (pltSection, pltGotSection *elf.Section) {
 	for _, section := range elfFile.Sections {
 		switch section.Name {
-		case ".plt":
+		case sectionNamePLT:
 			pltSection = section
-		case ".plt.got":
+		case sectionNamePLTGOT:
 			pltGotSection = section
 		}
 	}
