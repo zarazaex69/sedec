@@ -74,7 +74,6 @@ linters:
 
   exclusions:
     rules:
-      # exclude test files from most linters
       - path: '_test\.go'
         linters:
           - gocyclo
@@ -92,16 +91,13 @@ linters:
           - gocritic
           - govet
           - nestif
-      # exclude doc files
       - path: 'doc\.go'
         linters:
           - revive
           - godot
-      # exclude mock files
       - path: 'mock.*\.go'
         linters:
           - revive
-      # exclude cgo files from certain checks
       - path: 'capstone\.go'
         linters:
           - gocritic
