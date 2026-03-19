@@ -257,11 +257,12 @@ func (p *StandardLibParser) readPEExportName(peFile *pe.File, nameRVA uint32) st
 		return ""
 	}
 
-	var name string
-	for j := 0; j < len(nameData) && nameData[j] != 0; j++ {
-		name += string(nameData[j])
+	for j := 0; j < len(nameData); j++ {
+		if nameData[j] == 0 {
+			return string(nameData[:j])
+		}
 	}
-	return name
+	return string(nameData)
 }
 
 // extractPERelocations extracts base relocations from .reloc section
