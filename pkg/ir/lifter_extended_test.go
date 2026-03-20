@@ -646,9 +646,10 @@ func TestLifterRotate(t *testing.T) {
 	tests := []struct {
 		name     string
 		mnemonic string
+		wantOps  int
 	}{
-		{"rol rax, 1", "rol"},
-		{"ror rbx, cl", "ror"},
+		{"rol rax, 1", "rol", 1},
+		{"ror rbx, 1", "ror", 1},
 	}
 
 	for _, tt := range tests {
@@ -663,9 +664,20 @@ func TestLifterRotate(t *testing.T) {
 				},
 				Length: 3,
 			}
-			_, err := lifter.LiftInstruction(insn)
-			if err == nil {
-				t.Errorf("expected error for unimplemented %s, got nil", tt.mnemonic)
+			result, err := lifter.LiftInstruction(insn)
+			if err != nil {
+				t.Fatalf("unexpected error for %s: %v", tt.mnemonic, err)
+			}
+			if len(result) != tt.wantOps {
+				t.Errorf("got %d ops, want %d", len(result), tt.wantOps)
+				for i, op := range result {
+					t.Logf("  [%d] %s", i, op.String())
+				}
+			}
+			if len(result) > 0 {
+				if _, ok := result[0].(*Assign); !ok {
+					t.Errorf("expected Assign instruction, got %T", result[0])
+				}
 			}
 		})
 	}

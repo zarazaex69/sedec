@@ -18,7 +18,6 @@ const (
 
 // sentinel errors for lifter operations
 var (
-	errUnsupportedInstruction   = errors.New("unsupported instruction")
 	errMemOpRequiresLoad        = errors.New("memory operand requires explicit load")
 	errUnknownOperandType       = errors.New("unknown operand type")
 	errAddRequires2Operands     = errors.New("add requires 2 operands")
@@ -40,8 +39,8 @@ var (
 	errShlRequires2Operands     = errors.New("shl requires 2 operands")
 	errShrRequires2Operands     = errors.New("shr requires 2 operands")
 	errSarRequires2Operands     = errors.New("sar requires 2 operands")
-	errRolNotImplemented        = errors.New("rol not yet implemented")
-	errRorNotImplemented        = errors.New("ror not yet implemented")
+	errRolRequires2Operands     = errors.New("rol requires 2 operands")
+	errRorRequires2Operands     = errors.New("ror requires 2 operands")
 	errMovRequires2Operands     = errors.New("mov requires 2 operands")
 	errMovBothMem               = errors.New("mov cannot have both operands as memory")
 	errMovDestMustBeRegOrMem    = errors.New("mov destination must be register or memory")
@@ -101,8 +100,8 @@ func (l *Lifter) LiftInstruction(insn *disasm.Instruction) ([]IRInstruction, err
 	// dispatch by mnemonic.
 	// strip "notrack" prefix (intel cet) before dispatch.
 	mnemonic := strings.ToLower(insn.Mnemonic)
-	if strings.HasPrefix(mnemonic, "notrack ") {
-		mnemonic = strings.TrimPrefix(mnemonic, "notrack ")
+	if after, found := strings.CutPrefix(mnemonic, "notrack "); found {
+		mnemonic = after
 	}
 
 	switch {
@@ -1220,18 +1219,74 @@ func (l *Lifter) liftSar(insn *disasm.Instruction) ([]IRInstruction, error) {
 	return l.liftBinaryOperation(insn, errSarRequires2Operands, BinOpSar, l.setShiftFlags)
 }
 
-// liftRol lifts ROL instruction: rotate left (not implemented as binary op, use intrinsic)
-func (l *Lifter) liftRol(_ *disasm.Instruction) ([]IRInstruction, error) {
-	// rol is complex - would need intrinsic or decomposition
-	// for now, return unsupported
-	return nil, errRolNotImplemented
+// liftRotate is the shared implementation for ROL and ROR.
+// ROL: result = (dest << count) | (dest >> (bitwidth - count))
+// ROR: result = (dest >> count) | (dest << (bitwidth - count))
+func (l *Lifter) liftRotate(insn *disasm.Instruction, opErr error, primaryShift, secondaryShift BinaryOperator) ([]IRInstruction, error) {
+	if len(insn.Operands) != 2 {
+		return nil, opErr
+	}
+
+	dest := insn.Operands[0]
+	count := insn.Operands[1]
+
+	var destExpr Expression
+	var destVar Variable
+	var err error
+
+	if mem, ok := dest.(disasm.MemoryOperand); ok {
+		destVar = l.loadFromMemory(mem)
+		destExpr = VariableExpr{Var: destVar}
+	} else {
+		destExpr, err = l.translateOperandToExpr(dest)
+		if err != nil {
+			return nil, err
+		}
+		if ve, ok := destExpr.(VariableExpr); ok {
+			destVar = ve.Var
+		}
+	}
+
+	var countExpr Expression
+	if mem, ok := count.(disasm.MemoryOperand); ok {
+		cv := l.loadFromMemory(mem)
+		countExpr = VariableExpr{Var: cv}
+	} else {
+		countExpr, err = l.translateOperandToExpr(count)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	bitwidth := ConstantExpr{Value: IntConstant{Value: int64(destVar.Type.Size() * 8), Width: Size1, Signed: false}}
+
+	primary := BinaryOp{Op: primaryShift, Left: destExpr, Right: countExpr}
+	complementCount := BinaryOp{Op: BinOpSub, Left: bitwidth, Right: countExpr}
+	secondary := BinaryOp{Op: secondaryShift, Left: destExpr, Right: complementCount}
+	resultExpr := BinaryOp{Op: BinOpOr, Left: primary, Right: secondary}
+
+	if mem, ok := dest.(disasm.MemoryOperand); ok {
+		l.storeToMemory(mem, resultExpr)
+	} else {
+		l.emit(&Assign{
+			baseInstruction: baseInstruction{Loc: l.currentLocation},
+			Dest:            destVar,
+			Source:          resultExpr,
+		})
+	}
+
+	l.setShiftFlags(resultExpr, destVar.Type.Size())
+	return l.currentBlock, nil
 }
 
-// liftRor lifts ROR instruction: rotate right (not implemented as binary op, use intrinsic)
-func (l *Lifter) liftRor(_ *disasm.Instruction) ([]IRInstruction, error) {
-	// ror is complex - would need intrinsic or decomposition
-	// for now, return unsupported
-	return nil, errRorNotImplemented
+// liftRol lifts ROL instruction: dest = (dest << count) | (dest >> (bitwidth - count))
+func (l *Lifter) liftRol(insn *disasm.Instruction) ([]IRInstruction, error) {
+	return l.liftRotate(insn, errRolRequires2Operands, BinOpShl, BinOpShr)
+}
+
+// liftRor lifts ROR instruction: dest = (dest >> count) | (dest << (bitwidth - count))
+func (l *Lifter) liftRor(insn *disasm.Instruction) ([]IRInstruction, error) {
+	return l.liftRotate(insn, errRorRequires2Operands, BinOpShr, BinOpShl)
 }
 
 // ============================================================================

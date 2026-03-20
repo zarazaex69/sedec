@@ -341,10 +341,13 @@ func (l *Lifter) liftCwde(_ *disasm.Instruction) ([]IRInstruction, error) {
 }
 
 // ============================================================================
-// sbb: subtract with borrow (dest = dest - src - cf)
+// sbb/adc: binary operations with carry flag
 // ============================================================================
 
-func (l *Lifter) liftSbb(insn *disasm.Instruction) ([]IRInstruction, error) {
+// liftCarryOperation is the shared implementation for SBB and ADC.
+// SBB: dest = dest - src - cf
+// ADC: dest = dest + src + cf
+func (l *Lifter) liftCarryOperation(insn *disasm.Instruction, binOp BinaryOperator) ([]IRInstruction, error) {
 	if len(insn.Operands) != 2 {
 		return l.currentBlock, nil
 	}
@@ -382,11 +385,10 @@ func (l *Lifter) liftSbb(insn *disasm.Instruction) ([]IRInstruction, error) {
 
 	cfVar := Variable{Name: "cf", Type: BoolType{}}
 
-	// dest = dest - src - cf
-	subExpr := BinaryOp{Op: BinOpSub, Left: destExpr, Right: srcExpr}
+	mainExpr := BinaryOp{Op: binOp, Left: destExpr, Right: srcExpr}
 	resultExpr := BinaryOp{
-		Op:   BinOpSub,
-		Left: subExpr,
+		Op:   binOp,
+		Left: mainExpr,
 		Right: Cast{
 			Expr:       VariableExpr{Var: cfVar},
 			TargetType: destVar.Type,
@@ -409,73 +411,12 @@ func (l *Lifter) liftSbb(insn *disasm.Instruction) ([]IRInstruction, error) {
 	return l.currentBlock, nil
 }
 
-// ============================================================================
-// adc: add with carry (dest = dest + src + cf)
-// ============================================================================
+func (l *Lifter) liftSbb(insn *disasm.Instruction) ([]IRInstruction, error) {
+	return l.liftCarryOperation(insn, BinOpSub)
+}
 
 func (l *Lifter) liftAdc(insn *disasm.Instruction) ([]IRInstruction, error) {
-	if len(insn.Operands) != 2 {
-		return l.currentBlock, nil
-	}
-
-	dest := insn.Operands[0]
-	src := insn.Operands[1]
-
-	var destExpr, srcExpr Expression
-	var destVar Variable
-
-	if mem, ok := dest.(disasm.MemoryOperand); ok {
-		destVar = l.loadFromMemory(mem)
-		destExpr = VariableExpr{Var: destVar}
-	} else {
-		var err error
-		destExpr, err = l.translateOperandToExpr(dest)
-		if err != nil {
-			return l.currentBlock, nil
-		}
-		if ve, ok := destExpr.(VariableExpr); ok {
-			destVar = ve.Var
-		}
-	}
-
-	if mem, ok := src.(disasm.MemoryOperand); ok {
-		sv := l.loadFromMemory(mem)
-		srcExpr = VariableExpr{Var: sv}
-	} else {
-		var err error
-		srcExpr, err = l.translateOperandToExpr(src)
-		if err != nil {
-			return l.currentBlock, nil
-		}
-	}
-
-	cfVar := Variable{Name: "cf", Type: BoolType{}}
-
-	// dest = dest + src + cf
-	addExpr := BinaryOp{Op: BinOpAdd, Left: destExpr, Right: srcExpr}
-	resultExpr := BinaryOp{
-		Op:   BinOpAdd,
-		Left: addExpr,
-		Right: Cast{
-			Expr:       VariableExpr{Var: cfVar},
-			TargetType: destVar.Type,
-		},
-	}
-
-	if mem, ok := dest.(disasm.MemoryOperand); ok {
-		l.storeToMemory(mem, resultExpr)
-	} else {
-		l.emit(&Assign{
-			baseInstruction: baseInstruction{Loc: l.currentLocation},
-			Dest:            destVar,
-			Source:          resultExpr,
-		})
-	}
-
-	size := l.getOperandSize(dest)
-	l.setArithmeticFlags(resultExpr, size)
-
-	return l.currentBlock, nil
+	return l.liftCarryOperation(insn, BinOpAdd)
 }
 
 // ============================================================================
