@@ -283,7 +283,6 @@ func IsSubRegister(subReg, parentReg string) bool {
 // this is critical because writing to 32-bit registers zeros upper 32 bits,
 // unlike 8/16-bit registers which preserve upper bits
 func Is32BitRegister(reg string) bool {
-	// check if register ends with common 32-bit suffixes
 	if len(reg) < 2 {
 		return false
 	}
@@ -299,4 +298,122 @@ func Is32BitRegister(reg string) bool {
 	}
 
 	return false
+}
+
+// Is64BitRegister checks if a register is a 64-bit general-purpose register.
+func Is64BitRegister(reg string) bool {
+	switch reg {
+	case "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp",
+		"r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15":
+		return true
+	default:
+		return false
+	}
+}
+
+// RegisterSize returns the size in bytes of a named x86_64 register.
+// returns 0 for unknown registers.
+func RegisterSize(reg string) Size {
+	if Is64BitRegister(reg) {
+		return Size8
+	}
+	parent, _, size, found := GetParentRegister(reg)
+	if found {
+		_ = parent
+		return size
+	}
+	return 0
+}
+
+// SubRegisterWriteKind classifies how a register write affects the parent register.
+type SubRegisterWriteKind int
+
+// write kind constants for sub-register classification
+const (
+	WriteKindFull       SubRegisterWriteKind = iota // 64-bit write: direct assignment
+	WriteKindZeroExtend                             // 32-bit write: zeros upper 32 bits
+	WriteKindInsert                                 // 8/16-bit write: preserves upper bits
+)
+
+// ClassifyRegisterWrite determines the sub-register write semantics for a
+// destination register name. this encodes the x86_64 isa rules:
+//   - 64-bit register: full assignment, no aliasing needed
+//   - 32-bit register: zero-extend to 64-bit parent (upper 32 bits zeroed)
+//   - 8/16-bit register: insert into parent, preserving other bits
+func ClassifyRegisterWrite(reg string) (kind SubRegisterWriteKind, parent string, offset uint8, regSize Size) {
+	if Is64BitRegister(reg) {
+		return WriteKindFull, reg, 0, Size8
+	}
+
+	parentReg, off, sz, found := GetParentRegister(reg)
+	if !found {
+		return WriteKindFull, reg, 0, 0
+	}
+
+	if sz == Size4 {
+		return WriteKindZeroExtend, parentReg, off, sz
+	}
+
+	return WriteKindInsert, parentReg, off, sz
+}
+
+// BuildSubRegisterWrite constructs the IR expression sequence for writing a
+// value to a sub-register. the caller provides the value expression and the
+// destination register name; this function returns:
+//   - parentVar: the 64-bit parent register variable that receives the result
+//   - resultExpr: the expression to assign to parentVar
+//   - isSubReg: true if sub-register handling was applied
+//
+// for 64-bit writes, isSubReg is false and the caller should assign directly.
+// for 32-bit writes, resultExpr is a ZeroExtend of the value.
+// for 8/16-bit writes, resultExpr is an Insert into the parent register.
+func BuildSubRegisterWrite(reg string, value Expression) (parentVar Variable, resultExpr Expression, isSubReg bool) {
+	kind, parent, offset, regSize := ClassifyRegisterWrite(reg)
+
+	parentType := IntType{Width: Size8, Signed: false}
+	pVar := Variable{Name: parent, Type: parentType}
+
+	switch kind {
+	case WriteKindZeroExtend:
+		srcVar := Variable{Name: reg, Type: IntType{Width: regSize, Signed: false}}
+		resultExpr = ZeroExtend{
+			Source:   srcVar,
+			FromSize: regSize,
+			ToSize:   Size8,
+		}
+		return pVar, resultExpr, true
+
+	case WriteKindInsert:
+		resultExpr = Insert{
+			Dest:   pVar,
+			Value:  value,
+			Offset: offset,
+			Size:   regSize,
+		}
+		return pVar, resultExpr, true
+
+	default:
+		return pVar, value, false
+	}
+}
+
+// BuildSubRegisterRead constructs an Extract expression for reading a
+// sub-register from its 64-bit parent. returns the Extract expression and
+// true if the register is a sub-register; otherwise returns nil and false.
+func BuildSubRegisterRead(reg string) (parentVar Variable, expr Extract, isSubReg bool) {
+	if Is64BitRegister(reg) {
+		return Variable{}, Extract{}, false
+	}
+
+	parent, offset, size, found := GetParentRegister(reg)
+	if !found {
+		return Variable{}, Extract{}, false
+	}
+
+	pVar := Variable{Name: parent, Type: IntType{Width: Size8, Signed: false}}
+	return pVar, Extract{
+		Source: pVar,
+		Offset: offset,
+		Size:   size,
+	}, true
 }

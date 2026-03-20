@@ -268,6 +268,46 @@ func (l *Lifter) emit(insn IRInstruction) {
 	l.currentBlock = append(l.currentBlock, insn)
 }
 
+// emitRegisterWrite emits an assignment to a register with correct sub-register
+// aliasing semantics. for 32-bit registers, a ZeroExtend to the 64-bit parent
+// is emitted. for 8/16-bit registers, an Insert into the parent is emitted.
+// for 64-bit registers, a direct assignment is emitted.
+func (l *Lifter) emitRegisterWrite(regName string, regSize Size, value Expression) {
+	parentVar, resultExpr, isSubReg := BuildSubRegisterWrite(regName, value)
+	if isSubReg {
+		// for 32-bit zero-extend: first assign to the sub-register, then
+		// zero-extend to parent. for 8/16-bit insert: assign insert expr
+		// directly to parent.
+		kind, _, _, _ := ClassifyRegisterWrite(regName)
+		if kind == WriteKindZeroExtend {
+			subVar := Variable{
+				Name: regName,
+				Type: IntType{Width: regSize, Signed: false},
+			}
+			l.emit(&Assign{
+				baseInstruction: baseInstruction{Loc: l.currentLocation},
+				Dest:            subVar,
+				Source:          value,
+			})
+		}
+		l.emit(&Assign{
+			baseInstruction: baseInstruction{Loc: l.currentLocation},
+			Dest:            parentVar,
+			Source:          resultExpr,
+		})
+		return
+	}
+	destVar := Variable{
+		Name: regName,
+		Type: IntType{Width: regSize, Signed: false},
+	}
+	l.emit(&Assign{
+		baseInstruction: baseInstruction{Loc: l.currentLocation},
+		Dest:            destVar,
+		Source:          value,
+	})
+}
+
 // getOperandSize determines operand size from disasm operand.
 func (l *Lifter) getOperandSize(op disasm.Operand) Size {
 	switch v := op.(type) {
@@ -1326,15 +1366,7 @@ func (l *Lifter) liftMov(insn *disasm.Instruction) ([]IRInstruction, error) {
 			return nil, errMovDestMustBeRegOrMem
 		}
 		srcVar := l.loadFromMemory(srcMem)
-		destVar := Variable{
-			Name: destReg.Name,
-			Type: l.getIntType(Size(destReg.Size), false),
-		}
-		l.emit(&Assign{
-			baseInstruction: baseInstruction{Loc: l.currentLocation},
-			Dest:            destVar,
-			Source:          VariableExpr{Var: srcVar},
-		})
+		l.emitRegisterWrite(destReg.Name, Size(destReg.Size), VariableExpr{Var: srcVar})
 	default:
 		// mov reg, reg/imm
 		destReg, ok := dest.(disasm.RegisterOperand)
@@ -1345,15 +1377,7 @@ func (l *Lifter) liftMov(insn *disasm.Instruction) ([]IRInstruction, error) {
 		if err != nil {
 			return nil, err
 		}
-		destVar := Variable{
-			Name: destReg.Name,
-			Type: l.getIntType(Size(destReg.Size), false),
-		}
-		l.emit(&Assign{
-			baseInstruction: baseInstruction{Loc: l.currentLocation},
-			Dest:            destVar,
-			Source:          srcExpr,
-		})
+		l.emitRegisterWrite(destReg.Name, Size(destReg.Size), srcExpr)
 	}
 
 	// mov does not affect flags

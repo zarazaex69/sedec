@@ -652,3 +652,230 @@ func TestRegisterAliases_Coverage(t *testing.T) {
 
 	t.Logf("verified %d register families with complete aliasing coverage", len(families))
 }
+
+func TestIs64BitRegister(t *testing.T) {
+	tests := []struct {
+		reg  string
+		want bool
+	}{
+		{"rax", true}, {"rbx", true}, {"rcx", true}, {"rdx", true},
+		{"rsi", true}, {"rdi", true}, {"rbp", true}, {"rsp", true},
+		{"r8", true}, {"r9", true}, {"r10", true}, {"r11", true},
+		{"r12", true}, {"r13", true}, {"r14", true}, {"r15", true},
+		{"eax", false}, {"ax", false}, {"al", false}, {"ah", false},
+		{"r8d", false}, {"r8w", false}, {"r8b", false},
+		{"xmm0", false}, {"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.reg, func(t *testing.T) {
+			got := Is64BitRegister(tt.reg)
+			if got != tt.want {
+				t.Errorf("Is64BitRegister(%q) = %v, want %v", tt.reg, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRegisterSize(t *testing.T) {
+	tests := []struct {
+		reg  string
+		want Size
+	}{
+		{"rax", Size8}, {"rbx", Size8}, {"rsp", Size8}, {"r15", Size8},
+		{"eax", Size4}, {"ebx", Size4}, {"r8d", Size4},
+		{"ax", Size2}, {"bx", Size2}, {"r8w", Size2},
+		{"al", Size1}, {"ah", Size1}, {"bl", Size1}, {"r8b", Size1},
+		{"xmm0", 0}, {"unknown", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.reg, func(t *testing.T) {
+			got := RegisterSize(tt.reg)
+			if got != tt.want {
+				t.Errorf("RegisterSize(%q) = %d, want %d", tt.reg, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClassifyRegisterWrite(t *testing.T) {
+	tests := []struct {
+		reg        string
+		wantKind   SubRegisterWriteKind
+		wantParent string
+		wantOffset uint8
+		wantSize   Size
+	}{
+		{"rax", WriteKindFull, "rax", 0, Size8},
+		{"rbx", WriteKindFull, "rbx", 0, Size8},
+		{"r15", WriteKindFull, "r15", 0, Size8},
+		{"eax", WriteKindZeroExtend, "rax", 0, Size4},
+		{"ebx", WriteKindZeroExtend, "rbx", 0, Size4},
+		{"r8d", WriteKindZeroExtend, "r8", 0, Size4},
+		{"ax", WriteKindInsert, "rax", 0, Size2},
+		{"bx", WriteKindInsert, "rbx", 0, Size2},
+		{"r8w", WriteKindInsert, "r8", 0, Size2},
+		{"al", WriteKindInsert, "rax", 0, Size1},
+		{"ah", WriteKindInsert, "rax", 1, Size1},
+		{"bl", WriteKindInsert, "rbx", 0, Size1},
+		{"bh", WriteKindInsert, "rbx", 1, Size1},
+		{"r8b", WriteKindInsert, "r8", 0, Size1},
+		{"sil", WriteKindInsert, "rsi", 0, Size1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.reg, func(t *testing.T) {
+			kind, parent, offset, size := ClassifyRegisterWrite(tt.reg)
+			if kind != tt.wantKind {
+				t.Errorf("kind: got %d, want %d", kind, tt.wantKind)
+			}
+			if parent != tt.wantParent {
+				t.Errorf("parent: got %q, want %q", parent, tt.wantParent)
+			}
+			if offset != tt.wantOffset {
+				t.Errorf("offset: got %d, want %d", offset, tt.wantOffset)
+			}
+			if kind == WriteKindFull && size != Size8 {
+				t.Errorf("full write size: got %d, want %d", size, Size8)
+			}
+			if kind != WriteKindFull && size != tt.wantSize {
+				t.Errorf("size: got %d, want %d", size, tt.wantSize)
+			}
+		})
+	}
+}
+
+func TestBuildSubRegisterWrite_ZeroExtend(t *testing.T) {
+	value := ConstantExpr{Value: IntConstant{Value: 0x12345678, Width: Size4, Signed: false}}
+	parentVar, resultExpr, isSubReg := BuildSubRegisterWrite("eax", value)
+
+	if !isSubReg {
+		t.Fatal("expected isSubReg=true for eax write")
+	}
+	if parentVar.Name != "rax" {
+		t.Errorf("expected parent rax, got %q", parentVar.Name)
+	}
+	zext, ok := resultExpr.(ZeroExtend)
+	if !ok {
+		t.Fatalf("expected ZeroExtend, got %T", resultExpr)
+	}
+	if zext.FromSize != Size4 || zext.ToSize != Size8 {
+		t.Errorf("expected from=4 to=8, got from=%d to=%d", zext.FromSize, zext.ToSize)
+	}
+	if zext.Source.Name != "eax" {
+		t.Errorf("expected source eax, got %q", zext.Source.Name)
+	}
+}
+
+func TestBuildSubRegisterWrite_Insert8Bit(t *testing.T) {
+	value := ConstantExpr{Value: IntConstant{Value: 0x42, Width: Size1, Signed: false}}
+	parentVar, resultExpr, isSubReg := BuildSubRegisterWrite("al", value)
+
+	if !isSubReg {
+		t.Fatal("expected isSubReg=true for al write")
+	}
+	if parentVar.Name != "rax" {
+		t.Errorf("expected parent rax, got %q", parentVar.Name)
+	}
+	ins, ok := resultExpr.(Insert)
+	if !ok {
+		t.Fatalf("expected Insert, got %T", resultExpr)
+	}
+	if ins.Offset != 0 || ins.Size != Size1 {
+		t.Errorf("expected offset=0 size=1, got offset=%d size=%d", ins.Offset, ins.Size)
+	}
+	if ins.Dest.Name != "rax" {
+		t.Errorf("expected dest rax, got %q", ins.Dest.Name)
+	}
+}
+
+func TestBuildSubRegisterWrite_InsertHighByte(t *testing.T) {
+	value := ConstantExpr{Value: IntConstant{Value: 0x99, Width: Size1, Signed: false}}
+	parentVar, resultExpr, isSubReg := BuildSubRegisterWrite("ah", value)
+
+	if !isSubReg {
+		t.Fatal("expected isSubReg=true for ah write")
+	}
+	if parentVar.Name != "rax" {
+		t.Errorf("expected parent rax, got %q", parentVar.Name)
+	}
+	ins, ok := resultExpr.(Insert)
+	if !ok {
+		t.Fatalf("expected Insert, got %T", resultExpr)
+	}
+	if ins.Offset != 1 {
+		t.Errorf("expected offset=1 for ah, got %d", ins.Offset)
+	}
+}
+
+func TestBuildSubRegisterWrite_Insert16Bit(t *testing.T) {
+	value := ConstantExpr{Value: IntConstant{Value: 0x1234, Width: Size2, Signed: false}}
+	parentVar, resultExpr, isSubReg := BuildSubRegisterWrite("ax", value)
+
+	if !isSubReg {
+		t.Fatal("expected isSubReg=true for ax write")
+	}
+	if parentVar.Name != "rax" {
+		t.Errorf("expected parent rax, got %q", parentVar.Name)
+	}
+	ins, ok := resultExpr.(Insert)
+	if !ok {
+		t.Fatalf("expected Insert, got %T", resultExpr)
+	}
+	if ins.Offset != 0 || ins.Size != Size2 {
+		t.Errorf("expected offset=0 size=2, got offset=%d size=%d", ins.Offset, ins.Size)
+	}
+}
+
+func TestBuildSubRegisterWrite_FullRegister(t *testing.T) {
+	value := ConstantExpr{Value: IntConstant{Value: 0xDEADBEEF, Width: Size8, Signed: false}}
+	parentVar, resultExpr, isSubReg := BuildSubRegisterWrite("rax", value)
+
+	if isSubReg {
+		t.Fatal("expected isSubReg=false for rax write")
+	}
+	if parentVar.Name != "rax" {
+		t.Errorf("expected parent rax, got %q", parentVar.Name)
+	}
+	if resultExpr != value {
+		t.Errorf("expected value pass-through for full register write")
+	}
+}
+
+func TestBuildSubRegisterRead(t *testing.T) {
+	tests := []struct {
+		reg        string
+		wantSub    bool
+		wantParent string
+		wantOffset uint8
+		wantSize   Size
+	}{
+		{"al", true, "rax", 0, Size1},
+		{"ah", true, "rax", 1, Size1},
+		{"ax", true, "rax", 0, Size2},
+		{"eax", true, "rax", 0, Size4},
+		{"r8b", true, "r8", 0, Size1},
+		{"r8w", true, "r8", 0, Size2},
+		{"r8d", true, "r8", 0, Size4},
+		{"rax", false, "", 0, 0},
+		{"r15", false, "", 0, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.reg, func(t *testing.T) {
+			parentVar, expr, isSub := BuildSubRegisterRead(tt.reg)
+			if isSub != tt.wantSub {
+				t.Fatalf("isSubReg: got %v, want %v", isSub, tt.wantSub)
+			}
+			if !isSub {
+				return
+			}
+			if parentVar.Name != tt.wantParent {
+				t.Errorf("parent: got %q, want %q", parentVar.Name, tt.wantParent)
+			}
+			if expr.Offset != tt.wantOffset {
+				t.Errorf("offset: got %d, want %d", expr.Offset, tt.wantOffset)
+			}
+			if expr.Size != tt.wantSize {
+				t.Errorf("size: got %d, want %d", expr.Size, tt.wantSize)
+			}
+		})
+	}
+}
