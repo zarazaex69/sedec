@@ -119,8 +119,7 @@ func (p *Parser) parseFunctionHeader(fn *Function) error {
 
 // parseFunctionSignature parses function signature from string
 func (p *Parser) parseFunctionSignature(s string) (FunctionType, error) {
-	// format: (param1, param2, ...) returntype
-	closeIdx := strings.Index(s, ")")
+	closeIdx := p.findMatchingParen(s, 0)
 	if closeIdx == -1 {
 		return FunctionType{}, p.error("expected ')' in function signature")
 	}
@@ -132,7 +131,7 @@ func (p *Parser) parseFunctionSignature(s string) (FunctionType, error) {
 	var variadic bool
 
 	if paramsStr != "" {
-		paramList := strings.Split(paramsStr, ",")
+		paramList := p.splitArgs(paramsStr)
 		for _, paramStr := range paramList {
 			paramStr = strings.TrimSpace(paramStr)
 			if paramStr == "..." {
@@ -225,7 +224,6 @@ func (p *Parser) parseInstruction() (IRInstruction, error) {
 		return nil, ErrEmptyInstruction
 	}
 
-	// determine instruction type by keywords
 	switch {
 	case strings.HasPrefix(line, "return"):
 		return p.parseReturn(line)
@@ -233,8 +231,12 @@ func (p *Parser) parseInstruction() (IRInstruction, error) {
 		return p.parseBranch(line)
 	case strings.HasPrefix(line, "jump "):
 		return p.parseJump(line)
+	case strings.HasPrefix(line, "intrinsic "):
+		return p.parseIntrinsic(line)
 	case strings.HasPrefix(line, "call "):
 		return p.parseCall(line)
+	case strings.Contains(line, "= intrinsic "):
+		return p.parseIntrinsic(line)
 	case strings.Contains(line, "= call "):
 		return p.parseCall(line)
 	case strings.HasPrefix(line, "store."):
@@ -534,6 +536,78 @@ func (p *Parser) parsePhi(line string) (*Phi, error) {
 	}, nil
 }
 
+func (p *Parser) parseIntrinsic(line string) (*Intrinsic, error) {
+	var dest *Variable
+
+	if strings.Contains(line, " = intrinsic ") {
+		parts := strings.SplitN(line, " = intrinsic ", 2)
+		if len(parts) != 2 {
+			return nil, p.error("invalid intrinsic syntax")
+		}
+		destVar, err := p.parseVariable(strings.TrimSpace(parts[0]))
+		if err != nil {
+			return nil, err
+		}
+		dest = &destVar
+		line = parts[1]
+	} else {
+		line = strings.TrimPrefix(line, "intrinsic ")
+	}
+
+	parenIdx := strings.Index(line, "(")
+	if parenIdx == -1 {
+		return nil, p.error("expected '(' in intrinsic")
+	}
+
+	name := strings.TrimSpace(line[:parenIdx])
+
+	closeIdx := strings.LastIndex(line, ")")
+	if closeIdx == -1 {
+		return nil, p.error("expected ')' in intrinsic")
+	}
+
+	argsStr := strings.TrimSpace(line[parenIdx+1 : closeIdx])
+	var args []Expression
+
+	if argsStr != "" {
+		argParts := p.splitArgs(argsStr)
+		for _, argStr := range argParts {
+			arg, err := p.parseExpression(strings.TrimSpace(argStr))
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, arg)
+		}
+	}
+
+	return &Intrinsic{
+		Dest: dest,
+		Name: name,
+		Args: args,
+	}, nil
+}
+
+func (p *Parser) splitArgs(s string) []string {
+	var parts []string
+	depth := 0
+	start := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ',':
+			if depth == 0 {
+				parts = append(parts, s[start:i])
+				start = i + 1
+			}
+		}
+	}
+	parts = append(parts, s[start:])
+	return parts
+}
+
 // parseExpression parses an expression
 func (p *Parser) parseExpression(s string) (Expression, error) {
 	s = strings.TrimSpace(s)
@@ -568,6 +642,10 @@ func (p *Parser) parseExpression(s string) (Expression, error) {
 				return p.parseExpression(inner)
 			}
 		}
+	}
+
+	if fn, ok := p.tryParseBuiltinCall(s); ok {
+		return fn, nil
 	}
 
 	// check for binary operations (lowest precedence first)
@@ -787,6 +865,11 @@ func (p *Parser) parseType(s string) (Type, error) {
 		}, nil
 	}
 
+	// check for function type: func(params) returntype — must be before float check
+	if strings.HasPrefix(s, "func(") {
+		return p.parseFunctionType(s)
+	}
+
 	// check for float types: f32, f64, f80, f128
 	if strings.HasPrefix(s, "f") {
 		widthStr := s[1:]
@@ -831,11 +914,6 @@ func (p *Parser) parseType(s string) (Type, error) {
 	if strings.HasPrefix(s, "struct") {
 		name := strings.TrimSpace(strings.TrimPrefix(s, "struct"))
 		return StructType{Name: name}, nil
-	}
-
-	// check for function type: func(params) returntype
-	if strings.HasPrefix(s, "func(") {
-		return p.parseFunctionType(s)
 	}
 
 	return nil, p.errorf("unknown type: %s", s)
@@ -897,6 +975,72 @@ func (p *Parser) error(msg string) error {
 func (p *Parser) errorf(format string, args ...interface{}) error {
 	msg := fmt.Sprintf(format, args...)
 	return fmt.Errorf("line %d: %w: %s", p.line, ErrParse, msg)
+}
+
+func (p *Parser) tryParseBuiltinCall(s string) (Expression, bool) {
+	for _, prefix := range []string{"extract(", "insert(", "zext("} {
+		if !strings.HasPrefix(s, prefix) {
+			continue
+		}
+		closeIdx := strings.LastIndex(s, ")")
+		if closeIdx == -1 {
+			return nil, false
+		}
+		inner := s[len(prefix):closeIdx]
+		args := p.splitArgs(inner)
+
+		switch {
+		case prefix == "extract(" && len(args) == 3:
+			src, err := p.parseVariable(strings.TrimSpace(args[0]))
+			if err != nil {
+				return nil, false
+			}
+			offset, err := strconv.ParseUint(strings.TrimSpace(args[1]), 10, 8)
+			if err != nil {
+				return nil, false
+			}
+			size, err := strconv.ParseUint(strings.TrimSpace(args[2]), 10, 8)
+			if err != nil {
+				return nil, false
+			}
+			return Extract{Source: src, Offset: uint8(offset), Size: Size(size)}, true
+
+		case prefix == "insert(" && len(args) == 4:
+			dst, err := p.parseVariable(strings.TrimSpace(args[0]))
+			if err != nil {
+				return nil, false
+			}
+			val, err := p.parseExpression(strings.TrimSpace(args[1]))
+			if err != nil {
+				return nil, false
+			}
+			offset, err := strconv.ParseUint(strings.TrimSpace(args[2]), 10, 8)
+			if err != nil {
+				return nil, false
+			}
+			size, err := strconv.ParseUint(strings.TrimSpace(args[3]), 10, 8)
+			if err != nil {
+				return nil, false
+			}
+			return Insert{Dest: dst, Value: val, Offset: uint8(offset), Size: Size(size)}, true
+
+		case prefix == "zext(" && len(args) == 3:
+			src, err := p.parseVariable(strings.TrimSpace(args[0]))
+			if err != nil {
+				return nil, false
+			}
+			fromSize, err := strconv.ParseUint(strings.TrimSpace(args[1]), 10, 8)
+			if err != nil {
+				return nil, false
+			}
+			toSize, err := strconv.ParseUint(strings.TrimSpace(args[2]), 10, 8)
+			if err != nil {
+				return nil, false
+			}
+			return ZeroExtend{Source: src, FromSize: Size(fromSize), ToSize: Size(toSize)}, true
+		}
+	}
+	return nil, false
 }
 
 func (p *Parser) findOperator(s, op string) int {

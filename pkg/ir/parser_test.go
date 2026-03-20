@@ -709,6 +709,305 @@ func TestParserErrorHandling(t *testing.T) {
 	}
 }
 
+func TestParserHashComments(t *testing.T) {
+	input := `# this is a hash comment
+func hash_test(i64) void  # inline hash comment
+
+# another comment
+bb0:  # entry
+  # assign
+  x_1 = (a_1 + 1)
+  return
+`
+
+	parser := NewParser(strings.NewReader(input))
+	fn, err := parser.ParseFunction()
+	if err != nil {
+		t.Fatalf("parse with hash comments failed: %v", err)
+	}
+
+	if fn.Name != "hash_test" {
+		t.Errorf("expected function name 'hash_test', got '%s'", fn.Name)
+	}
+
+	block := fn.Blocks[fn.EntryBlock]
+	if len(block.Instructions) != 2 {
+		t.Errorf("expected 2 instructions, got %d", len(block.Instructions))
+	}
+}
+
+func TestParserIntrinsic(t *testing.T) {
+	input := `func test_intrinsic() void
+
+bb0:
+  result_1 = intrinsic bswap(x_1)
+  intrinsic cpuid(0)
+  multi_1 = intrinsic rdtsc()
+  return
+`
+
+	parser := NewParser(strings.NewReader(input))
+	fn, err := parser.ParseFunction()
+	if err != nil {
+		t.Fatalf("parse intrinsic failed: %v", err)
+	}
+
+	block := fn.Blocks[fn.EntryBlock]
+	if len(block.Instructions) != 4 {
+		t.Fatalf("expected 4 instructions, got %d", len(block.Instructions))
+	}
+
+	intr0, ok := block.Instructions[0].(*Intrinsic)
+	if !ok {
+		t.Fatalf("expected Intrinsic, got %T", block.Instructions[0])
+	}
+	if intr0.Name != "bswap" {
+		t.Errorf("expected name 'bswap', got '%s'", intr0.Name)
+	}
+	if intr0.Dest == nil {
+		t.Error("expected non-nil dest for bswap")
+	}
+	if len(intr0.Args) != 1 {
+		t.Errorf("expected 1 arg, got %d", len(intr0.Args))
+	}
+
+	intr1, ok := block.Instructions[1].(*Intrinsic)
+	if !ok {
+		t.Fatalf("expected Intrinsic, got %T", block.Instructions[1])
+	}
+	if intr1.Dest != nil {
+		t.Error("expected nil dest for cpuid")
+	}
+
+	intr2, ok := block.Instructions[2].(*Intrinsic)
+	if !ok {
+		t.Fatalf("expected Intrinsic, got %T", block.Instructions[2])
+	}
+	if intr2.Name != "rdtsc" {
+		t.Errorf("expected name 'rdtsc', got '%s'", intr2.Name)
+	}
+	if len(intr2.Args) != 0 {
+		t.Errorf("expected 0 args, got %d", len(intr2.Args))
+	}
+}
+
+func TestParserSubRegisterExpressions(t *testing.T) {
+	input := `func test_subreg() void
+
+bb0:
+  al_1 = extract(rax_1, 0, 1)
+  rax_2 = insert(rax_1, val_1, 0, 1)
+  rax_3 = zext(eax_1, 4, 8)
+  return
+`
+
+	parser := NewParser(strings.NewReader(input))
+	fn, err := parser.ParseFunction()
+	if err != nil {
+		t.Fatalf("parse sub-register expressions failed: %v", err)
+	}
+
+	block := fn.Blocks[fn.EntryBlock]
+	if len(block.Instructions) != 4 {
+		t.Fatalf("expected 4 instructions, got %d", len(block.Instructions))
+	}
+
+	assign0, ok := block.Instructions[0].(*Assign)
+	if !ok {
+		t.Fatalf("expected Assign, got %T", block.Instructions[0])
+	}
+	ext, ok := assign0.Source.(Extract)
+	if !ok {
+		t.Fatalf("expected Extract, got %T", assign0.Source)
+	}
+	if ext.Source.Name != "rax" || ext.Offset != 0 || ext.Size != 1 {
+		t.Errorf("extract mismatch: %+v", ext)
+	}
+
+	assign1, ok := block.Instructions[1].(*Assign)
+	if !ok {
+		t.Fatalf("expected Assign, got %T", block.Instructions[1])
+	}
+	ins, ok := assign1.Source.(Insert)
+	if !ok {
+		t.Fatalf("expected Insert, got %T", assign1.Source)
+	}
+	if ins.Dest.Name != "rax" || ins.Offset != 0 || ins.Size != 1 {
+		t.Errorf("insert mismatch: %+v", ins)
+	}
+
+	assign2, ok := block.Instructions[2].(*Assign)
+	if !ok {
+		t.Fatalf("expected Assign, got %T", block.Instructions[2])
+	}
+	zx, ok := assign2.Source.(ZeroExtend)
+	if !ok {
+		t.Fatalf("expected ZeroExtend, got %T", assign2.Source)
+	}
+	if zx.Source.Name != "eax" || zx.FromSize != 4 || zx.ToSize != 8 {
+		t.Errorf("zext mismatch: %+v", zx)
+	}
+}
+
+func TestRoundTripIntrinsic(t *testing.T) {
+	fn := &Function{
+		Name:       "intrinsic_test",
+		Signature:  FunctionType{ReturnType: VoidType{}, Parameters: []Type{}},
+		Blocks:     make(map[BlockID]*BasicBlock),
+		EntryBlock: 0,
+	}
+
+	fn.Blocks[0] = &BasicBlock{
+		ID: 0,
+		Instructions: []IRInstruction{
+			&Intrinsic{
+				Dest: &Variable{Name: "result", Type: IntType{Width: Size8, Signed: true}, Version: 1},
+				Name: "bswap",
+				Args: []Expression{
+					VariableExpr{Var: Variable{Name: "x", Type: IntType{Width: Size8, Signed: true}, Version: 1}},
+				},
+			},
+			&Intrinsic{
+				Name: "cpuid",
+				Args: []Expression{
+					ConstantExpr{Value: IntConstant{Value: 0, Width: Size1, Signed: false}},
+				},
+			},
+			&Return{},
+		},
+	}
+
+	out1, err := PrettyPrint(fn)
+	if err != nil {
+		t.Fatalf("print failed: %v", err)
+	}
+
+	parser := NewParser(strings.NewReader(out1))
+	fn2, err := parser.ParseFunction()
+	if err != nil {
+		t.Fatalf("parse failed: %v\noutput was:\n%s", err, out1)
+	}
+
+	out2, err := PrettyPrint(fn2)
+	if err != nil {
+		t.Fatalf("second print failed: %v", err)
+	}
+
+	if normalizeWhitespace(out1) != normalizeWhitespace(out2) {
+		t.Errorf("round-trip failed:\nfirst:\n%s\nsecond:\n%s", out1, out2)
+	}
+}
+
+func TestRoundTripSubRegisterExpressions(t *testing.T) {
+	fn := &Function{
+		Name:       "subreg_test",
+		Signature:  FunctionType{ReturnType: VoidType{}, Parameters: []Type{}},
+		Blocks:     make(map[BlockID]*BasicBlock),
+		EntryBlock: 0,
+	}
+
+	fn.Blocks[0] = &BasicBlock{
+		ID: 0,
+		Instructions: []IRInstruction{
+			&Assign{
+				Dest: Variable{Name: "al", Type: IntType{Width: Size1, Signed: false}, Version: 1},
+				Source: Extract{
+					Source: Variable{Name: "rax", Type: IntType{Width: Size8, Signed: true}, Version: 1},
+					Offset: 0,
+					Size:   Size1,
+				},
+			},
+			&Assign{
+				Dest: Variable{Name: "rax", Type: IntType{Width: Size8, Signed: true}, Version: 2},
+				Source: Insert{
+					Dest:   Variable{Name: "rax", Type: IntType{Width: Size8, Signed: true}, Version: 1},
+					Value:  VariableExpr{Var: Variable{Name: "val", Type: IntType{Width: Size1, Signed: false}, Version: 1}},
+					Offset: 0,
+					Size:   Size1,
+				},
+			},
+			&Assign{
+				Dest: Variable{Name: "rax", Type: IntType{Width: Size8, Signed: true}, Version: 3},
+				Source: ZeroExtend{
+					Source:   Variable{Name: "eax", Type: IntType{Width: Size4, Signed: true}, Version: 1},
+					FromSize: Size4,
+					ToSize:   Size8,
+				},
+			},
+			&Return{},
+		},
+	}
+
+	out1, err := PrettyPrint(fn)
+	if err != nil {
+		t.Fatalf("print failed: %v", err)
+	}
+
+	parser := NewParser(strings.NewReader(out1))
+	fn2, err := parser.ParseFunction()
+	if err != nil {
+		t.Fatalf("parse failed: %v\noutput was:\n%s", err, out1)
+	}
+
+	out2, err := PrettyPrint(fn2)
+	if err != nil {
+		t.Fatalf("second print failed: %v", err)
+	}
+
+	if normalizeWhitespace(out1) != normalizeWhitespace(out2) {
+		t.Errorf("round-trip failed:\nfirst:\n%s\nsecond:\n%s", out1, out2)
+	}
+}
+
+func TestParserFunctionTypeSignature(t *testing.T) {
+	input := `func callback_test(func(i32, i64) void) i32
+
+bb0:
+  return
+`
+
+	parser := NewParser(strings.NewReader(input))
+	fn, err := parser.ParseFunction()
+	if err != nil {
+		t.Fatalf("parse function type param failed: %v", err)
+	}
+
+	if len(fn.Signature.Parameters) != 1 {
+		t.Fatalf("expected 1 parameter, got %d", len(fn.Signature.Parameters))
+	}
+
+	funcType, ok := fn.Signature.Parameters[0].(FunctionType)
+	if !ok {
+		t.Fatalf("expected FunctionType parameter, got %T", fn.Signature.Parameters[0])
+	}
+
+	if len(funcType.Parameters) != 2 {
+		t.Errorf("expected 2 inner params, got %d", len(funcType.Parameters))
+	}
+}
+
+func TestParserVariadicFunction(t *testing.T) {
+	input := `func printf_like(i64, ...) i32
+
+bb0:
+  return
+`
+
+	parser := NewParser(strings.NewReader(input))
+	fn, err := parser.ParseFunction()
+	if err != nil {
+		t.Fatalf("parse variadic failed: %v", err)
+	}
+
+	if !fn.Signature.Variadic {
+		t.Error("expected variadic function")
+	}
+
+	if len(fn.Signature.Parameters) != 1 {
+		t.Errorf("expected 1 parameter, got %d", len(fn.Signature.Parameters))
+	}
+}
+
 // helper function to normalize whitespace for comparison
 func normalizeWhitespace(s string) string {
 	lines := strings.Split(s, "\n")
