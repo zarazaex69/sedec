@@ -112,6 +112,11 @@ func normalizeInstruction(instr ir.IRInstruction) ir.IRInstruction {
 		return &v
 	case ir.Phi:
 		return &v
+	case ir.Intrinsic:
+		for i := range v.Args {
+			v.Args[i] = normalizeExpression(v.Args[i])
+		}
+		return &v
 	default:
 		// already pointer type or unknown - return as-is
 		return instr
@@ -144,6 +149,9 @@ func normalizeExpression(expr ir.Expression) ir.Expression {
 		e.Value = normalizeExpression(e.Value)
 		return &e
 	case ir.ZeroExtend:
+		return &e
+	case ir.LoadExpr:
+		e.Address = normalizeExpression(e.Address)
 		return &e
 	default:
 		// already pointer type or unknown
@@ -193,6 +201,8 @@ func (t *Transformer) getDefinedVariable(instr ir.IRInstruction) *ir.Variable {
 		return i.Dest // may be nil for void calls
 	case *ir.Phi:
 		return &i.Dest
+	case *ir.Intrinsic:
+		return i.Dest
 	default:
 		return nil
 	}
@@ -598,6 +608,11 @@ func (t *Transformer) renameUsesInInstruction(instr ir.IRInstruction) error {
 	case *ir.Jump:
 		// no variables to rename
 
+	case *ir.Intrinsic:
+		for j := range i.Args {
+			t.renameUsesInExpression(i.Args[j])
+		}
+
 	default:
 		// unknown instruction type - this should not happen
 		return fmt.Errorf("%w: %T", errUnknownInstructionType, instr)
@@ -630,6 +645,22 @@ func (t *Transformer) renameUsesInExpression(expr ir.Expression) {
 	case *ir.ConstantExpr:
 		// constants don't have variables to rename
 
+	case *ir.Extract:
+		currentVersion := t.getCurrentVersion(e.Source.Name)
+		e.Source.Version = currentVersion
+
+	case *ir.Insert:
+		currentVersion := t.getCurrentVersion(e.Dest.Name)
+		e.Dest.Version = currentVersion
+		t.renameUsesInExpression(e.Value)
+
+	case *ir.ZeroExtend:
+		currentVersion := t.getCurrentVersion(e.Source.Name)
+		e.Source.Version = currentVersion
+
+	case *ir.LoadExpr:
+		t.renameUsesInExpression(e.Address)
+
 	default:
 		// unknown expression type - ignore
 	}
@@ -658,6 +689,10 @@ func (t *Transformer) updateDefinitionVersion(instr ir.IRInstruction, version in
 		}
 	case *ir.Phi:
 		i.Dest.Version = version
+	case *ir.Intrinsic:
+		if i.Dest != nil {
+			i.Dest.Version = version
+		}
 	default:
 		return fmt.Errorf("%w: %T", errInstructionNotDefinition, instr)
 	}
@@ -728,6 +763,11 @@ func (t *Transformer) getUsedVariables(instr ir.IRInstruction) []ir.Variable {
 		for _, src := range i.Sources {
 			vars = append(vars, src.Var)
 		}
+
+	case *ir.Intrinsic:
+		for _, arg := range i.Args {
+			vars = append(vars, t.extractVariablesFromExpression(arg)...)
+		}
 	}
 
 	return vars
@@ -753,6 +793,19 @@ func (t *Transformer) extractVariablesFromExpression(expr ir.Expression) []ir.Va
 
 	case *ir.ConstantExpr:
 		// no variables in constants
+
+	case *ir.Extract:
+		vars = append(vars, e.Source)
+
+	case *ir.Insert:
+		vars = append(vars, e.Dest)
+		vars = append(vars, t.extractVariablesFromExpression(e.Value)...)
+
+	case *ir.ZeroExtend:
+		vars = append(vars, e.Source)
+
+	case *ir.LoadExpr:
+		vars = append(vars, t.extractVariablesFromExpression(e.Address)...)
 	}
 
 	return vars
