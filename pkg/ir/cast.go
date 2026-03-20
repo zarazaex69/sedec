@@ -88,6 +88,17 @@ func AsPhi(instr IRInstruction) (Phi, bool) {
 	return Phi{}, false
 }
 
+// AsIntrinsic extracts an Intrinsic from an IRInstruction, handling both value and pointer receivers.
+func AsIntrinsic(instr IRInstruction) (Intrinsic, bool) {
+	switch v := instr.(type) {
+	case Intrinsic:
+		return v, true
+	case *Intrinsic:
+		return *v, true
+	}
+	return Intrinsic{}, false
+}
+
 // IsTerminator reports whether instr is a branch or jump (control flow terminator).
 func IsTerminator(instr IRInstruction) bool {
 	switch instr.(type) {
@@ -153,5 +164,16 @@ func CloneCall(src Call, newTarget Expression, newArgs []Variable, newArgExprs [
 		Target:          newTarget,
 		Args:            newArgs,
 		ArgExprs:        newArgExprs,
+	}
+}
+
+// CloneIntrinsic returns a new Intrinsic with the same SourceLocation as src but
+// with Args replaced by newArgs.
+func CloneIntrinsic(src Intrinsic, newArgs []Expression) Intrinsic {
+	return Intrinsic{
+		baseInstruction: src.baseInstruction,
+		Dest:            src.Dest,
+		Name:            src.Name,
+		Args:            newArgs,
 	}
 }

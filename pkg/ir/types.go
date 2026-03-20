@@ -748,6 +748,30 @@ func (p Phi) String() string {
 	return fmt.Sprintf("%s = phi %s", p.Dest.String(), sources)
 }
 
+// Intrinsic represents an architecture-specific or platform-specific operation
+// that has no direct IR equivalent (e.g., bswap, cpuid, rdtsc, SIMD ops).
+type Intrinsic struct {
+	baseInstruction
+	Dest *Variable
+	Name string
+	Args []Expression
+}
+
+func (Intrinsic) isIRInstruction() {}
+func (i Intrinsic) String() string {
+	args := ""
+	for j, arg := range i.Args {
+		if j > 0 {
+			args += ", "
+		}
+		args += arg.String()
+	}
+	if i.Dest != nil {
+		return fmt.Sprintf("%s = intrinsic %s(%s)", i.Dest.String(), i.Name, args)
+	}
+	return fmt.Sprintf("intrinsic %s(%s)", i.Name, args)
+}
+
 // ============================================================================
 // Basic Block and Function
 // ============================================================================

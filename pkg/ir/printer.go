@@ -134,6 +134,18 @@ func (pr *Printer) printInstruction(insn IRInstruction) {
 			}
 			pr.printf("[bb%d: %s]", src.Block, src.Var.String())
 		}
+	case *Intrinsic:
+		if i.Dest != nil {
+			pr.printf("%s = ", i.Dest.String())
+		}
+		pr.printf("intrinsic %s(", i.Name)
+		for j, arg := range i.Args {
+			if j > 0 {
+				pr.printf(", ")
+			}
+			pr.printf("%s", pr.formatExpression(arg))
+		}
+		pr.printf(")")
 	default:
 		pr.printf("// unknown instruction: %T", insn)
 	}
