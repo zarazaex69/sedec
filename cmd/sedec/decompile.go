@@ -670,7 +670,7 @@ func symbolizeAddresses(irFunc *ir.Function, db *binfmt.GroundTruthDatabase, raw
 
 	for _, block := range irFunc.Blocks {
 		for i, instr := range block.Instructions {
-			instrAddr := ir.Address(instr.Location().Address)
+			instrAddr := instr.Location().Address
 			switch typed := instr.(type) {
 			case *ir.Load:
 				typed.Address = symbolizeExpr(typed.Address, instrAddr, db, ripNextAddr)

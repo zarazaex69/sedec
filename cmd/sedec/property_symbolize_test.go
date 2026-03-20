@@ -185,29 +185,6 @@ func buildASTForLoadFunction(fn *ir.Function) *structuring.StructuredAST {
 	}
 }
 
-// extractLoadAddress walks the ir.Function and returns the Address expression
-// of the first ir.Load instruction found, or nil if none exists.
-func extractLoadAddress(fn *ir.Function) ir.Expression {
-	for _, block := range fn.Blocks {
-		for _, instr := range block.Instructions {
-			if loadNode, ok := ir.AsLoad(instr); ok {
-				return loadNode.Address
-			}
-		}
-	}
-	return nil
-}
-
-// isSymbolicAddressExpr reports whether expr represents a symbolic address reference.
-// the expected form after symbolization is VariableExpr{Name: "&" + symbolName}.
-func isSymbolicAddressExpr(expr ir.Expression, symbolName string) bool {
-	varExpr, ok := expr.(ir.VariableExpr)
-	if !ok {
-		return false
-	}
-	return varExpr.Var.Name == "&"+symbolName
-}
-
 // isDecimalIntegerLiteral reports whether the given c output string contains
 // the decimal representation of addr as a standalone numeric literal.
 // this detects the bug condition: "*(uint64_t*)(163472)" in the output.

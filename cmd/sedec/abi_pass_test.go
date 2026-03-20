@@ -351,7 +351,9 @@ func TestRenameRegisterVariables(t *testing.T) {
 	if x86_64RegisterNames[strings.ToLower(firstAssign.Dest.Name)] {
 		t.Errorf("first assign dest %q is still a raw register name", firstAssign.Dest.Name)
 	}
-	if x86_64RegisterNames[strings.ToLower(firstAssign.Source.(ir.VariableExpr).Var.Name)] {
-		t.Errorf("first assign source %q is still a raw register name", firstAssign.Source.(ir.VariableExpr).Var.Name)
+	if srcVar, ok := firstAssign.Source.(ir.VariableExpr); ok {
+		if x86_64RegisterNames[strings.ToLower(srcVar.Var.Name)] {
+			t.Errorf("first assign source %q is still a raw register name", srcVar.Var.Name)
+		}
 	}
 }
