@@ -518,7 +518,6 @@ func (a *SteensgaardAnalyzer) Analyze(fn *ir.Function) PointsToSet {
 // this entry point is useful for testing and for interprocedural analysis
 // where constraints are collected across multiple functions.
 func (a *SteensgaardAnalyzer) AnalyzeConstraints(constraints []PointerConstraint) PointsToSet {
-	// process all constraints through the union-find structure
 	for _, c := range constraints {
 		switch c.Kind {
 		case PtrConstraintAddressOf:
@@ -532,7 +531,59 @@ func (a *SteensgaardAnalyzer) AnalyzeConstraints(constraints []PointerConstraint
 		}
 	}
 
+	a.iterateToFixedPoint(constraints)
+
 	return a.buildPointsToSet()
+}
+
+func (a *SteensgaardAnalyzer) snapshotRoots() map[string][2]int {
+	snap := make(map[string][2]int, len(a.nameToNode))
+	for name, idx := range a.nameToNode {
+		root := a.find(idx)
+		pt := a.nodes[root].pointsTo
+		if pt != -1 {
+			pt = a.find(pt)
+		}
+		snap[name] = [2]int{root, pt}
+	}
+	return snap
+}
+
+func snapshotsEqual(a, b map[string][2]int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+func (a *SteensgaardAnalyzer) iterateToFixedPoint(constraints []PointerConstraint) {
+	const maxIter = 50
+	for iter := 0; iter < maxIter; iter++ {
+		before := a.snapshotRoots()
+
+		for _, c := range constraints {
+			switch c.Kind {
+			case PtrConstraintAddressOf:
+				a.processAddressOf(c.LHS, c.RHS)
+			case PtrConstraintCopy:
+				a.processCopy(c.LHS, c.RHS)
+			case PtrConstraintLoad:
+				a.processLoad(c.LHS, c.RHS)
+			case PtrConstraintStore:
+				a.processStore(c.LHS, c.RHS)
+			}
+		}
+
+		after := a.snapshotRoots()
+		if snapshotsEqual(before, after) {
+			break
+		}
+	}
 }
 
 // buildPointsToSet constructs the final PointsToSet from the union-find structure.
