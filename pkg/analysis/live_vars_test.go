@@ -771,3 +771,186 @@ func TestLiveVars_IsLiveAt(t *testing.T) {
 		t.Error("x_1 should be dead after bb0:1")
 	}
 }
+
+func TestLiveVars_UnaryOpExpression(t *testing.T) {
+	cfgGraph := buildLiveCFG(0, map[cfg.BlockID][]cfg.BlockID{
+		0: {},
+	})
+
+	function := &ir.Function{
+		Name: "unary_op",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Assign{Dest: ssaVar("x", 1), Source: intConst(42)},
+					&ir.Assign{
+						Dest:   ssaVar("y", 1),
+						Source: &ir.UnaryOp{Op: ir.UnOpNeg, Operand: varExpr("x", 1)},
+					},
+					&ir.Return{Value: &ir.Variable{Name: "y", Type: intType(), Version: 1}},
+				},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	analyzer := NewLiveVarsAnalyzer(function, cfgGraph, nil)
+	result, err := analyzer.Compute()
+	if err != nil {
+		t.Fatalf("Compute failed: %v", err)
+	}
+
+	liveOut00 := result.GetLiveOutAt(ProgramPoint{BlockID: 0, InstrIdx: 0})
+	if !liveOut00.Contains(ssaVar("x", 1)) {
+		t.Error("expected x_1 live after bb0:0 (used by unary op)")
+	}
+
+	liveOut01 := result.GetLiveOutAt(ProgramPoint{BlockID: 0, InstrIdx: 1})
+	if !liveOut01.Contains(ssaVar("y", 1)) {
+		t.Error("expected y_1 live after bb0:1")
+	}
+	if liveOut01.Contains(ssaVar("x", 1)) {
+		t.Error("expected x_1 dead after bb0:1")
+	}
+}
+
+func TestLiveVars_CastExpression(t *testing.T) {
+	cfgGraph := buildLiveCFG(0, map[cfg.BlockID][]cfg.BlockID{
+		0: {},
+	})
+
+	function := &ir.Function{
+		Name: "cast_expr",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Assign{Dest: ssaVar("x", 1), Source: intConst(42)},
+					&ir.Assign{
+						Dest: ssaVar("y", 1),
+						Source: &ir.Cast{
+							Expr:       varExpr("x", 1),
+							TargetType: ir.IntType{Width: ir.Size8, Signed: false},
+						},
+					},
+					&ir.Return{Value: &ir.Variable{Name: "y", Type: intType(), Version: 1}},
+				},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	analyzer := NewLiveVarsAnalyzer(function, cfgGraph, nil)
+	result, err := analyzer.Compute()
+	if err != nil {
+		t.Fatalf("Compute failed: %v", err)
+	}
+
+	liveOut00 := result.GetLiveOutAt(ProgramPoint{BlockID: 0, InstrIdx: 0})
+	if !liveOut00.Contains(ssaVar("x", 1)) {
+		t.Error("expected x_1 live after bb0:0 (used by cast)")
+	}
+
+	liveOut01 := result.GetLiveOutAt(ProgramPoint{BlockID: 0, InstrIdx: 1})
+	if liveOut01.Contains(ssaVar("x", 1)) {
+		t.Error("expected x_1 dead after bb0:1")
+	}
+}
+
+func TestLiveVars_PointerTypeExpressions(t *testing.T) {
+	cfgGraph := buildLiveCFG(0, map[cfg.BlockID][]cfg.BlockID{
+		0: {},
+	})
+
+	function := &ir.Function{
+		Name: "ptr_expr",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Assign{Dest: ssaVar("a", 1), Source: intConst(1)},
+					&ir.Assign{Dest: ssaVar("b", 1), Source: intConst(2)},
+					&ir.Assign{
+						Dest: ssaVar("c", 1),
+						Source: &ir.BinaryOp{
+							Op:    ir.BinOpAdd,
+							Left:  &ir.VariableExpr{Var: ssaVar("a", 1)},
+							Right: &ir.VariableExpr{Var: ssaVar("b", 1)},
+						},
+					},
+					&ir.Return{Value: &ir.Variable{Name: "c", Type: intType(), Version: 1}},
+				},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	analyzer := NewLiveVarsAnalyzer(function, cfgGraph, nil)
+	result, err := analyzer.Compute()
+	if err != nil {
+		t.Fatalf("Compute failed: %v", err)
+	}
+
+	liveOut01 := result.GetLiveOutAt(ProgramPoint{BlockID: 0, InstrIdx: 1})
+	if !liveOut01.Contains(ssaVar("a", 1)) {
+		t.Error("expected a_1 live after bb0:1 (used by pointer-type BinaryOp)")
+	}
+	if !liveOut01.Contains(ssaVar("b", 1)) {
+		t.Error("expected b_1 live after bb0:1 (used by pointer-type BinaryOp)")
+	}
+}
+
+func TestLiveVars_NonexistentProgramPoint(t *testing.T) {
+	cfgGraph := buildLiveCFG(0, map[cfg.BlockID][]cfg.BlockID{
+		0: {},
+	})
+
+	function := &ir.Function{
+		Name: "nonexistent",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Return{},
+				},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	analyzer := NewLiveVarsAnalyzer(function, cfgGraph, nil)
+	result, err := analyzer.Compute()
+	if err != nil {
+		t.Fatalf("Compute failed: %v", err)
+	}
+
+	bogus := ProgramPoint{BlockID: 99, InstrIdx: 0}
+	if result.IsLiveAt(bogus, ssaVar("x", 1)) {
+		t.Error("expected false for nonexistent program point")
+	}
+	if result.IsLiveAfter(bogus, ssaVar("x", 1)) {
+		t.Error("expected false for nonexistent program point")
+	}
+	if result.GetLiveInAt(bogus).Len() != 0 {
+		t.Error("expected empty set for nonexistent program point")
+	}
+	if result.GetLiveOutAt(bogus).Len() != 0 {
+		t.Error("expected empty set for nonexistent program point")
+	}
+	if result.GetBlockLiveIn(99).Len() != 0 {
+		t.Error("expected empty set for nonexistent block")
+	}
+	if result.GetBlockLiveOut(99).Len() != 0 {
+		t.Error("expected empty set for nonexistent block")
+	}
+}
+
+func TestLiveVars_RemoveNonexistent(t *testing.T) {
+	vs := NewVarSet()
+	vs.Add(ssaVar("a", 1))
+	vs.Remove(ssaVar("z", 99))
+	if vs.Len() != 1 {
+		t.Error("removing nonexistent variable should not change set")
+	}
+}
