@@ -426,9 +426,11 @@ func extractDefinedVariable(instr ir.IRInstruction) *ir.Variable {
 	case *ir.Load:
 		return &inst.Dest
 	case *ir.Call:
-		return inst.Dest // may be nil for void calls
+		return inst.Dest
 	case *ir.Phi:
 		return &inst.Dest
+	case *ir.Intrinsic:
+		return inst.Dest
 	default:
 		return nil
 	}

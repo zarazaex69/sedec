@@ -485,6 +485,10 @@ func extractUsedVariables(instr ir.IRInstruction) []ir.Variable {
 		}
 	case *ir.Jump:
 		// no variable uses
+	case *ir.Intrinsic:
+		for _, arg := range i.Args {
+			vars = append(vars, extractVarsFromExpression(arg)...)
+		}
 	}
 	return vars
 }

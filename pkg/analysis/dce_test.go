@@ -900,3 +900,104 @@ func TestDCE_BranchAlwaysPreserved(t *testing.T) {
 		t.Error("branch must be preserved (controls execution flow)")
 	}
 }
+
+func TestDCE_RemovesDeadIntrinsic(t *testing.T) {
+	cfgGraph := buildDCECFG(map[cfg.BlockID][]cfg.BlockID{0: {}})
+
+	dest := ssaVar("rdtsc", 1)
+	fn := &ir.Function{
+		Name: "dead_intrinsic",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Intrinsic{Dest: &dest, Name: "rdtsc", Args: nil},
+					&ir.Return{},
+				},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := EliminateDeadCode(fn, cfgGraph, nil)
+	if err != nil {
+		t.Fatalf("EliminateDeadCode failed: %v", err)
+	}
+
+	if result.RemovedInstructions != 1 {
+		t.Errorf("expected 1 removed instruction, got %d", result.RemovedInstructions)
+	}
+
+	block := fn.Blocks[0]
+	for _, instr := range block.Instructions {
+		if _, ok := instr.(*ir.Intrinsic); ok {
+			t.Error("dead intrinsic with unused dest should have been removed")
+		}
+	}
+}
+
+func TestDCE_PreservesSideEffectIntrinsic(t *testing.T) {
+	cfgGraph := buildDCECFG(map[cfg.BlockID][]cfg.BlockID{0: {}})
+
+	fn := &ir.Function{
+		Name: "sideeffect_intrinsic",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Intrinsic{Dest: nil, Name: "cpuid", Args: nil},
+					&ir.Return{},
+				},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := EliminateDeadCode(fn, cfgGraph, nil)
+	if err != nil {
+		t.Fatalf("EliminateDeadCode failed: %v", err)
+	}
+
+	if result.RemovedInstructions != 0 {
+		t.Errorf("expected 0 removed instructions, got %d", result.RemovedInstructions)
+	}
+
+	block := fn.Blocks[0]
+	intrinsicFound := false
+	for _, instr := range block.Instructions {
+		if _, ok := instr.(*ir.Intrinsic); ok {
+			intrinsicFound = true
+		}
+	}
+	if !intrinsicFound {
+		t.Error("side-effect intrinsic (no dest) must be preserved")
+	}
+}
+
+func TestDCE_PreservesLiveIntrinsic(t *testing.T) {
+	cfgGraph := buildDCECFG(map[cfg.BlockID][]cfg.BlockID{0: {}})
+
+	dest := ssaVar("ts", 1)
+	fn := &ir.Function{
+		Name: "live_intrinsic",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Intrinsic{Dest: &dest, Name: "rdtsc", Args: nil},
+					&ir.Return{Value: &ir.Variable{Name: "ts", Type: intType(), Version: 1}},
+				},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := EliminateDeadCode(fn, cfgGraph, nil)
+	if err != nil {
+		t.Fatalf("EliminateDeadCode failed: %v", err)
+	}
+
+	if result.RemovedInstructions != 0 {
+		t.Errorf("expected 0 removed instructions, got %d", result.RemovedInstructions)
+	}
+}

@@ -256,26 +256,25 @@ func (e *DeadCodeEliminator) isDeadInstruction(
 		return false
 
 	case *ir.Assign:
-		// dead if the defined variable is not live after this point
 		liveOut := liveResult.GetLiveOutAt(point)
 		return !liveOut.Contains(i.Dest)
 
 	case *ir.Load:
-		// loads read from memory but define a variable.
-		// if the loaded value is never used, the load is dead.
-		// note: loads from volatile memory would need special handling,
-		// but our ir does not model volatility, so we treat loads as pure.
 		liveOut := liveResult.GetLiveOutAt(point)
 		return !liveOut.Contains(i.Dest)
 
 	case *ir.Phi:
-		// phi-nodes are dead if their defined variable is not live after this point.
-		// a phi with a single source after unreachable block removal may also be dead.
 		liveOut := liveResult.GetLiveOutAt(point)
 		return !liveOut.Contains(i.Dest)
 
+	case *ir.Intrinsic:
+		if i.Dest == nil {
+			return false
+		}
+		liveOut := liveResult.GetLiveOutAt(point)
+		return !liveOut.Contains(*i.Dest)
+
 	default:
-		// unknown instruction type: conservatively preserve it
 		return false
 	}
 }
