@@ -1249,3 +1249,474 @@ func TestValueSet_Clone_Independence(t *testing.T) {
 		t.Errorf("original must not be affected by clone mutation, got Hi=%d", si.Hi)
 	}
 }
+
+func TestStridedInterval_And(t *testing.T) {
+	t.Run("non-negative inputs", func(t *testing.T) {
+		a := NewStridedInterval(1, 0, 255)
+		b := NewStridedInterval(1, 0, 15)
+		result := a.And(b)
+		if result.Lo != 0 {
+			t.Errorf("expected lo=0, got %d", result.Lo)
+		}
+		if result.Hi < 0 || result.Hi > 15 {
+			t.Errorf("expected hi in [0,15], got %d", result.Hi)
+		}
+	})
+
+	t.Run("negative inputs", func(t *testing.T) {
+		a := NewStridedInterval(1, -10, 10)
+		b := NewStridedInterval(1, -5, 5)
+		result := a.And(b)
+		if result.Lo > -10 {
+			t.Errorf("expected lo <= -10, got %d", result.Lo)
+		}
+	})
+
+	t.Run("empty operand", func(t *testing.T) {
+		a := NewStridedInterval(1, 5, 3) // empty
+		b := NewStridedInterval(1, 0, 10)
+		result := a.And(b)
+		if !result.IsEmpty() {
+			t.Errorf("expected empty, got %s", result.String())
+		}
+	})
+
+	t.Run("both negative hi", func(t *testing.T) {
+		a := NewStridedInterval(1, -20, -5)
+		b := NewStridedInterval(1, -10, -1)
+		result := a.And(b)
+		if result.IsEmpty() {
+			t.Error("expected non-empty result for AND of negative ranges")
+		}
+	})
+}
+
+func TestStridedInterval_Or(t *testing.T) {
+	t.Run("non-negative inputs", func(t *testing.T) {
+		a := NewStridedInterval(1, 0, 7)
+		b := NewStridedInterval(1, 0, 3)
+		result := a.Or(b)
+		if result.Lo < 0 {
+			t.Errorf("expected non-negative lo, got %d", result.Lo)
+		}
+		if result.Hi < 7 {
+			t.Errorf("expected hi >= 7, got %d", result.Hi)
+		}
+	})
+
+	t.Run("empty operand", func(t *testing.T) {
+		a := NewStridedInterval(1, 5, 3) // empty
+		b := NewStridedInterval(1, 0, 10)
+		result := a.Or(b)
+		if !result.IsEmpty() {
+			t.Errorf("expected empty, got %s", result.String())
+		}
+	})
+}
+
+func TestStridedInterval_Shr(t *testing.T) {
+	t.Run("constant shift", func(t *testing.T) {
+		a := NewStridedInterval(1, 16, 32)
+		shift := NewSingleton(2)
+		result := a.Shr(shift)
+		if result.IsEmpty() {
+			t.Error("expected non-empty result")
+		}
+	})
+
+	t.Run("non-constant shift returns top", func(t *testing.T) {
+		a := NewStridedInterval(1, 0, 100)
+		shift := NewStridedInterval(1, 1, 3)
+		result := a.Shr(shift)
+		if !result.IsTop() {
+			t.Errorf("expected top for non-constant shift, got %s", result.String())
+		}
+	})
+
+	t.Run("negative shift returns top", func(t *testing.T) {
+		a := NewStridedInterval(1, 0, 100)
+		shift := NewSingleton(-1)
+		result := a.Shr(shift)
+		if !result.IsTop() {
+			t.Errorf("expected top for negative shift, got %s", result.String())
+		}
+	})
+
+	t.Run("shift >= 64 returns top", func(t *testing.T) {
+		a := NewStridedInterval(1, 0, 100)
+		shift := NewSingleton(64)
+		result := a.Shr(shift)
+		if !result.IsTop() {
+			t.Errorf("expected top for shift >= 64, got %s", result.String())
+		}
+	})
+
+	t.Run("empty operand", func(t *testing.T) {
+		a := NewStridedInterval(1, 5, 3) // empty
+		shift := NewSingleton(2)
+		result := a.Shr(shift)
+		if !result.IsEmpty() {
+			t.Errorf("expected empty, got %s", result.String())
+		}
+	})
+}
+
+func TestAndValueSets(t *testing.T) {
+	t.Run("numeric AND", func(t *testing.T) {
+		a := NewValueSetInterval(1, 0, 255)
+		b := NewValueSetInterval(1, 0, 15)
+		result := AndValueSets(a, b)
+		if result.IsBottom() || result.IsTop() {
+			t.Errorf("expected concrete result, got %s", result.String())
+		}
+	})
+
+	t.Run("bottom propagation", func(t *testing.T) {
+		a := NewValueSetBottom()
+		b := NewValueSetInterval(1, 0, 15)
+		result := AndValueSets(a, b)
+		if !result.IsBottom() {
+			t.Errorf("expected bottom, got %s", result.String())
+		}
+	})
+
+	t.Run("top propagation", func(t *testing.T) {
+		a := NewValueSetTop()
+		b := NewValueSetInterval(1, 0, 15)
+		result := AndValueSets(a, b)
+		if !result.IsTop() {
+			t.Errorf("expected top, got %s", result.String())
+		}
+	})
+
+	t.Run("pointer operand returns top", func(t *testing.T) {
+		a := NewValueSetPointer(MemoryRegion{Kind: RegionStack}, 0, -8, -8)
+		b := NewValueSetInterval(1, 0, 15)
+		result := AndValueSets(a, b)
+		if !result.IsTop() {
+			t.Errorf("expected top for pointer AND, got %s", result.String())
+		}
+	})
+}
+
+func TestOrValueSets(t *testing.T) {
+	t.Run("numeric OR", func(t *testing.T) {
+		a := NewValueSetInterval(1, 0, 7)
+		b := NewValueSetInterval(1, 0, 3)
+		result := OrValueSets(a, b)
+		if result.IsBottom() || result.IsTop() {
+			t.Errorf("expected concrete result, got %s", result.String())
+		}
+	})
+
+	t.Run("bottom propagation", func(t *testing.T) {
+		a := NewValueSetBottom()
+		b := NewValueSetInterval(1, 0, 7)
+		result := OrValueSets(a, b)
+		if !result.IsBottom() {
+			t.Errorf("expected bottom, got %s", result.String())
+		}
+	})
+
+	t.Run("top propagation", func(t *testing.T) {
+		a := NewValueSetInterval(1, 0, 7)
+		b := NewValueSetTop()
+		result := OrValueSets(a, b)
+		if !result.IsTop() {
+			t.Errorf("expected top, got %s", result.String())
+		}
+	})
+}
+
+func TestShlValueSets(t *testing.T) {
+	t.Run("numeric SHL", func(t *testing.T) {
+		a := NewValueSetInterval(1, 1, 4)
+		b := NewValueSetConstant(2)
+		result := ShlValueSets(a, b)
+		si := result.GetInterval(MemoryRegion{Kind: RegionUnknown})
+		if si.Lo != 4 || si.Hi != 16 {
+			t.Errorf("expected [4,16], got [%d,%d]", si.Lo, si.Hi)
+		}
+	})
+
+	t.Run("bottom propagation", func(t *testing.T) {
+		a := NewValueSetBottom()
+		b := NewValueSetConstant(2)
+		result := ShlValueSets(a, b)
+		if !result.IsBottom() {
+			t.Errorf("expected bottom, got %s", result.String())
+		}
+	})
+
+	t.Run("top propagation", func(t *testing.T) {
+		a := NewValueSetTop()
+		b := NewValueSetConstant(2)
+		result := ShlValueSets(a, b)
+		if !result.IsTop() {
+			t.Errorf("expected top, got %s", result.String())
+		}
+	})
+}
+
+func TestShrValueSets(t *testing.T) {
+	t.Run("numeric SHR", func(t *testing.T) {
+		a := NewValueSetInterval(1, 16, 32)
+		b := NewValueSetConstant(2)
+		result := ShrValueSets(a, b)
+		if result.IsBottom() || result.IsTop() {
+			t.Errorf("expected concrete result, got %s", result.String())
+		}
+	})
+
+	t.Run("bottom propagation", func(t *testing.T) {
+		a := NewValueSetBottom()
+		b := NewValueSetConstant(2)
+		result := ShrValueSets(a, b)
+		if !result.IsBottom() {
+			t.Errorf("expected bottom, got %s", result.String())
+		}
+	})
+
+	t.Run("top propagation", func(t *testing.T) {
+		a := NewValueSetInterval(1, 0, 100)
+		b := NewValueSetTop()
+		result := ShrValueSets(a, b)
+		if !result.IsTop() {
+			t.Errorf("expected top, got %s", result.String())
+		}
+	})
+}
+
+func TestVSA_WideningState(t *testing.T) {
+	int64Type := ir.IntType{Width: ir.Size8, Signed: true}
+	fn := buildVSAFunction("widen_test", []ir.IRInstruction{
+		&ir.Assign{
+			Dest:   ir.Variable{Name: "i", Version: 0, Type: int64Type},
+			Source: &ir.ConstantExpr{Value: ir.IntConstant{Value: 0}},
+		},
+	})
+
+	fn.Blocks[0].Successors = []ir.BlockID{1}
+	fn.Blocks[1] = &ir.BasicBlock{
+		ID:           1,
+		Predecessors: []ir.BlockID{0, 1},
+		Successors:   []ir.BlockID{1},
+		Instructions: []ir.IRInstruction{
+			&ir.Phi{
+				Dest: ir.Variable{Name: "i", Version: 1, Type: int64Type},
+				Sources: []ir.PhiSource{
+					{Block: 0, Var: ir.Variable{Name: "i", Version: 0, Type: int64Type}},
+					{Block: 1, Var: ir.Variable{Name: "i", Version: 2, Type: int64Type}},
+				},
+			},
+			&ir.Assign{
+				Dest: ir.Variable{Name: "i", Version: 2, Type: int64Type},
+				Source: &ir.BinaryOp{
+					Op:    ir.BinOpAdd,
+					Left:  &ir.VariableExpr{Var: ir.Variable{Name: "i", Version: 1, Type: int64Type}},
+					Right: &ir.ConstantExpr{Value: ir.IntConstant{Value: 1}},
+				},
+			},
+		},
+	}
+
+	analyzer := NewVSAAnalyzer(fn, nil, nil)
+	analyzer.SetWideningThreshold(2)
+	result, err := analyzer.Compute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	vs := result.GetValueSet(ir.Variable{Name: "i", Version: 1, Type: int64Type})
+	if vs.IsBottom() {
+		t.Error("expected non-bottom value set for loop variable after widening")
+	}
+}
+
+func TestMemoryRegionKind_String(t *testing.T) {
+	tests := []struct {
+		kind     MemoryRegionKind
+		expected string
+	}{
+		{RegionGlobal, "global"},
+		{RegionStack, "stack"},
+		{RegionHeap, "heap"},
+		{RegionCode, "code"},
+		{RegionUnknown, "unknown"},
+		{MemoryRegionKind(99), "unknown"},
+	}
+	for _, tc := range tests {
+		got := tc.kind.String()
+		if got != tc.expected {
+			t.Errorf("MemoryRegionKind(%d).String() = %q, want %q", tc.kind, got, tc.expected)
+		}
+	}
+}
+
+func TestStridedInterval_String_AllBranches(t *testing.T) {
+	t.Run("stride 1 non-singleton", func(t *testing.T) {
+		si := NewStridedInterval(1, 5, 10)
+		s := si.String()
+		if s != "[5, 10]" {
+			t.Errorf("expected [5, 10], got %s", s)
+		}
+	})
+
+	t.Run("top", func(t *testing.T) {
+		si := topStridedInterval
+		s := si.String()
+		if s != "top" {
+			t.Errorf("expected top, got %s", s)
+		}
+	})
+
+	t.Run("strided", func(t *testing.T) {
+		si := NewStridedInterval(4, 0, 100)
+		s := si.String()
+		if s != "[0, 100, stride=4]" {
+			t.Errorf("expected [0, 100, stride=4], got %s", s)
+		}
+	})
+}
+
+func TestValueSet_SetInterval_RemovesEmpty(t *testing.T) {
+	vs := NewValueSetInterval(1, 0, 100)
+	vs.SetInterval(MemoryRegion{Kind: RegionUnknown}, emptyStridedInterval)
+	if !vs.IsBottom() {
+		t.Errorf("expected bottom after setting empty interval, got %s", vs.String())
+	}
+}
+
+func TestMinInt64(t *testing.T) {
+	if minInt64(3, 5) != 3 {
+		t.Error("minInt64(3,5) should be 3")
+	}
+	if minInt64(5, 3) != 3 {
+		t.Error("minInt64(5,3) should be 3")
+	}
+	if minInt64(-1, 1) != -1 {
+		t.Error("minInt64(-1,1) should be -1")
+	}
+}
+
+func TestMaxInt64(t *testing.T) {
+	if maxInt64(3, 5) != 5 {
+		t.Error("maxInt64(3,5) should be 5")
+	}
+	if maxInt64(5, 3) != 5 {
+		t.Error("maxInt64(5,3) should be 5")
+	}
+	if maxInt64(-1, 1) != 1 {
+		t.Error("maxInt64(-1,1) should be 1")
+	}
+}
+
+func TestBitwiseOrUpperBound(t *testing.T) {
+	t.Run("non-negative", func(t *testing.T) {
+		result := bitwiseOrUpperBound(5, 3)
+		if result < 7 {
+			t.Errorf("expected >= 7, got %d", result)
+		}
+	})
+
+	t.Run("negative input", func(t *testing.T) {
+		result := bitwiseOrUpperBound(-1, 3)
+		if result != math.MaxInt64 {
+			t.Errorf("expected MaxInt64 for negative input, got %d", result)
+		}
+	})
+
+	t.Run("both zero", func(t *testing.T) {
+		result := bitwiseOrUpperBound(0, 0)
+		if result != 0 {
+			t.Errorf("expected 0, got %d", result)
+		}
+	})
+}
+
+func TestSubSaturate(t *testing.T) {
+	t.Run("normal", func(t *testing.T) {
+		if subSaturate(10, 3) != 7 {
+			t.Error("subSaturate(10,3) should be 7")
+		}
+	})
+	t.Run("overflow positive", func(t *testing.T) {
+		result := subSaturate(math.MaxInt64, -1)
+		if result != math.MaxInt64 {
+			t.Errorf("expected MaxInt64, got %d", result)
+		}
+	})
+	t.Run("overflow negative", func(t *testing.T) {
+		result := subSaturate(math.MinInt64, 1)
+		if result != math.MinInt64 {
+			t.Errorf("expected MinInt64, got %d", result)
+		}
+	})
+}
+
+func TestNegSaturate(t *testing.T) {
+	if negSaturate(5) != -5 {
+		t.Error("negSaturate(5) should be -5")
+	}
+	if negSaturate(math.MinInt64) != math.MaxInt64 {
+		t.Error("negSaturate(MinInt64) should be MaxInt64")
+	}
+}
+
+func TestAbsInt64(t *testing.T) {
+	if absInt64(5) != 5 {
+		t.Error("absInt64(5) should be 5")
+	}
+	if absInt64(-5) != 5 {
+		t.Error("absInt64(-5) should be 5")
+	}
+	if absInt64(0) != 0 {
+		t.Error("absInt64(0) should be 0")
+	}
+}
+
+func TestMulSaturateAbs(t *testing.T) {
+	if mulSaturateAbs(3, 4) != 12 {
+		t.Error("mulSaturateAbs(3,4) should be 12")
+	}
+	if mulSaturateAbs(0, 4) != 0 {
+		t.Error("mulSaturateAbs(0,4) should be 0")
+	}
+	if mulSaturateAbs(-1, 4) != 0 {
+		t.Error("mulSaturateAbs(-1,4) should be 0")
+	}
+	if mulSaturateAbs(math.MaxInt64, 2) != math.MaxInt64 {
+		t.Error("mulSaturateAbs(MaxInt64,2) should saturate to MaxInt64")
+	}
+}
+
+func TestGCDInt64_NegativeInputs(t *testing.T) {
+	if gcdInt64(-12, 8) != 4 {
+		t.Error("gcdInt64(-12,8) should be 4")
+	}
+	if gcdInt64(12, -8) != 4 {
+		t.Error("gcdInt64(12,-8) should be 4")
+	}
+}
+
+func TestValueSet_IsTop_MultipleRegions(t *testing.T) {
+	vs := NewValueSetTop()
+	vs.SetInterval(MemoryRegion{Kind: RegionStack}, NewStridedInterval(1, 0, 100))
+	if vs.IsTop() {
+		t.Error("ValueSet with multiple regions should not be top")
+	}
+}
+
+func TestVSA_SetWideningThreshold_Clamp(t *testing.T) {
+	fn := buildVSAFunction("threshold_test", []ir.IRInstruction{
+		&ir.Assign{
+			Dest:   ir.Variable{Name: "x", Version: 0, Type: ir.IntType{Width: ir.Size8, Signed: true}},
+			Source: &ir.ConstantExpr{Value: ir.IntConstant{Value: 42}},
+		},
+	})
+	analyzer := NewVSAAnalyzer(fn, nil, nil)
+	analyzer.SetWideningThreshold(0)
+	if analyzer.widenAfter != 1 {
+		t.Errorf("expected widenAfter clamped to 1, got %d", analyzer.widenAfter)
+	}
+}
