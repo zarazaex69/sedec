@@ -767,3 +767,595 @@ func singleBlockFn(dest ir.Variable, expr ir.Expression) *ir.Function {
 		EntryBlock: 0,
 	}
 }
+
+func TestFoldConstants_CallTargetFolded(t *testing.T) {
+	fn := &ir.Function{
+		Name: "call_test",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Call{
+						Target: binOp(ir.BinOpAdd, constExpr(i64c(100)), constExpr(i64c(200))),
+					},
+				},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := FoldConstants(fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.FoldedCount != 1 {
+		t.Errorf("expected 1 fold for call target, got %d", result.FoldedCount)
+	}
+
+	call := fn.Blocks[0].Instructions[0].(*ir.Call)
+	ce, ok := call.Target.(*ir.ConstantExpr)
+	if !ok {
+		t.Fatalf("expected ConstantExpr for call target, got %T", call.Target)
+	}
+	if ce.Value.(ir.IntConstant).Value != 300 {
+		t.Errorf("expected 300, got %v", ce.Value)
+	}
+}
+
+func TestFoldConstants_LoadAddressFolded(t *testing.T) {
+	x := ssaVar("x", 1)
+	fn := &ir.Function{
+		Name: "load_test",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Load{
+						Dest:    x,
+						Address: binOp(ir.BinOpAdd, constExpr(i64c(500)), constExpr(i64c(8))),
+						Size:    ir.Size8,
+					},
+				},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := FoldConstants(fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.FoldedCount != 1 {
+		t.Errorf("expected 1 fold for load address, got %d", result.FoldedCount)
+	}
+
+	load := fn.Blocks[0].Instructions[0].(*ir.Load)
+	ce, ok := load.Address.(*ir.ConstantExpr)
+	if !ok {
+		t.Fatalf("expected ConstantExpr for load address, got %T", load.Address)
+	}
+	if ce.Value.(ir.IntConstant).Value != 508 {
+		t.Errorf("expected 508, got %v", ce.Value)
+	}
+}
+
+func TestFoldConstants_AndAllOnes(t *testing.T) {
+	x := ssaVar("x", 1)
+	y := ssaVar("y", 1)
+	allOnes := ir.IntConstant{Value: -1, Width: ir.Size8, Signed: true}
+	fn := singleBlockFn(y,
+		binOp(ir.BinOpAnd, vExpr(x), constExpr(allOnes)),
+	)
+
+	result, err := FoldConstants(fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SimplifiedCount != 1 {
+		t.Errorf("expected 1 simplification for x & ~0, got %d", result.SimplifiedCount)
+	}
+
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	if _, ok := src.(*ir.VariableExpr); !ok {
+		t.Fatalf("expected VariableExpr after x & ~0, got %T", src)
+	}
+}
+
+func TestFoldConstants_OrAllOnes(t *testing.T) {
+	x := ssaVar("x", 1)
+	y := ssaVar("y", 1)
+	allOnes := ir.IntConstant{Value: -1, Width: ir.Size8, Signed: true}
+	fn := singleBlockFn(y,
+		binOp(ir.BinOpOr, vExpr(x), constExpr(allOnes)),
+	)
+
+	result, err := FoldConstants(fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SimplifiedCount != 1 {
+		t.Errorf("expected 1 simplification for x | ~0, got %d", result.SimplifiedCount)
+	}
+
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	ce, ok := src.(*ir.ConstantExpr)
+	if !ok {
+		t.Fatalf("expected ConstantExpr (~0) after x | ~0, got %T", src)
+	}
+	if ce.Value.(ir.IntConstant).Value != -1 {
+		t.Errorf("expected -1, got %v", ce.Value)
+	}
+}
+
+func TestFoldConstants_OrSelf(t *testing.T) {
+	x := ssaVar("x", 1)
+	y := ssaVar("y", 1)
+	fn := singleBlockFn(y,
+		binOp(ir.BinOpOr, vExpr(x), vExpr(x)),
+	)
+
+	result, err := FoldConstants(fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SimplifiedCount != 1 {
+		t.Errorf("expected 1 simplification for x|x, got %d", result.SimplifiedCount)
+	}
+
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	if _, ok := src.(*ir.VariableExpr); !ok {
+		t.Fatalf("expected VariableExpr after x|x, got %T", src)
+	}
+}
+
+func TestFoldConstants_DivByOne(t *testing.T) {
+	x := ssaVar("x", 1)
+	y := ssaVar("y", 1)
+	fn := singleBlockFn(y,
+		binOp(ir.BinOpDiv, vExpr(x), constExpr(i64c(1))),
+	)
+
+	result, err := FoldConstants(fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SimplifiedCount != 1 {
+		t.Errorf("expected 1 simplification for x/1, got %d", result.SimplifiedCount)
+	}
+
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	if _, ok := src.(*ir.VariableExpr); !ok {
+		t.Fatalf("expected VariableExpr after x/1, got %T", src)
+	}
+}
+
+func TestFoldConstants_XorZero(t *testing.T) {
+	x := ssaVar("x", 1)
+	y := ssaVar("y", 1)
+	fn := singleBlockFn(y,
+		binOp(ir.BinOpXor, vExpr(x), constExpr(i64c(0))),
+	)
+
+	result, err := FoldConstants(fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SimplifiedCount != 1 {
+		t.Errorf("expected 1 simplification for x^0, got %d", result.SimplifiedCount)
+	}
+
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	if _, ok := src.(*ir.VariableExpr); !ok {
+		t.Fatalf("expected VariableExpr after x^0, got %T", src)
+	}
+}
+
+func TestFoldConstants_OrZero(t *testing.T) {
+	x := ssaVar("x", 1)
+	y := ssaVar("y", 1)
+	fn := singleBlockFn(y,
+		binOp(ir.BinOpOr, vExpr(x), constExpr(i64c(0))),
+	)
+
+	result, err := FoldConstants(fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SimplifiedCount != 1 {
+		t.Errorf("expected 1 simplification for x|0, got %d", result.SimplifiedCount)
+	}
+
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	if _, ok := src.(*ir.VariableExpr); !ok {
+		t.Fatalf("expected VariableExpr after x|0, got %T", src)
+	}
+}
+
+func TestFoldConstants_SubZero(t *testing.T) {
+	x := ssaVar("x", 1)
+	y := ssaVar("y", 1)
+	fn := singleBlockFn(y,
+		binOp(ir.BinOpSub, vExpr(x), constExpr(i64c(0))),
+	)
+
+	result, err := FoldConstants(fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SimplifiedCount != 1 {
+		t.Errorf("expected 1 simplification for x-0, got %d", result.SimplifiedCount)
+	}
+}
+
+func TestFoldConstants_ShrByZero(t *testing.T) {
+	x := ssaVar("x", 1)
+	y := ssaVar("y", 1)
+	fn := singleBlockFn(y,
+		binOp(ir.BinOpShr, vExpr(x), constExpr(i64c(0))),
+	)
+
+	result, err := FoldConstants(fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SimplifiedCount != 1 {
+		t.Errorf("expected 1 simplification for x>>0, got %d", result.SimplifiedCount)
+	}
+}
+
+func TestFoldConstants_SarByZero(t *testing.T) {
+	x := ssaVar("x", 1)
+	y := ssaVar("y", 1)
+	fn := singleBlockFn(y,
+		binOp(ir.BinOpSar, vExpr(x), constExpr(i64c(0))),
+	)
+
+	result, err := FoldConstants(fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SimplifiedCount != 1 {
+		t.Errorf("expected 1 simplification for x>>>0, got %d", result.SimplifiedCount)
+	}
+}
+
+func TestFoldConstants_LogicalNotConst(t *testing.T) {
+	x := ssaVar("x", 1)
+	fn := singleBlockFn(x,
+		unOp(ir.UnOpLogicalNot, constExpr(ir.BoolConstant{Value: true})),
+	)
+
+	result, err := FoldConstants(fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.FoldedCount != 1 {
+		t.Errorf("expected 1 fold, got %d", result.FoldedCount)
+	}
+
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	ce := src.(*ir.ConstantExpr)
+	if ce.Value.(ir.BoolConstant).Value != false {
+		t.Error("expected false after !true")
+	}
+}
+
+func TestFoldConstants_MulZeroLeft(t *testing.T) {
+	x := ssaVar("x", 1)
+	y := ssaVar("y", 1)
+	fn := singleBlockFn(y,
+		binOp(ir.BinOpMul, constExpr(i64c(0)), vExpr(x)),
+	)
+
+	result, err := FoldConstants(fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SimplifiedCount != 1 {
+		t.Errorf("expected 1 simplification for 0*x, got %d", result.SimplifiedCount)
+	}
+
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	ce, ok := src.(*ir.ConstantExpr)
+	if !ok {
+		t.Fatalf("expected ConstantExpr after 0*x, got %T", src)
+	}
+	if ce.Value.(ir.IntConstant).Value != 0 {
+		t.Errorf("expected 0, got %v", ce.Value)
+	}
+}
+
+func TestFoldConstants_AndZeroLeft(t *testing.T) {
+	x := ssaVar("x", 1)
+	y := ssaVar("y", 1)
+	fn := singleBlockFn(y,
+		binOp(ir.BinOpAnd, constExpr(i64c(0)), vExpr(x)),
+	)
+
+	result, err := FoldConstants(fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SimplifiedCount != 1 {
+		t.Errorf("expected 1 simplification for 0&x, got %d", result.SimplifiedCount)
+	}
+}
+
+func TestFoldConstants_UDivByOne(t *testing.T) {
+	x := ssaVar("x", 1)
+	y := ssaVar("y", 1)
+	fn := singleBlockFn(y,
+		binOp(ir.BinOpUDiv, vExpr(x), constExpr(ir.IntConstant{Value: 1, Width: ir.Size8, Signed: false})),
+	)
+
+	result, err := FoldConstants(fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SimplifiedCount != 1 {
+		t.Errorf("expected 1 simplification for x udiv 1, got %d", result.SimplifiedCount)
+	}
+}
+
+func TestFoldConstants_LogicalAndTrue(t *testing.T) {
+	x := ssaVar("x", 1)
+	y := ssaVar("y", 1)
+	fn := singleBlockFn(y,
+		binOp(ir.BinOpLogicalAnd, constExpr(ir.BoolConstant{Value: true}), vExpr(x)),
+	)
+
+	result, err := FoldConstants(fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SimplifiedCount != 1 {
+		t.Errorf("expected 1 simplification for true&&x, got %d", result.SimplifiedCount)
+	}
+
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	if _, ok := src.(*ir.VariableExpr); !ok {
+		t.Fatalf("expected VariableExpr after true&&x, got %T", src)
+	}
+}
+
+func TestFoldConstants_LogicalOrFalse(t *testing.T) {
+	x := ssaVar("x", 1)
+	y := ssaVar("y", 1)
+	fn := singleBlockFn(y,
+		binOp(ir.BinOpLogicalOr, constExpr(ir.BoolConstant{Value: false}), vExpr(x)),
+	)
+
+	result, err := FoldConstants(fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SimplifiedCount != 1 {
+		t.Errorf("expected 1 simplification for false||x, got %d", result.SimplifiedCount)
+	}
+
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	if _, ok := src.(*ir.VariableExpr); !ok {
+		t.Fatalf("expected VariableExpr after false||x, got %T", src)
+	}
+}
+
+func TestFoldConstants_ValueTypeBinaryOp(t *testing.T) {
+	x := ssaVar("x", 1)
+	fn := &ir.Function{
+		Name: "value_type_test",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Assign{
+						Dest:   x,
+						Source: ir.BinaryOp{Op: ir.BinOpAdd, Left: constExpr(i64c(5)), Right: constExpr(i64c(3))},
+					},
+				},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := FoldConstants(fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.FoldedCount != 1 {
+		t.Errorf("expected 1 fold for value-type BinaryOp, got %d", result.FoldedCount)
+	}
+}
+
+func TestFoldConstants_ValueTypeUnaryOp(t *testing.T) {
+	x := ssaVar("x", 1)
+	fn := &ir.Function{
+		Name: "value_type_unary_test",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Assign{
+						Dest:   x,
+						Source: ir.UnaryOp{Op: ir.UnOpNeg, Operand: constExpr(i64c(7))},
+					},
+				},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := FoldConstants(fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.FoldedCount != 1 {
+		t.Errorf("expected 1 fold for value-type UnaryOp, got %d", result.FoldedCount)
+	}
+}
+
+func TestFoldConstants_ValueTypeCast(t *testing.T) {
+	x := ssaVar("x", 1)
+	fn := &ir.Function{
+		Name: "value_type_cast_test",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Assign{
+						Dest: x,
+						Source: ir.Cast{
+							Expr:       constExpr(i64c(300)),
+							TargetType: ir.IntType{Width: ir.Size1, Signed: false},
+						},
+					},
+				},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := FoldConstants(fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.FoldedCount != 1 {
+		t.Errorf("expected 1 fold for value-type Cast, got %d", result.FoldedCount)
+	}
+}
+
+func TestFoldConstants_JumpNotModified(t *testing.T) {
+	fn := &ir.Function{
+		Name: "jump_test",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Jump{Target: 1},
+				},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := FoldConstants(fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.FoldedCount != 0 && result.SimplifiedCount != 0 {
+		t.Errorf("expected no changes for jump, got folds=%d simplifications=%d",
+			result.FoldedCount, result.SimplifiedCount)
+	}
+}
+
+func TestFoldConstants_ReturnNotModified(t *testing.T) {
+	fn := &ir.Function{
+		Name: "return_test",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Return{},
+				},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := FoldConstants(fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.FoldedCount != 0 && result.SimplifiedCount != 0 {
+		t.Errorf("expected no changes for return, got folds=%d simplifications=%d",
+			result.FoldedCount, result.SimplifiedCount)
+	}
+}
+
+func TestFoldConstants_PhiNotModified(t *testing.T) {
+	x := ssaVar("x", 1)
+	fn := &ir.Function{
+		Name: "phi_test",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Phi{
+						Dest: x,
+						Sources: []ir.PhiSource{
+							{Block: 1, Var: ssaVar("a", 1)},
+							{Block: 2, Var: ssaVar("b", 1)},
+						},
+					},
+				},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := FoldConstants(fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.FoldedCount != 0 && result.SimplifiedCount != 0 {
+		t.Errorf("expected no changes for phi, got folds=%d simplifications=%d",
+			result.FoldedCount, result.SimplifiedCount)
+	}
+}
+
+func TestFoldConstants_SubSelfFloat(t *testing.T) {
+	x := ir.Variable{Name: "x", Type: ir.FloatType{Width: ir.Size8}, Version: 1}
+	y := ssaVar("y", 1)
+	fn := singleBlockFn(y,
+		binOp(ir.BinOpSub, vExpr(x), vExpr(x)),
+	)
+
+	result, err := FoldConstants(fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SimplifiedCount != 1 {
+		t.Errorf("expected 1 simplification for float x-x, got %d", result.SimplifiedCount)
+	}
+
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	ce, ok := src.(*ir.ConstantExpr)
+	if !ok {
+		t.Fatalf("expected ConstantExpr (zero) after float x-x, got %T", src)
+	}
+	fc, ok := ce.Value.(ir.FloatConstant)
+	if !ok {
+		t.Fatalf("expected FloatConstant, got %T", ce.Value)
+	}
+	if fc.Value != 0.0 {
+		t.Errorf("expected 0.0, got %v", fc.Value)
+	}
+}
+
+func TestFoldConstants_XorSelfBool(t *testing.T) {
+	x := ir.Variable{Name: "x", Type: ir.BoolType{}, Version: 1}
+	y := ssaVar("y", 1)
+	fn := singleBlockFn(y,
+		binOp(ir.BinOpXor, vExpr(x), vExpr(x)),
+	)
+
+	result, err := FoldConstants(fn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SimplifiedCount != 1 {
+		t.Errorf("expected 1 simplification for bool x^x, got %d", result.SimplifiedCount)
+	}
+
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	ce, ok := src.(*ir.ConstantExpr)
+	if !ok {
+		t.Fatalf("expected ConstantExpr after bool x^x, got %T", src)
+	}
+	bc, ok := ce.Value.(ir.BoolConstant)
+	if !ok {
+		t.Fatalf("expected BoolConstant, got %T", ce.Value)
+	}
+	if bc.Value != false {
+		t.Errorf("expected false, got %v", bc.Value)
+	}
+}
