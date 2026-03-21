@@ -115,7 +115,8 @@ func (g *ConstraintGenerator) visitInstruction(instr ir.IRInstruction) {
 		g.visitReturn(i)
 	case ir.Phi:
 		g.visitPhi(i)
-	// Jump has no type-bearing operands; skip.
+	case ir.Intrinsic:
+		g.visitIntrinsic(i)
 	case ir.Jump:
 	}
 }
@@ -444,6 +445,24 @@ func (g *ConstraintGenerator) visitUnaryOp(e ir.UnaryOp, resultTV TypeVar, origi
 	}
 
 	g.visitExpression(e.Operand, operandTV, origin)
+}
+
+func (g *ConstraintGenerator) visitIntrinsic(i ir.Intrinsic) {
+	if i.Dest == nil {
+		return
+	}
+	destTV := typeVarForVariable(*i.Dest)
+	for idx, arg := range i.Args {
+		argTV := typeVarForExpr(arg)
+		g.emit(TypeConstraint{
+			Kind:       ConstraintParamType,
+			Left:       destTV,
+			Right:      argTV,
+			ParamIndex: idx,
+			Confidence: 0.3,
+			Origin:     fmt.Sprintf("intrinsic %s arg %d at %s", i.Name, idx, i.Location()),
+		})
+	}
 }
 
 // emit appends a constraint to the internal list.

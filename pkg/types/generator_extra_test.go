@@ -301,3 +301,39 @@ func TestTypeVarForExpr_CompoundExpr(t *testing.T) {
 		t.Errorf("expected synthetic $expr_ var, got %q", tv.Name)
 	}
 }
+
+func TestGenerateConstraints_Intrinsic(t *testing.T) {
+	dest := varOf("bswap_r", i64)
+	arg := varOf("x", i64)
+	intr := ir.Intrinsic{
+		Dest: &dest,
+		Name: "bswap",
+		Args: []ir.Expression{ir.VariableExpr{Var: arg}},
+	}
+	fn := makeFunction("f", []ir.IRInstruction{intr})
+	g := NewConstraintGenerator(fn)
+	cs := g.GenerateConstraints()
+
+	hasParam := false
+	for _, c := range cs {
+		if c.Kind == ConstraintParamType && c.ParamIndex == 0 {
+			hasParam = true
+			break
+		}
+	}
+	if !hasParam {
+		t.Error("expected ConstraintParamType from intrinsic arg, not found")
+	}
+}
+
+func TestGenerateConstraints_IntrinsicNoDest(t *testing.T) {
+	arg := varOf("x", i64)
+	intr := ir.Intrinsic{
+		Name: "cpuid",
+		Args: []ir.Expression{ir.VariableExpr{Var: arg}},
+	}
+	fn := makeFunction("f", []ir.IRInstruction{intr})
+	g := NewConstraintGenerator(fn)
+	cs := g.GenerateConstraints()
+	_ = cs
+}
