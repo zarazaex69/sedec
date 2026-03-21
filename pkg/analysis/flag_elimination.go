@@ -2,6 +2,7 @@ package analysis
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/zarazaex69/sedec/pkg/cfg"
@@ -312,12 +313,8 @@ func extractMnemonic(instruction string) string {
 	if instruction == "" {
 		return ""
 	}
-	// find first space or end of string
-	idx := strings.IndexByte(instruction, ' ')
-	if idx < 0 {
-		return instruction
-	}
-	return instruction[:idx]
+	mnemonic, _, _ := strings.Cut(instruction, " ")
+	return mnemonic
 }
 
 // computeFlagLiveness performs iterative backward data flow analysis on flags.
@@ -528,12 +525,7 @@ func (r *EliminationResult) GetNeededFlagsAt(point ProgramPoint) uint8 {
 
 // IsProducerEliminated reports whether the flag producer at the given point is dead.
 func (r *EliminationResult) IsProducerEliminated(point ProgramPoint) bool {
-	for _, p := range r.EliminatedPoints {
-		if p == point {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(r.EliminatedPoints, point)
 }
 
 // GetNeededCPUFlags returns the slice of ir.CPUFlag values needed at a program point.

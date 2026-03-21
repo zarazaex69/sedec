@@ -1184,3 +1184,125 @@ func TestFlagEliminator_NoConsumers_AllEliminated(t *testing.T) {
 		t.Errorf("expected 100%% elimination rate, got %.2f%%", result.EliminationRate*100)
 	}
 }
+
+func TestFlagEliminator_GetNeededFlagsAt(t *testing.T) {
+	dest := ir.Variable{Name: "rax", Type: ir.IntType{Width: ir.Size8, Signed: false}}
+	fn := &ir.Function{
+		Name: "needed_flags_at",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					flagProducer(dest, "add"),
+					flagConsumer("je", 1, 2),
+				},
+				Successors: []ir.BlockID{1, 2},
+			},
+			1: {
+				ID:           1,
+				Instructions: []ir.IRInstruction{retInstr()},
+				Predecessors: []ir.BlockID{0},
+			},
+			2: {
+				ID:           2,
+				Instructions: []ir.IRInstruction{retInstr()},
+				Predecessors: []ir.BlockID{0},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	result, err := EliminateFlags(fn, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	producerPoint := ProgramPoint{BlockID: 0, InstrIdx: 0}
+	bits := result.GetNeededFlagsAt(producerPoint)
+	if bits == 0 {
+		t.Error("expected non-zero needed flags bitmask for live producer")
+	}
+	if bits&uint8(flagBitZF) == 0 {
+		t.Error("expected ZF bit set in needed flags for je consumer")
+	}
+
+	deadPoint := ProgramPoint{BlockID: 99, InstrIdx: 0}
+	if result.GetNeededFlagsAt(deadPoint) != 0 {
+		t.Error("expected 0 for non-existent point")
+	}
+}
+
+func TestFlagEliminator_FlagsProducedByMnemonic_Extended(t *testing.T) {
+	tests := []struct {
+		mnemonic    string
+		wantNonZero bool
+	}{
+		{"adc", true},
+		{"sbb", true},
+		{"neg", true},
+		{"inc", true},
+		{"dec", true},
+		{"sal", true},
+		{"sar", true},
+		{"rol", true},
+		{"ror", true},
+		{"div", true},
+		{"idiv", true},
+		{"sahf", true},
+		{"popf", true},
+		{"popfq", true},
+		{"clc", true},
+		{"stc", true},
+		{"cmc", true},
+		{"nop", false},
+		{"call", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.mnemonic, func(t *testing.T) {
+			got := flagsProducedByMnemonic(tt.mnemonic)
+			if tt.wantNonZero && got == 0 {
+				t.Errorf("expected non-zero flags for %q, got 0", tt.mnemonic)
+			}
+			if !tt.wantNonZero && got != 0 {
+				t.Errorf("expected zero flags for %q, got %d", tt.mnemonic, got)
+			}
+		})
+	}
+}
+
+func TestFlagEliminator_FlagsConsumedByMnemonic_CmovAndSet(t *testing.T) {
+	tests := []struct {
+		mnemonic  string
+		wantFlags flagSet
+	}{
+		{"cmove", flagBitZF},
+		{"cmovne", flagBitZF},
+		{"cmovl", flagBitSF | flagBitOF},
+		{"cmovge", flagBitSF | flagBitOF},
+		{"cmovb", flagBitCF},
+		{"cmovae", flagBitCF},
+		{"sete", flagBitZF},
+		{"setne", flagBitZF},
+		{"setl", flagBitSF | flagBitOF},
+		{"setge", flagBitSF | flagBitOF},
+		{"setb", flagBitCF},
+		{"setae", flagBitCF},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.mnemonic, func(t *testing.T) {
+			got := flagsConsumedByMnemonic(tt.mnemonic)
+			if got != tt.wantFlags {
+				t.Errorf("flagsConsumedByMnemonic(%q) = %08b, want %08b", tt.mnemonic, got, tt.wantFlags)
+			}
+		})
+	}
+}
+
+func TestFlagEliminator_CpuFlagToBit_DefaultCase(t *testing.T) {
+	got := cpuFlagToBit(ir.CPUFlag(99))
+	if got != 0 {
+		t.Errorf("expected 0 for unknown CPUFlag, got %d", got)
+	}
+}
