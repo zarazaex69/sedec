@@ -558,3 +558,309 @@ func TestCallGraph_TopologicalOrder_WithCycle(t *testing.T) {
 		t.Errorf("expected 2 nodes in partial order, got %d", len(order))
 	}
 }
+
+func TestUnify_ConcretePointerVsConstructorDirect(t *testing.T) {
+	u := NewUnifier()
+
+	ptrConstructor := u.newTerm(termPointer)
+	pointeeVar := u.newTerm(termVar)
+	u.terms[ptrConstructor].pointee = pointeeVar
+
+	concreteTerm := u.newTerm(termConcrete)
+	i64 := ir.IntType{Width: ir.Size8, Signed: true}
+	u.terms[concreteTerm].concrete = ir.PointerType{Pointee: i64}
+
+	if err := u.unifyTerms(concreteTerm, ptrConstructor); err != nil {
+		t.Fatalf("unifyConcreteWithConstructor pointer: %v", err)
+	}
+
+	resolved := u.resolveTermToType(pointeeVar, make(map[int]bool))
+	if resolved == nil || resolved.String() != i64.String() {
+		t.Errorf("expected pointee=i64, got %v", resolved)
+	}
+}
+
+func TestUnify_ConcreteArrayVsConstructorDirect(t *testing.T) {
+	u := NewUnifier()
+
+	arrConstructor := u.newTerm(termArray)
+	elemVar := u.newTerm(termVar)
+	u.terms[arrConstructor].arrayElem = elemVar
+	u.terms[arrConstructor].arrayLen = 0
+
+	i32 := ir.IntType{Width: ir.Size4, Signed: true}
+	concreteTerm := u.newTerm(termConcrete)
+	u.terms[concreteTerm].concrete = ir.ArrayType{Element: i32, Length: 10}
+
+	if err := u.unifyTerms(concreteTerm, arrConstructor); err != nil {
+		t.Fatalf("unifyConcreteWithConstructor array: %v", err)
+	}
+
+	resolved := u.resolveTermToType(elemVar, make(map[int]bool))
+	if resolved == nil || resolved.String() != i32.String() {
+		t.Errorf("expected elem=i32, got %v", resolved)
+	}
+}
+
+func TestUnify_ConcreteFunctionVsConstructorDirect(t *testing.T) {
+	u := NewUnifier()
+
+	fnConstructor := u.newTerm(termFunction)
+	paramVar := u.newTerm(termVar)
+	retVar := u.newTerm(termVar)
+	u.terms[fnConstructor].funcParams = []int{paramVar}
+	u.terms[fnConstructor].funcReturn = retVar
+
+	i32 := ir.IntType{Width: ir.Size4, Signed: true}
+	i64 := ir.IntType{Width: ir.Size8, Signed: true}
+	concreteTerm := u.newTerm(termConcrete)
+	u.terms[concreteTerm].concrete = ir.FunctionType{
+		ReturnType: i64,
+		Parameters: []ir.Type{i32},
+	}
+
+	if err := u.unifyTerms(concreteTerm, fnConstructor); err != nil {
+		t.Fatalf("unifyConcreteWithConstructor function: %v", err)
+	}
+
+	resolvedParam := u.resolveTermToType(paramVar, make(map[int]bool))
+	if resolvedParam == nil || resolvedParam.String() != i32.String() {
+		t.Errorf("expected param=i32, got %v", resolvedParam)
+	}
+	resolvedRet := u.resolveTermToType(retVar, make(map[int]bool))
+	if resolvedRet == nil || resolvedRet.String() != i64.String() {
+		t.Errorf("expected ret=i64, got %v", resolvedRet)
+	}
+}
+
+func TestUnify_ConcreteVsConstructorKindMismatch(t *testing.T) {
+	u := NewUnifier()
+
+	structConstructor := u.newTerm(termStruct)
+	u.terms[structConstructor].structFields = nil
+
+	concreteTerm := u.newTerm(termConcrete)
+	concreteTerm2 := u.newTerm(termConcrete)
+	u.terms[concreteTerm].concrete = ir.PointerType{Pointee: ir.VoidType{}}
+	u.terms[concreteTerm2].concrete = ir.IntType{Width: ir.Size4, Signed: true}
+
+	err := u.unifyTerms(concreteTerm, structConstructor)
+	if err == nil {
+		t.Error("expected error for pointer concrete vs struct constructor")
+	}
+
+	arrConstructor := u.newTerm(termArray)
+	arrConstructor2 := u.newTerm(termVar)
+	u.terms[arrConstructor].arrayElem = arrConstructor2
+
+	err = u.unifyTerms(concreteTerm2, arrConstructor)
+	if err == nil {
+		t.Error("expected error for scalar concrete vs array constructor")
+	}
+}
+
+func TestUnify_ConcreteFunctionArityMismatchDirect(t *testing.T) {
+	u := NewUnifier()
+
+	fnConstructor := u.newTerm(termFunction)
+	p0 := u.newTerm(termVar)
+	p1 := u.newTerm(termVar)
+	retVar := u.newTerm(termVar)
+	u.terms[fnConstructor].funcParams = []int{p0, p1}
+	u.terms[fnConstructor].funcReturn = retVar
+
+	i32 := ir.IntType{Width: ir.Size4, Signed: true}
+	concreteTerm := u.newTerm(termConcrete)
+	u.terms[concreteTerm].concrete = ir.FunctionType{
+		ReturnType: ir.VoidType{},
+		Parameters: []ir.Type{i32},
+	}
+
+	err := u.unifyTerms(concreteTerm, fnConstructor)
+	if err == nil {
+		t.Error("expected arity mismatch error")
+	}
+}
+
+func TestUnify_OccursCheckInFunctionParams(t *testing.T) {
+	u := NewUnifier()
+
+	fnTerm := u.newTerm(termFunction)
+	u.terms[fnTerm].funcParams = []int{fnTerm}
+	u.terms[fnTerm].funcReturn = u.newTerm(termVar)
+
+	freeVar := u.newTerm(termVar)
+
+	visited := make(map[int]bool)
+	if !u.occursIn(fnTerm, fnTerm, visited) {
+		t.Error("expected occurs check to detect self-reference in function params")
+	}
+
+	_ = freeVar
+}
+
+func TestUnify_OccursCheckInStructFields(t *testing.T) {
+	u := NewUnifier()
+
+	structTerm := u.newTerm(termStruct)
+	u.terms[structTerm].structFields = []termField{
+		{offset: 0, termID: structTerm},
+	}
+
+	visited := make(map[int]bool)
+	if !u.occursIn(structTerm, structTerm, visited) {
+		t.Error("expected occurs check to detect self-reference in struct fields")
+	}
+}
+
+func TestUnify_OccursCheckInArrayElement(t *testing.T) {
+	u := NewUnifier()
+
+	arrTerm := u.newTerm(termArray)
+	u.terms[arrTerm].arrayElem = arrTerm
+	u.terms[arrTerm].arrayLen = 0
+
+	visited := make(map[int]bool)
+	if !u.occursIn(arrTerm, arrTerm, visited) {
+		t.Error("expected occurs check to detect self-reference in array element")
+	}
+}
+
+func TestUnify_OccursCheckInFunctionReturn(t *testing.T) {
+	u := NewUnifier()
+
+	target := u.newTerm(termVar)
+	fnTerm := u.newTerm(termFunction)
+	paramVar := u.newTerm(termVar)
+	u.terms[fnTerm].funcParams = []int{paramVar}
+	u.terms[fnTerm].funcReturn = target
+
+	visited := make(map[int]bool)
+	if !u.occursIn(target, fnTerm, visited) {
+		t.Error("expected occurs check to find target in function return")
+	}
+}
+
+func TestUnify_OccursCheckNegativeInPointer(t *testing.T) {
+	u := NewUnifier()
+
+	needle := u.newTerm(termVar)
+	other := u.newTerm(termVar)
+	ptrTerm := u.newTerm(termPointer)
+	u.terms[ptrTerm].pointee = other
+
+	visited := make(map[int]bool)
+	if u.occursIn(needle, ptrTerm, visited) {
+		t.Error("expected occurs check to NOT find needle in unrelated pointer")
+	}
+}
+
+func TestUnify_ResolveTermToType_CycleDefense(t *testing.T) {
+	u := NewUnifier()
+
+	ptrTerm := u.newTerm(termPointer)
+	u.terms[ptrTerm].pointee = ptrTerm
+
+	resolved := u.resolveTermToType(ptrTerm, make(map[int]bool))
+	if resolved == nil {
+		t.Fatal("expected non-nil type for cyclic pointer (defensive nil)")
+	}
+	pt, ok := resolved.(ir.PointerType)
+	if !ok {
+		t.Fatalf("expected PointerType, got %T", resolved)
+	}
+	if _, isVoid := pt.Pointee.(ir.VoidType); !isVoid {
+		t.Errorf("expected *void for cyclic pointee, got %v", pt.Pointee)
+	}
+}
+
+func TestUnify_OccursCheckDeepInArray(t *testing.T) {
+	u := NewUnifier()
+
+	needle := u.newTerm(termVar)
+	arrTerm := u.newTerm(termArray)
+	u.terms[arrTerm].arrayElem = needle
+
+	visited := make(map[int]bool)
+	if !u.occursIn(needle, arrTerm, visited) {
+		t.Error("expected occurs check to find needle inside array element")
+	}
+}
+
+func TestUnify_OccursCheckDeepInFunctionParam(t *testing.T) {
+	u := NewUnifier()
+
+	needle := u.newTerm(termVar)
+	retVar := u.newTerm(termVar)
+	fnTerm := u.newTerm(termFunction)
+	u.terms[fnTerm].funcParams = []int{needle}
+	u.terms[fnTerm].funcReturn = retVar
+
+	visited := make(map[int]bool)
+	if !u.occursIn(needle, fnTerm, visited) {
+		t.Error("expected occurs check to find needle in function params")
+	}
+}
+
+func TestUnify_OccursCheckDeepInStruct(t *testing.T) {
+	u := NewUnifier()
+
+	needle := u.newTerm(termVar)
+	structTerm := u.newTerm(termStruct)
+	otherField := u.newTerm(termVar)
+	u.terms[structTerm].structFields = []termField{
+		{offset: 0, termID: otherField},
+		{offset: 8, termID: needle},
+	}
+
+	visited := make(map[int]bool)
+	if !u.occursIn(needle, structTerm, visited) {
+		t.Error("expected occurs check to find needle in struct fields")
+	}
+}
+
+func TestUnify_OccursCheckNegativeInFunction(t *testing.T) {
+	u := NewUnifier()
+
+	needle := u.newTerm(termVar)
+	p0 := u.newTerm(termVar)
+	retVar := u.newTerm(termVar)
+	fnTerm := u.newTerm(termFunction)
+	u.terms[fnTerm].funcParams = []int{p0}
+	u.terms[fnTerm].funcReturn = retVar
+
+	visited := make(map[int]bool)
+	if u.occursIn(needle, fnTerm, visited) {
+		t.Error("expected occurs check to NOT find unrelated needle in function")
+	}
+}
+
+func TestUnify_OccursCheckNegativeInArray(t *testing.T) {
+	u := NewUnifier()
+
+	needle := u.newTerm(termVar)
+	elemVar := u.newTerm(termVar)
+	arrTerm := u.newTerm(termArray)
+	u.terms[arrTerm].arrayElem = elemVar
+
+	visited := make(map[int]bool)
+	if u.occursIn(needle, arrTerm, visited) {
+		t.Error("expected occurs check to NOT find unrelated needle in array")
+	}
+}
+
+func TestUnify_OccursCheckNegativeInStruct(t *testing.T) {
+	u := NewUnifier()
+
+	needle := u.newTerm(termVar)
+	f0 := u.newTerm(termVar)
+	structTerm := u.newTerm(termStruct)
+	u.terms[structTerm].structFields = []termField{
+		{offset: 0, termID: f0},
+	}
+
+	visited := make(map[int]bool)
+	if u.occursIn(needle, structTerm, visited) {
+		t.Error("expected occurs check to NOT find unrelated needle in struct")
+	}
+}
