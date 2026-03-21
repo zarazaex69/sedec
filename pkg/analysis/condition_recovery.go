@@ -28,6 +28,9 @@ import (
 //	!cf && !zf                  -> a > b   (unsigned)
 //	!cf                         -> a >= b  (unsigned)
 func RecoverConditions(fn *ir.Function) {
+	if fn == nil {
+		return
+	}
 	for _, block := range fn.Blocks {
 		for i, instr := range block.Instructions {
 			block.Instructions[i] = recoverInstrConditions(instr)
@@ -201,9 +204,8 @@ func extractOverflowFlag(expr ir.Expression) (ir.BinaryOp, bool) {
 
 // matchSignedPattern matches signed comparison patterns from jle/jl/jg/jge.
 func matchSignedPattern(expr ir.BinaryOp) ir.Expression {
-	switch expr.Op {
+	switch expr.Op { //nolint:exhaustive // only logical/comparison ops are relevant for signed flag patterns
 	case ir.BinOpLogicalOr:
-		// jle: zf || (sf != of) -> a <= b
 		zfCmp, zfOk := extractCmpEqZero(expr.Left)
 		if !zfOk {
 			return nil
@@ -289,9 +291,8 @@ func matchSignedPattern(expr ir.BinaryOp) ir.Expression {
 
 // matchUnsignedPattern matches unsigned comparison patterns from jb/jbe/ja/jae.
 func matchUnsignedPattern(expr ir.BinaryOp) ir.Expression {
-	switch expr.Op {
+	switch expr.Op { //nolint:exhaustive // only logical ops are relevant for unsigned flag patterns
 	case ir.BinOpLogicalOr:
-		// jbe: cf || zf -> a <= b (unsigned)
 		cfCmp, cfOk := extractCFPattern(expr.Left)
 		if cfOk {
 			zfCmp, zfOk := extractCmpEqZero(expr.Right)

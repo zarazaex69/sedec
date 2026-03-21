@@ -6,6 +6,13 @@ import (
 	"github.com/zarazaex69/sedec/pkg/ir"
 )
 
+const (
+	regRAX  = "rax"
+	regRDX  = "rdx"
+	regXMM0 = "xmm0"
+	regXMM1 = "xmm1"
+)
+
 // PropagateReturnValues traces the value assigned to the return register (rax/eax)
 // and substitutes it into Return instructions. this replaces bare "return rax;"
 // (which after renaming becomes "return var_N;") with the actual expression that
@@ -61,14 +68,14 @@ func propagateBlockReturn(block *ir.BasicBlock) {
 // for return value matching. eax, ax, al all map to rax.
 func canonicalReturnReg(name string) string {
 	switch name {
-	case "rax", "eax", "ax", "al", "ah":
-		return "rax"
-	case "rdx", "edx", "dx", "dl", "dh":
-		return "rdx"
-	case "xmm0":
-		return "xmm0"
-	case "xmm1":
-		return "xmm1"
+	case regRAX, "eax", "ax", "al", "ah":
+		return regRAX
+	case regRDX, "edx", "dx", "dl", "dh":
+		return regRDX
+	case regXMM0:
+		return regXMM0
+	case regXMM1:
+		return regXMM1
 	default:
 		return name
 	}
@@ -77,7 +84,6 @@ func canonicalReturnReg(name string) string {
 // resolveAssignChain follows a chain of assignments backwards from beforeIdx
 // to find the ultimate source expression for a variable.
 func resolveAssignChain(block *ir.BasicBlock, beforeIdx int, varName string) ir.Expression {
-	// canonicalize the target name for register alias matching
 	canonicalTarget := canonicalReturnReg(varName)
 
 	for i := beforeIdx - 1; i >= 0; i-- {
@@ -86,27 +92,42 @@ func resolveAssignChain(block *ir.BasicBlock, beforeIdx int, varName string) ir.
 			continue
 		}
 
-		if assign, ok := ir.AsAssign(instr); ok {
-			destName := strings.ToLower(assign.Dest.Name)
-			// match by exact name or by canonical register alias
-			if destName == varName || canonicalReturnReg(destName) == canonicalTarget {
-				// found the assignment: check if source is another variable we can follow
-				if srcVar, ok := assign.Source.(ir.VariableExpr); ok {
-					deeper := resolveAssignChain(block, i, strings.ToLower(srcVar.Var.Name))
-					if deeper != nil {
-						return deeper
-					}
-				}
-				return assign.Source
-			}
+		if resolved := resolveFromAssign(block, instr, i, varName, canonicalTarget); resolved != nil {
+			return resolved
 		}
 
-		if load, ok := ir.AsLoad(instr); ok {
-			destName := strings.ToLower(load.Dest.Name)
-			if destName == varName || canonicalReturnReg(destName) == canonicalTarget {
-				return ir.VariableExpr{Var: load.Dest}
-			}
+		if resolved := resolveFromLoad(instr, varName, canonicalTarget); resolved != nil {
+			return resolved
 		}
+	}
+	return nil
+}
+
+func resolveFromAssign(block *ir.BasicBlock, instr ir.IRInstruction, idx int, varName, canonicalTarget string) ir.Expression {
+	assign, ok := ir.AsAssign(instr)
+	if !ok {
+		return nil
+	}
+	destName := strings.ToLower(assign.Dest.Name)
+	if destName != varName && canonicalReturnReg(destName) != canonicalTarget {
+		return nil
+	}
+	if srcVar, ok := assign.Source.(ir.VariableExpr); ok {
+		if deeper := resolveAssignChain(block, idx, strings.ToLower(srcVar.Var.Name)); deeper != nil {
+			return deeper
+		}
+	}
+	return assign.Source
+}
+
+func resolveFromLoad(instr ir.IRInstruction, varName, canonicalTarget string) ir.Expression {
+	load, ok := ir.AsLoad(instr)
+	if !ok {
+		return nil
+	}
+	destName := strings.ToLower(load.Dest.Name)
+	if destName == varName || canonicalReturnReg(destName) == canonicalTarget {
+		return ir.VariableExpr{Var: load.Dest}
 	}
 	return nil
 }

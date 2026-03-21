@@ -160,7 +160,7 @@ func assignSlotNames(slots map[int64]*frameSlot, fn *ir.Function) {
 		absOff := -offset
 		name := fmt.Sprintf("local_%x", absOff)
 		for existing[name] {
-			name = name + "_"
+			name += "_"
 		}
 		slot.name = name
 		existing[name] = true

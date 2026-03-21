@@ -46,7 +46,7 @@ func TestConstProp_UnaryNeg(t *testing.T) {
 		t.Fatal("expected y to be constant (-7)")
 	}
 	c := result.GetConstant(y)
-	if c.(ir.IntConstant).Value != -7 {
+	if c.(ir.IntConstant).Value != -7 { //nolint:forcetypeassert // test helper
 		t.Errorf("expected -7, got %v", c)
 	}
 }
@@ -86,7 +86,7 @@ func TestConstProp_UnaryBitwiseNot(t *testing.T) {
 		t.Fatal("expected y to be constant (~0 = -1)")
 	}
 	c := result.GetConstant(y)
-	if c.(ir.IntConstant).Value != -1 {
+	if c.(ir.IntConstant).Value != -1 { //nolint:forcetypeassert // test helper
 		t.Errorf("expected -1, got %v", c)
 	}
 }
@@ -126,7 +126,7 @@ func TestConstProp_UnaryLogicalNot(t *testing.T) {
 		t.Fatal("expected y to be constant (!true = false)")
 	}
 	c := result.GetConstant(y)
-	if c.(ir.BoolConstant).Value != false {
+	if c.(ir.BoolConstant).Value != false { //nolint:forcetypeassert // test helper
 		t.Errorf("expected false, got %v", c)
 	}
 }
@@ -174,12 +174,12 @@ func TestFoldFloatBinaryOp_AllOps(t *testing.T) {
 				return
 			}
 			if tt.isBool {
-				bc := got.(ir.BoolConstant)
+				bc := got.(ir.BoolConstant) //nolint:forcetypeassert // test helper
 				if bc.Value != tt.wantB {
 					t.Errorf("got %v, want %v", bc.Value, tt.wantB)
 				}
 			} else {
-				fc := got.(ir.FloatConstant)
+				fc := got.(ir.FloatConstant) //nolint:forcetypeassert // test helper
 				if fc.Value != tt.wantF {
 					t.Errorf("got %f, want %f", fc.Value, tt.wantF)
 				}
@@ -221,7 +221,7 @@ func TestFoldBoolBinaryOp_AllOps(t *testing.T) {
 			if !ok {
 				return
 			}
-			bc := got.(ir.BoolConstant)
+			bc := got.(ir.BoolConstant) //nolint:forcetypeassert // test helper
 			if bc.Value != tt.want {
 				t.Errorf("got %v, want %v", bc.Value, tt.want)
 			}
@@ -753,12 +753,12 @@ func TestFoldBinaryOp_UnsignedOps(t *testing.T) {
 				return
 			}
 			if tt.isBool {
-				bc := got.(ir.BoolConstant)
+				bc := got.(ir.BoolConstant) //nolint:forcetypeassert // test helper
 				if bc.Value != tt.wantB {
 					t.Errorf("got %v, want %v", bc.Value, tt.wantB)
 				}
 			} else {
-				ic := got.(ir.IntConstant)
+				ic := got.(ir.IntConstant) //nolint:forcetypeassert // test helper
 				if ic.Value != tt.wantVal {
 					t.Errorf("got %d, want %d", ic.Value, tt.wantVal)
 				}
@@ -807,7 +807,7 @@ func TestConstProp_ValueTypeBinaryOp(t *testing.T) {
 		t.Fatal("expected y to be constant (5+3=8)")
 	}
 	c := result.GetConstant(y)
-	if c.(ir.IntConstant).Value != 8 {
+	if c.(ir.IntConstant).Value != 8 { //nolint:forcetypeassert // test helper
 		t.Errorf("expected 8, got %v", c)
 	}
 }
@@ -847,7 +847,7 @@ func TestConstProp_ValueTypeUnaryOp(t *testing.T) {
 		t.Fatal("expected y to be constant (-5)")
 	}
 	c := result.GetConstant(y)
-	if c.(ir.IntConstant).Value != -5 {
+	if c.(ir.IntConstant).Value != -5 { //nolint:forcetypeassert // test helper
 		t.Errorf("expected -5, got %v", c)
 	}
 }
@@ -1052,7 +1052,7 @@ func TestFoldCast_BoolToInt(t *testing.T) {
 	if !ok {
 		t.Fatal("expected ok for bool->int cast")
 	}
-	ic := got.(ir.IntConstant)
+	ic := got.(ir.IntConstant) //nolint:forcetypeassert // test helper
 	if ic.Value != 1 {
 		t.Errorf("expected 1, got %d", ic.Value)
 	}
@@ -1061,7 +1061,7 @@ func TestFoldCast_BoolToInt(t *testing.T) {
 	if !ok2 {
 		t.Fatal("expected ok for bool(false)->int cast")
 	}
-	ic2 := got2.(ir.IntConstant)
+	ic2 := got2.(ir.IntConstant) //nolint:forcetypeassert // test helper
 	if ic2.Value != 0 {
 		t.Errorf("expected 0, got %d", ic2.Value)
 	}
@@ -1072,7 +1072,7 @@ func TestFoldCast_FloatToInt(t *testing.T) {
 	if !ok {
 		t.Fatal("expected ok for float->int cast")
 	}
-	ic := got.(ir.IntConstant)
+	ic := got.(ir.IntConstant) //nolint:forcetypeassert // test helper
 	if ic.Value != 3 {
 		t.Errorf("expected 3 (truncated), got %d", ic.Value)
 	}
@@ -1083,7 +1083,7 @@ func TestFoldCast_IntToFloat(t *testing.T) {
 	if !ok {
 		t.Fatal("expected ok for int->float cast")
 	}
-	fc := got.(ir.FloatConstant)
+	fc := got.(ir.FloatConstant) //nolint:forcetypeassert // test helper
 	if fc.Value != 42.0 {
 		t.Errorf("expected 42.0, got %f", fc.Value)
 	}
@@ -1094,7 +1094,7 @@ func TestFoldCast_FloatToFloat(t *testing.T) {
 	if !ok {
 		t.Fatal("expected ok for float->float cast")
 	}
-	fc := got.(ir.FloatConstant)
+	fc := got.(ir.FloatConstant) //nolint:forcetypeassert // test helper
 	if fc.Value != 3.14 {
 		t.Errorf("expected 3.14, got %f", fc.Value)
 	}
@@ -1108,7 +1108,7 @@ func TestFoldCast_IntToBool(t *testing.T) {
 	if !ok {
 		t.Fatal("expected ok for int->bool cast")
 	}
-	bc := got.(ir.BoolConstant)
+	bc := got.(ir.BoolConstant) //nolint:forcetypeassert // test helper
 	if !bc.Value {
 		t.Error("expected true for non-zero int->bool")
 	}
@@ -1117,7 +1117,7 @@ func TestFoldCast_IntToBool(t *testing.T) {
 	if !ok2 {
 		t.Fatal("expected ok for int(0)->bool cast")
 	}
-	bc2 := got2.(ir.BoolConstant)
+	bc2 := got2.(ir.BoolConstant) //nolint:forcetypeassert // test helper
 	if bc2.Value {
 		t.Error("expected false for zero int->bool")
 	}
@@ -1128,7 +1128,7 @@ func TestFoldCast_BoolToBool(t *testing.T) {
 	if !ok {
 		t.Fatal("expected ok for bool->bool cast")
 	}
-	bc := got.(ir.BoolConstant)
+	bc := got.(ir.BoolConstant) //nolint:forcetypeassert // test helper
 	if !bc.Value {
 		t.Error("expected true for bool->bool identity cast")
 	}
@@ -1412,7 +1412,7 @@ func TestFoldCast_IntToUnsignedInt(t *testing.T) {
 	if !ok {
 		t.Fatal("expected ok for signed->unsigned cast")
 	}
-	ic := got.(ir.IntConstant)
+	ic := got.(ir.IntConstant) //nolint:forcetypeassert // test helper
 	if ic.Signed {
 		t.Error("expected unsigned result")
 	}

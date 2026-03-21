@@ -792,12 +792,19 @@ func TestFoldConstants_CallTargetFolded(t *testing.T) {
 		t.Errorf("expected 1 fold for call target, got %d", result.FoldedCount)
 	}
 
-	call := fn.Blocks[0].Instructions[0].(*ir.Call)
+	call, ok := fn.Blocks[0].Instructions[0].(*ir.Call)
+	if !ok {
+		t.Fatalf("expected *ir.Call, got %T", fn.Blocks[0].Instructions[0])
+	}
 	ce, ok := call.Target.(*ir.ConstantExpr)
 	if !ok {
 		t.Fatalf("expected ConstantExpr for call target, got %T", call.Target)
 	}
-	if ce.Value.(ir.IntConstant).Value != 300 {
+	ic, ok := ce.Value.(ir.IntConstant)
+	if !ok {
+		t.Fatalf("expected IntConstant, got %T", ce.Value)
+	}
+	if ic.Value != 300 {
 		t.Errorf("expected 300, got %v", ce.Value)
 	}
 }
@@ -829,12 +836,19 @@ func TestFoldConstants_LoadAddressFolded(t *testing.T) {
 		t.Errorf("expected 1 fold for load address, got %d", result.FoldedCount)
 	}
 
-	load := fn.Blocks[0].Instructions[0].(*ir.Load)
+	load, ok := fn.Blocks[0].Instructions[0].(*ir.Load)
+	if !ok {
+		t.Fatalf("expected *ir.Load, got %T", fn.Blocks[0].Instructions[0])
+	}
 	ce, ok := load.Address.(*ir.ConstantExpr)
 	if !ok {
 		t.Fatalf("expected ConstantExpr for load address, got %T", load.Address)
 	}
-	if ce.Value.(ir.IntConstant).Value != 508 {
+	ic, ok := ce.Value.(ir.IntConstant)
+	if !ok {
+		t.Fatalf("expected IntConstant, got %T", ce.Value)
+	}
+	if ic.Value != 508 {
 		t.Errorf("expected 508, got %v", ce.Value)
 	}
 }
@@ -855,7 +869,11 @@ func TestFoldConstants_AndAllOnes(t *testing.T) {
 		t.Errorf("expected 1 simplification for x & ~0, got %d", result.SimplifiedCount)
 	}
 
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	assign, ok := fn.Blocks[0].Instructions[0].(*ir.Assign)
+	if !ok {
+		t.Fatalf("expected *ir.Assign, got %T", fn.Blocks[0].Instructions[0])
+	}
+	src := assign.Source
 	if _, ok := src.(*ir.VariableExpr); !ok {
 		t.Fatalf("expected VariableExpr after x & ~0, got %T", src)
 	}
@@ -877,12 +895,20 @@ func TestFoldConstants_OrAllOnes(t *testing.T) {
 		t.Errorf("expected 1 simplification for x | ~0, got %d", result.SimplifiedCount)
 	}
 
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
-	ce, ok := src.(*ir.ConstantExpr)
+	assign2, ok := fn.Blocks[0].Instructions[0].(*ir.Assign)
 	if !ok {
-		t.Fatalf("expected ConstantExpr (~0) after x | ~0, got %T", src)
+		t.Fatalf("expected *ir.Assign, got %T", fn.Blocks[0].Instructions[0])
 	}
-	if ce.Value.(ir.IntConstant).Value != -1 {
+	src2 := assign2.Source
+	ce, ok := src2.(*ir.ConstantExpr)
+	if !ok {
+		t.Fatalf("expected ConstantExpr (~0) after x | ~0, got %T", src2)
+	}
+	ic, ok := ce.Value.(ir.IntConstant)
+	if !ok {
+		t.Fatalf("expected IntConstant, got %T", ce.Value)
+	}
+	if ic.Value != -1 {
 		t.Errorf("expected -1, got %v", ce.Value)
 	}
 }
@@ -902,7 +928,7 @@ func TestFoldConstants_OrSelf(t *testing.T) {
 		t.Errorf("expected 1 simplification for x|x, got %d", result.SimplifiedCount)
 	}
 
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source //nolint:forcetypeassert // test helper
 	if _, ok := src.(*ir.VariableExpr); !ok {
 		t.Fatalf("expected VariableExpr after x|x, got %T", src)
 	}
@@ -923,7 +949,7 @@ func TestFoldConstants_DivByOne(t *testing.T) {
 		t.Errorf("expected 1 simplification for x/1, got %d", result.SimplifiedCount)
 	}
 
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source //nolint:forcetypeassert // test helper
 	if _, ok := src.(*ir.VariableExpr); !ok {
 		t.Fatalf("expected VariableExpr after x/1, got %T", src)
 	}
@@ -944,7 +970,7 @@ func TestFoldConstants_XorZero(t *testing.T) {
 		t.Errorf("expected 1 simplification for x^0, got %d", result.SimplifiedCount)
 	}
 
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source //nolint:forcetypeassert // test helper
 	if _, ok := src.(*ir.VariableExpr); !ok {
 		t.Fatalf("expected VariableExpr after x^0, got %T", src)
 	}
@@ -965,7 +991,7 @@ func TestFoldConstants_OrZero(t *testing.T) {
 		t.Errorf("expected 1 simplification for x|0, got %d", result.SimplifiedCount)
 	}
 
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source //nolint:forcetypeassert // test helper
 	if _, ok := src.(*ir.VariableExpr); !ok {
 		t.Fatalf("expected VariableExpr after x|0, got %T", src)
 	}
@@ -1033,9 +1059,9 @@ func TestFoldConstants_LogicalNotConst(t *testing.T) {
 		t.Errorf("expected 1 fold, got %d", result.FoldedCount)
 	}
 
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
-	ce := src.(*ir.ConstantExpr)
-	if ce.Value.(ir.BoolConstant).Value != false {
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source //nolint:forcetypeassert // test helper
+	ce := src.(*ir.ConstantExpr)                            //nolint:forcetypeassert // test helper
+	if ce.Value.(ir.BoolConstant).Value != false {          //nolint:forcetypeassert // test helper
 		t.Error("expected false after !true")
 	}
 }
@@ -1055,12 +1081,12 @@ func TestFoldConstants_MulZeroLeft(t *testing.T) {
 		t.Errorf("expected 1 simplification for 0*x, got %d", result.SimplifiedCount)
 	}
 
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source //nolint:forcetypeassert // test helper
 	ce, ok := src.(*ir.ConstantExpr)
 	if !ok {
 		t.Fatalf("expected ConstantExpr after 0*x, got %T", src)
 	}
-	if ce.Value.(ir.IntConstant).Value != 0 {
+	if ce.Value.(ir.IntConstant).Value != 0 { //nolint:forcetypeassert // test helper
 		t.Errorf("expected 0, got %v", ce.Value)
 	}
 }
@@ -1112,7 +1138,7 @@ func TestFoldConstants_LogicalAndTrue(t *testing.T) {
 		t.Errorf("expected 1 simplification for true&&x, got %d", result.SimplifiedCount)
 	}
 
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source //nolint:forcetypeassert // test helper
 	if _, ok := src.(*ir.VariableExpr); !ok {
 		t.Fatalf("expected VariableExpr after true&&x, got %T", src)
 	}
@@ -1133,7 +1159,7 @@ func TestFoldConstants_LogicalOrFalse(t *testing.T) {
 		t.Errorf("expected 1 simplification for false||x, got %d", result.SimplifiedCount)
 	}
 
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source //nolint:forcetypeassert // test helper
 	if _, ok := src.(*ir.VariableExpr); !ok {
 		t.Fatalf("expected VariableExpr after false||x, got %T", src)
 	}
@@ -1317,7 +1343,7 @@ func TestFoldConstants_SubSelfFloat(t *testing.T) {
 		t.Errorf("expected 1 simplification for float x-x, got %d", result.SimplifiedCount)
 	}
 
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source //nolint:forcetypeassert // test helper
 	ce, ok := src.(*ir.ConstantExpr)
 	if !ok {
 		t.Fatalf("expected ConstantExpr (zero) after float x-x, got %T", src)
@@ -1346,7 +1372,7 @@ func TestFoldConstants_XorSelfBool(t *testing.T) {
 		t.Errorf("expected 1 simplification for bool x^x, got %d", result.SimplifiedCount)
 	}
 
-	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source
+	src := fn.Blocks[0].Instructions[0].(*ir.Assign).Source //nolint:forcetypeassert // test helper
 	ce, ok := src.(*ir.ConstantExpr)
 	if !ok {
 		t.Fatalf("expected ConstantExpr after bool x^x, got %T", src)
