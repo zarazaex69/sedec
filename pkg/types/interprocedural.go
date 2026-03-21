@@ -155,6 +155,9 @@ func (p *InterproceduralPropagator) processSCC(scc []FunctionID) error {
 			if p.propagateCalleeToCallerReturn(id) {
 				changed = true
 			}
+			if p.propagateCalleeParamToCallerArg(id) {
+				changed = true
+			}
 		}
 
 		if !changed {
@@ -212,15 +215,33 @@ func (p *InterproceduralPropagator) propagateCallerToCallee(calleeID FunctionID)
 
 // propagateCalleeToCallerReturn propagates the callee's return type back to
 // the variable that receives the return value in each caller.
+// it also attempts to refine the callee's return type from its intraprocedural
+// solution if the summary does not yet have one.
 // returns true if any solution was updated.
 func (p *InterproceduralPropagator) propagateCalleeToCallerReturn(calleeID FunctionID) bool {
 	calleeSummary := p.summaries[calleeID]
-	if calleeSummary == nil || calleeSummary.ReturnType == nil {
+	if calleeSummary == nil {
 		return false
 	}
 
-	callerEdges := p.callGraph.Callers(calleeID)
 	changed := false
+
+	if calleeSummary.ReturnType == nil {
+		calleeSol := p.solutions[calleeID]
+		if calleeSol != nil {
+			retKey := fmt.Sprintf("$ret_%s", calleeID)
+			if t, ok := calleeSol.Types[retKey]; ok && t != nil {
+				calleeSummary.ReturnType = t
+				changed = true
+			}
+		}
+	}
+
+	if calleeSummary.ReturnType == nil {
+		return changed
+	}
+
+	callerEdges := p.callGraph.Callers(calleeID)
 
 	for _, edge := range callerEdges {
 		if edge.Site.ReturnVar == nil {
@@ -239,6 +260,54 @@ func (p *InterproceduralPropagator) propagateCalleeToCallerReturn(calleeID Funct
 		if !typesEqual(merged, existing) {
 			callerSol.Types[varKey] = merged
 			changed = true
+		}
+	}
+
+	return changed
+}
+
+// propagateCalleeParamToCallerArg propagates the callee's inferred parameter
+// types back to the caller's argument variables. this is the reverse direction
+// of propagateCallerToCallee: when a callee's parameter type is known (e.g.,
+// from its own body analysis or from other callers), that type information
+// flows back to constrain the argument expression in each caller.
+// returns true if any caller solution was updated.
+func (p *InterproceduralPropagator) propagateCalleeParamToCallerArg(calleeID FunctionID) bool {
+	calleeSummary := p.summaries[calleeID]
+	if calleeSummary == nil {
+		return false
+	}
+
+	callerEdges := p.callGraph.Callers(calleeID)
+	changed := false
+
+	for _, edge := range callerEdges {
+		callerSol := p.solutions[edge.CallerID]
+		if callerSol == nil {
+			continue
+		}
+
+		for argIdx, argExpr := range edge.Site.ArgExprs {
+			if argIdx >= len(calleeSummary.ParamTypes) {
+				break
+			}
+			paramType := calleeSummary.ParamTypes[argIdx]
+			if paramType == nil {
+				continue
+			}
+
+			varExpr, ok := argExpr.(ir.VariableExpr)
+			if !ok {
+				continue
+			}
+
+			varKey := varExpr.Var.String()
+			existing := callerSol.Types[varKey]
+			merged := p.mergeTypes(existing, paramType)
+			if !typesEqual(merged, existing) {
+				callerSol.Types[varKey] = merged
+				changed = true
+			}
 		}
 	}
 
@@ -323,27 +392,16 @@ func (p *InterproceduralPropagator) seedFromCallingConvention(id FunctionID) {
 	}
 }
 
-// seedSystemVParams seeds parameter types from System V AMD64 ABI register names.
-// integer/pointer params: RDI, RSI, RDX, RCX, R8, R9
-// float params: XMM0-XMM7
-// return value: RAX (integer), XMM0 (float)
-func (p *InterproceduralPropagator) seedSystemVParams(summary *FunctionSummary, sol *TypeSolution) {
-	// seed integer parameter registers
-	for i, reg := range systemVIntParamRegs {
-		if i >= len(summary.ParamTypes) {
-			break
-		}
-		if summary.ParamTypes[i] != nil {
-			continue
-		}
-		// look up the register type in the function's solution
-		if t, ok := sol.Types[reg]; ok && t != nil {
-			summary.ParamTypes[i] = t
-		}
-	}
-
-	// seed float parameter registers (XMM0-XMM7)
-	for i, reg := range systemVFloatParamRegs {
+// seedParamsFromRegisters is a shared helper that seeds parameter types from
+// ABI register names into the function summary. it iterates over the integer
+// and float register lists, looking up each register in the solution.
+func (p *InterproceduralPropagator) seedParamsFromRegisters(
+	summary *FunctionSummary,
+	sol *TypeSolution,
+	intRegs []string,
+	floatRegs []string,
+) {
+	for i, reg := range intRegs {
 		if i >= len(summary.ParamTypes) {
 			break
 		}
@@ -355,12 +413,38 @@ func (p *InterproceduralPropagator) seedSystemVParams(summary *FunctionSummary, 
 		}
 	}
 
-	// seed return type from RAX if not yet known
+	for i, reg := range floatRegs {
+		if i >= len(summary.ParamTypes) {
+			break
+		}
+		if summary.ParamTypes[i] != nil {
+			continue
+		}
+		if t, ok := sol.Types[reg]; ok && t != nil {
+			summary.ParamTypes[i] = t
+		}
+	}
+
 	if summary.ReturnType == nil {
 		if t, ok := sol.Types["rax"]; ok && t != nil {
 			summary.ReturnType = t
 		}
 	}
+	if summary.ReturnType == nil {
+		if t, ok := sol.Types["xmm0"]; ok && t != nil {
+			if _, isFloat := t.(ir.FloatType); isFloat {
+				summary.ReturnType = t
+			}
+		}
+	}
+}
+
+// seedSystemVParams seeds parameter types from System V AMD64 ABI register names.
+// integer/pointer params: RDI, RSI, RDX, RCX, R8, R9
+// float params: XMM0-XMM7
+// return value: RAX (integer), XMM0 (float)
+func (p *InterproceduralPropagator) seedSystemVParams(summary *FunctionSummary, sol *TypeSolution) {
+	p.seedParamsFromRegisters(summary, sol, systemVIntParamRegs, systemVFloatParamRegs)
 }
 
 // seedMicrosoftX64Params seeds parameter types from Microsoft x64 ABI register names.
@@ -368,38 +452,7 @@ func (p *InterproceduralPropagator) seedSystemVParams(summary *FunctionSummary, 
 // float params: XMM0-XMM3
 // return value: RAX (integer), XMM0 (float)
 func (p *InterproceduralPropagator) seedMicrosoftX64Params(summary *FunctionSummary, sol *TypeSolution) {
-	// seed integer parameter registers
-	for i, reg := range msX64IntParamRegs {
-		if i >= len(summary.ParamTypes) {
-			break
-		}
-		if summary.ParamTypes[i] != nil {
-			continue
-		}
-		if t, ok := sol.Types[reg]; ok && t != nil {
-			summary.ParamTypes[i] = t
-		}
-	}
-
-	// seed float parameter registers (XMM0-XMM3)
-	for i, reg := range msX64FloatParamRegs {
-		if i >= len(summary.ParamTypes) {
-			break
-		}
-		if summary.ParamTypes[i] != nil {
-			continue
-		}
-		if t, ok := sol.Types[reg]; ok && t != nil {
-			summary.ParamTypes[i] = t
-		}
-	}
-
-	// seed return type from RAX if not yet known
-	if summary.ReturnType == nil {
-		if t, ok := sol.Types["rax"]; ok && t != nil {
-			summary.ReturnType = t
-		}
-	}
+	p.seedParamsFromRegisters(summary, sol, msX64IntParamRegs, msX64FloatParamRegs)
 }
 
 // resolveExprType extracts the ir.Type for an expression from a TypeSolution.
@@ -436,6 +489,9 @@ func (p *InterproceduralPropagator) resolveExprType(expr ir.Expression, sol *Typ
 //   - T join T = T
 //   - Int(n) join Int(m) = Int(max(n,m)) with widening
 //   - Pointer(T) join Pointer(U) = Pointer(T join U)
+//   - Array(T,n) join Array(U,n) = Array(T join U, n) when lengths match
+//   - Struct join Struct = Struct when field-compatible
+//   - Function join Function = Function when arity matches
 //   - T join U where no widening rule applies = nil (conservative unknown)
 func (p *InterproceduralPropagator) mergeTypes(a, b ir.Type) ir.Type {
 	if a == nil {
@@ -452,7 +508,6 @@ func (p *InterproceduralPropagator) mergeTypes(a, b ir.Type) ir.Type {
 	ai, aIsInt := a.(ir.IntType)
 	bi, bIsInt := b.(ir.IntType)
 	if aIsInt && bIsInt {
-		// widen to the larger type; if signedness differs, prefer signed
 		width := ai.Width
 		if bi.Width > width {
 			width = bi.Width
@@ -478,28 +533,111 @@ func (p *InterproceduralPropagator) mergeTypes(a, b ir.Type) ir.Type {
 	if aIsPtr && bIsPtr {
 		merged := p.mergeTypes(ap.Pointee, bp.Pointee)
 		if merged == nil {
-			// pointees are incompatible: use void pointer as conservative result
 			return ir.PointerType{Pointee: ir.VoidType{}}
 		}
 		return ir.PointerType{Pointee: merged}
 	}
 
+	// array covariance: Array(T,n) join Array(U,n) = Array(T join U, n)
+	aa, aIsArr := a.(ir.ArrayType)
+	ba, bIsArr := b.(ir.ArrayType)
+	if aIsArr && bIsArr && aa.Length == ba.Length {
+		merged := p.mergeTypes(aa.Element, ba.Element)
+		if merged == nil {
+			return nil
+		}
+		return ir.ArrayType{Element: merged, Length: aa.Length}
+	}
+
+	// struct merge: compatible when same number of fields at same offsets
+	as, aIsStruct := a.(ir.StructType)
+	bs, bIsStruct := b.(ir.StructType)
+	if aIsStruct && bIsStruct {
+		return p.mergeStructTypes(as, bs)
+	}
+
+	// function merge: compatible when same arity
+	afn, aIsFn := a.(ir.FunctionType)
+	bfn, bIsFn := b.(ir.FunctionType)
+	if aIsFn && bIsFn {
+		return p.mergeFunctionTypes(afn, bfn)
+	}
+
 	// int/float conflict: use the wider/more general type
 	if aIsInt && bIsFloat {
-		return b // float is more general
+		return b
 	}
 	if aIsFloat && bIsInt {
-		return a // float is more general
+		return a
 	}
 
 	// all other combinations: conservative unknown
 	return nil
 }
 
+// mergeStructTypes merges two struct types field-by-field.
+// returns nil if the structs are incompatible (different field count or offsets).
+func (p *InterproceduralPropagator) mergeStructTypes(a, b ir.StructType) ir.Type {
+	if len(a.Fields) != len(b.Fields) {
+		return nil
+	}
+	mergedFields := make([]ir.StructField, len(a.Fields))
+	for i := range a.Fields {
+		if a.Fields[i].Offset != b.Fields[i].Offset {
+			return nil
+		}
+		ft := p.mergeTypes(a.Fields[i].Type, b.Fields[i].Type)
+		if ft == nil {
+			return nil
+		}
+		name := a.Fields[i].Name
+		if name == "" {
+			name = b.Fields[i].Name
+		}
+		mergedFields[i] = ir.StructField{
+			Name:   name,
+			Type:   ft,
+			Offset: a.Fields[i].Offset,
+		}
+	}
+	name := a.Name
+	if name == "" {
+		name = b.Name
+	}
+	return ir.StructType{Name: name, Fields: mergedFields}
+}
+
+// mergeFunctionTypes merges two function types by merging parameters and return types.
+// returns nil if the functions have different arity.
+func (p *InterproceduralPropagator) mergeFunctionTypes(a, b ir.FunctionType) ir.Type {
+	if len(a.Parameters) != len(b.Parameters) {
+		return nil
+	}
+	retMerged := p.mergeTypes(a.ReturnType, b.ReturnType)
+	mergedParams := make([]ir.Type, len(a.Parameters))
+	for i := range a.Parameters {
+		pm := p.mergeTypes(a.Parameters[i], b.Parameters[i])
+		if pm == nil {
+			return nil
+		}
+		mergedParams[i] = pm
+	}
+	return ir.FunctionType{
+		ReturnType: retMerged,
+		Parameters: mergedParams,
+		Variadic:   a.Variadic || b.Variadic,
+	}
+}
+
 // Summary returns the computed FunctionSummary for the given function,
 // or nil if the function was not processed.
 func (p *InterproceduralPropagator) Summary(id FunctionID) *FunctionSummary {
 	return p.summaries[id]
+}
+
+// Summaries returns all computed function summaries keyed by FunctionID.
+func (p *InterproceduralPropagator) Summaries() map[FunctionID]*FunctionSummary {
+	return p.summaries
 }
 
 // ApplySummaries writes the propagated parameter and return types back into
