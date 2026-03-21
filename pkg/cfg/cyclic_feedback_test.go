@@ -953,3 +953,507 @@ func TestIncrementalReAnalysis_GetUnresolvedJumps(t *testing.T) {
 		}
 	}
 }
+
+// ============================================================================
+// C++ class hierarchy with multiple vtables
+// ============================================================================
+
+// buildMultiVTableCFG constructs a CFG modeling two independent virtual dispatch
+// sites from different C++ base classes (e.g., class Derived : public Base1, public Base2).
+// layout:
+//
+//	0x8000: mov rax, [rcx]        ; load vtable ptr for Base1
+//	0x8003: jmp rax               ; indirect call through Base1 vtable
+//	0x8005: mov rax, [rcx+8]      ; load vtable ptr for Base2
+//	0x8008: jmp rax               ; indirect call through Base2 vtable
+//	0x800a: ret
+//	0x8010: push rbp              ; Base1::method_A
+//	0x8011: ret
+//	0x8012: push rbp              ; Base1::method_B
+//	0x8013: ret
+//	0x8014: push rbp              ; Base2::method_C
+//	0x8015: ret
+//	0x8016: push rbp              ; Base2::method_D
+//	0x8017: ret
+func buildMultiVTableCFG(t *testing.T) (*Builder, *CFG) {
+	t.Helper()
+
+	instructions := []*disasm.Instruction{
+		{Address: 0x8000, Mnemonic: "mov", Length: 3},
+		{
+			Address:  0x8003,
+			Mnemonic: "jmp",
+			Length:   2,
+			Operands: []disasm.Operand{disasm.RegisterOperand{Name: "rax", Size: disasm.Size64}},
+		},
+		{Address: 0x8005, Mnemonic: "mov", Length: 3},
+		{
+			Address:  0x8008,
+			Mnemonic: "jmp",
+			Length:   2,
+			Operands: []disasm.Operand{disasm.RegisterOperand{Name: "rax", Size: disasm.Size64}},
+		},
+		{Address: 0x800a, Mnemonic: "ret", Length: 1},
+		{Address: 0x8010, Mnemonic: "push", Length: 1},
+		{Address: 0x8011, Mnemonic: "ret", Length: 1},
+		{Address: 0x8012, Mnemonic: "push", Length: 1},
+		{Address: 0x8013, Mnemonic: "ret", Length: 1},
+		{Address: 0x8014, Mnemonic: "push", Length: 1},
+		{Address: 0x8015, Mnemonic: "ret", Length: 1},
+		{Address: 0x8016, Mnemonic: "push", Length: 1},
+		{Address: 0x8017, Mnemonic: "ret", Length: 1},
+	}
+
+	builder := NewCFGBuilder()
+	cfgGraph, err := builder.Build(instructions)
+	if err != nil {
+		t.Fatalf("build multi-vtable cfg: %v", err)
+	}
+
+	return builder, cfgGraph
+}
+
+// TestVTableDiscovery_MultipleClassHierarchy verifies that two independent
+// vtable dispatch sites (from different base classes in a diamond/multiple
+// inheritance scenario) are resolved independently with correct provenance.
+func TestVTableDiscovery_MultipleClassHierarchy(t *testing.T) {
+	builder, cfgGraph := buildMultiVTableCFG(t)
+
+	if len(cfgGraph.UnresolvedIndirectJumps) < 2 {
+		t.Fatalf("expected >= 2 unresolved indirect jumps, got %d",
+			len(cfgGraph.UnresolvedIndirectJumps))
+	}
+
+	provBase1 := &EdgeProvenance{
+		AnalysisPass: "type_inference_iter_1_vtable",
+		Confidence:   0.92,
+		Metadata:     map[string]any{"array_kind": "vtable", "class": "Base1"},
+	}
+	provBase2 := &EdgeProvenance{
+		AnalysisPass: "type_inference_iter_1_vtable",
+		Confidence:   0.88,
+		Metadata:     map[string]any{"array_kind": "vtable", "class": "Base2"},
+	}
+
+	edgesBefore := cfgGraph.EdgeCount()
+
+	// resolve Base1 vtable: method_A and method_B
+	for _, target := range []disasm.Address{0x8010, 0x8012} {
+		if err := builder.AddIndirectTargetWithProvenance(0x8003, target, provBase1); err != nil {
+			t.Fatalf("add Base1 target 0x%x: %v", target, err)
+		}
+	}
+
+	// resolve Base2 vtable: method_C and method_D
+	for _, target := range []disasm.Address{0x8014, 0x8016} {
+		if err := builder.AddIndirectTargetWithProvenance(0x8008, target, provBase2); err != nil {
+			t.Fatalf("add Base2 target 0x%x: %v", target, err)
+		}
+	}
+
+	newEdges := cfgGraph.EdgeCount() - edgesBefore
+	if newEdges != 4 {
+		t.Errorf("new edges: got %d, want 4 (2 per vtable)", newEdges)
+	}
+
+	// verify each jump site has its own set of targets
+	jump1, found := cfgGraph.GetUnresolvedIndirectJump(0x8003)
+	if !found {
+		t.Fatal("Base1 dispatch jump not found")
+	}
+	if len(jump1.PossibleTargets) != 2 {
+		t.Errorf("Base1 targets: got %d, want 2", len(jump1.PossibleTargets))
+	}
+
+	jump2, found := cfgGraph.GetUnresolvedIndirectJump(0x8008)
+	if !found {
+		t.Fatal("Base2 dispatch jump not found")
+	}
+	if len(jump2.PossibleTargets) != 2 {
+		t.Errorf("Base2 targets: got %d, want 2", len(jump2.PossibleTargets))
+	}
+
+	// verify CFG consistency after multi-vtable resolution
+	violations := builder.ConsistencyCheck()
+	if len(violations) != 0 {
+		t.Errorf("CFG consistency violations: %v", violations)
+	}
+}
+
+// ============================================================================
+// Go interface table (itab) discovery
+// ============================================================================
+
+// buildItabDispatchCFG constructs a CFG modeling Go interface dispatch via itab.
+// layout:
+//
+//	0x9000: mov rax, [rcx+0x18]   ; load itab method pointer
+//	0x9003: jmp rax               ; indirect call through itab
+//	0x9005: ret
+//	0x9010: push rbp              ; itab method: String()
+//	0x9011: ret
+//	0x9012: push rbp              ; itab method: Error()
+//	0x9013: ret
+func buildItabDispatchCFG(t *testing.T) (*Builder, *CFG) {
+	t.Helper()
+
+	instructions := []*disasm.Instruction{
+		{Address: 0x9000, Mnemonic: "mov", Length: 3},
+		{
+			Address:  0x9003,
+			Mnemonic: "jmp",
+			Length:   2,
+			Operands: []disasm.Operand{disasm.RegisterOperand{Name: "rax", Size: disasm.Size64}},
+		},
+		{Address: 0x9005, Mnemonic: "ret", Length: 1},
+		{Address: 0x9010, Mnemonic: "push", Length: 1},
+		{Address: 0x9011, Mnemonic: "ret", Length: 1},
+		{Address: 0x9012, Mnemonic: "push", Length: 1},
+		{Address: 0x9013, Mnemonic: "ret", Length: 1},
+	}
+
+	builder := NewCFGBuilder()
+	cfgGraph, err := builder.Build(instructions)
+	if err != nil {
+		t.Fatalf("build itab dispatch cfg: %v", err)
+	}
+
+	return builder, cfgGraph
+}
+
+// TestItabDiscovery_GoInterfaceTable verifies that Go interface table (itab)
+// targets are resolved correctly with interface_table provenance.
+func TestItabDiscovery_GoInterfaceTable(t *testing.T) {
+	builder, cfgGraph := buildItabDispatchCFG(t)
+
+	jumpSite := disasm.Address(0x9003)
+	itabTargets := []disasm.Address{0x9010, 0x9012}
+
+	prov := &EdgeProvenance{
+		AnalysisPass: "type_inference_iter_1_interface_table",
+		Confidence:   0.80,
+		Metadata: map[string]any{
+			"array_kind": "interface_table",
+			"interface":  "io.Writer",
+		},
+	}
+
+	// classify the jump as interface table dispatch
+	if err := builder.ClassifyIndirectJump(jumpSite, IndirectJumpInterfaceTable); err != nil {
+		t.Fatalf("ClassifyIndirectJump: %v", err)
+	}
+
+	edgesBefore := cfgGraph.EdgeCount()
+	for _, target := range itabTargets {
+		if err := builder.AddIndirectTargetWithProvenance(jumpSite, target, prov); err != nil {
+			t.Fatalf("add itab target 0x%x: %v", target, err)
+		}
+	}
+
+	newEdges := cfgGraph.EdgeCount() - edgesBefore
+	if newEdges != 2 {
+		t.Errorf("new edges: got %d, want 2", newEdges)
+	}
+
+	// verify classification was preserved
+	jump, found := cfgGraph.GetUnresolvedIndirectJump(jumpSite)
+	if !found {
+		t.Fatal("itab dispatch jump not found")
+	}
+	if jump.JumpKind != IndirectJumpInterfaceTable {
+		t.Errorf("jump kind: got %v, want IndirectJumpInterfaceTable", jump.JumpKind)
+	}
+
+	// verify provenance metadata
+	for _, edge := range cfgGraph.Edges {
+		if edge.Type != EdgeTypeIndirect || edge.Provenance == nil {
+			continue
+		}
+		if edge.Provenance.AnalysisPass != "type_inference_iter_1_interface_table" {
+			continue
+		}
+		ifaceVal, ok := edge.Provenance.Metadata["interface"]
+		if !ok || ifaceVal != "io.Writer" {
+			t.Errorf("interface metadata: got %v, want io.Writer", ifaceVal)
+		}
+		return
+	}
+	t.Error("edge with interface_table provenance not found")
+}
+
+// ============================================================================
+// pass execution order verification
+// ============================================================================
+
+// TestIncrementalReAnalysis_PassExecutionOrder verifies that hooks are invoked
+// in strict dependency order: domtree -> SSA -> VSA -> reaching defs -> type constraints.
+func TestIncrementalReAnalysis_PassExecutionOrder(t *testing.T) {
+	builder, _ := buildVTableDispatchCFG(t)
+
+	order := make([]string, 0, 5)
+	hooks := &ReAnalysisHooks{
+		OnDominatorTreeUpdated: func(_ *DominatorTree) {
+			order = append(order, "domtree")
+		},
+		OnSSARequired: func(_ *CFG, _ *DominatorTree) error {
+			order = append(order, "ssa")
+			return nil
+		},
+		OnVSARequired: func(_ *CFG, _ *DominatorTree) error {
+			order = append(order, "vsa")
+			return nil
+		},
+		OnReachingDefsRequired: func(_ *CFG, _ *DominatorTree) error {
+			order = append(order, "rdefs")
+			return nil
+		},
+		OnTypeConstraintsRequired: func(_ *CFG) error {
+			order = append(order, "typeconstraints")
+			return nil
+		},
+	}
+
+	ra := NewIncrementalReAnalyzer(builder, hooks, 10)
+
+	prov := &EdgeProvenance{AnalysisPass: "test", Confidence: 0.9, Metadata: map[string]any{}}
+	if _, err := ra.AddResolvedTargets(0x4006, []disasm.Address{0x4010}, prov); err != nil {
+		t.Fatalf("AddResolvedTargets: %v", err)
+	}
+
+	expected := []string{"domtree", "ssa", "vsa", "rdefs", "typeconstraints"}
+	if len(order) != len(expected) {
+		t.Fatalf("pass count: got %d, want %d; order=%v", len(order), len(expected), order)
+	}
+	for i, want := range expected {
+		if order[i] != want {
+			t.Errorf("pass[%d]: got %q, want %q (full order: %v)", i, order[i], want, order)
+		}
+	}
+}
+
+// ============================================================================
+// convergence loop with hooks
+// ============================================================================
+
+// TestConvergence_HooksInvokedPerIteration verifies that analysis hooks are
+// invoked on every iteration of the convergence loop, not just the first.
+func TestConvergence_HooksInvokedPerIteration(t *testing.T) {
+	builder, _ := buildMultiVTableCFG(t)
+
+	domTreeCount := 0
+	typeConstraintCount := 0
+	hooks := &ReAnalysisHooks{
+		OnDominatorTreeUpdated: func(_ *DominatorTree) {
+			domTreeCount++
+		},
+		OnTypeConstraintsRequired: func(_ *CFG) error {
+			typeConstraintCount++
+			return nil
+		},
+	}
+
+	ra := NewIncrementalReAnalyzer(builder, hooks, 10)
+
+	iterCount := 0
+	_, err := ra.RunConvergenceLoop(func(unresolved []*UnresolvedIndirectJump) (map[disasm.Address]*ResolvedTargetSet, error) {
+		iterCount++
+		if len(unresolved) == 0 {
+			return nil, nil //nolint:nilnil
+		}
+		// resolve one jump per iteration
+		jump := unresolved[0]
+		return map[disasm.Address]*ResolvedTargetSet{
+			jump.JumpSite: NewResolvedTargetSet("type_inference", 0.9, []disasm.Address{0x8010}),
+		}, nil
+	})
+
+	if err != nil {
+		t.Fatalf("RunConvergenceLoop: %v", err)
+	}
+
+	// dominator tree must be recomputed at least once per iteration that adds edges
+	if domTreeCount == 0 {
+		t.Error("OnDominatorTreeUpdated was never called during convergence loop")
+	}
+	if typeConstraintCount == 0 {
+		t.Error("OnTypeConstraintsRequired was never called during convergence loop")
+	}
+}
+
+// TestConvergence_HookErrorTerminatesLoop verifies that an error from a
+// re-analysis hook during RunConvergenceLoop is propagated and terminates the loop.
+func TestConvergence_HookErrorTerminatesLoop(t *testing.T) {
+	builder, _ := buildVTableDispatchCFG(t)
+
+	hookErr := errors.New("vsa analysis failed")
+	hooks := &ReAnalysisHooks{
+		OnVSARequired: func(_ *CFG, _ *DominatorTree) error {
+			return hookErr
+		},
+	}
+
+	ra := NewIncrementalReAnalyzer(builder, hooks, 10)
+
+	_, err := ra.RunConvergenceLoop(func(unresolved []*UnresolvedIndirectJump) (map[disasm.Address]*ResolvedTargetSet, error) {
+		if len(unresolved) == 0 {
+			return nil, nil //nolint:nilnil
+		}
+		return map[disasm.Address]*ResolvedTargetSet{
+			unresolved[0].JumpSite: NewResolvedTargetSet("test", 0.9, []disasm.Address{0x4010}),
+		}, nil
+	})
+
+	if err == nil {
+		t.Fatal("expected error from hook failure, got nil")
+	}
+	if !errors.Is(err, hookErr) {
+		t.Errorf("error chain: got %v, want to contain %v", err, hookErr)
+	}
+}
+
+// ============================================================================
+// end-to-end cyclic feedback: type inference -> CFG -> re-analysis -> convergence
+// ============================================================================
+
+// TestEndToEnd_CyclicFeedbackVTableResolution simulates a complete cyclic
+// feedback scenario using a CFG with two independent vtable dispatch sites.
+// iteration 1 resolves the first vtable, iteration 2 resolves the second,
+// and the loop converges when no unresolved jumps remain.
+func TestEndToEnd_CyclicFeedbackVTableResolution(t *testing.T) {
+	builder, cfgGraph := buildMultiVTableCFG(t)
+
+	ssaRunCount := 0
+	vsaRunCount := 0
+	typeConstraintRunCount := 0
+
+	hooks := &ReAnalysisHooks{
+		OnDominatorTreeUpdated: func(_ *DominatorTree) {},
+		OnSSARequired: func(_ *CFG, _ *DominatorTree) error {
+			ssaRunCount++
+			return nil
+		},
+		OnVSARequired: func(_ *CFG, _ *DominatorTree) error {
+			vsaRunCount++
+			return nil
+		},
+		OnReachingDefsRequired: func(_ *CFG, _ *DominatorTree) error { return nil },
+		OnTypeConstraintsRequired: func(_ *CFG) error {
+			typeConstraintRunCount++
+			return nil
+		},
+	}
+
+	ra := NewIncrementalReAnalyzer(builder, hooks, 10)
+
+	edgesBefore := cfgGraph.EdgeCount()
+
+	// simulate: iteration 1 resolves Base1 vtable (jump at 0x8003),
+	// iteration 2 resolves Base2 vtable (jump at 0x8008)
+	iterCount := 0
+	result, err := ra.RunConvergenceLoop(func(unresolved []*UnresolvedIndirectJump) (map[disasm.Address]*ResolvedTargetSet, error) {
+		iterCount++
+		if len(unresolved) == 0 {
+			return nil, nil //nolint:nilnil
+		}
+
+		jump := unresolved[0]
+		switch {
+		case jump.JumpSite == 0x8003:
+			return map[disasm.Address]*ResolvedTargetSet{
+				0x8003: NewResolvedTargetSet("type_inference_vtable_Base1", 0.90, []disasm.Address{0x8010, 0x8012}),
+			}, nil
+		case jump.JumpSite == 0x8008:
+			return map[disasm.Address]*ResolvedTargetSet{
+				0x8008: NewResolvedTargetSet("type_inference_vtable_Base2", 0.95, []disasm.Address{0x8014, 0x8016}),
+			}, nil
+		default:
+			return nil, nil //nolint:nilnil
+		}
+	})
+
+	if err != nil {
+		t.Fatalf("RunConvergenceLoop: %v", err)
+	}
+
+	if !result.Converged {
+		t.Error("expected convergence after resolving both vtables")
+	}
+
+	newEdges := cfgGraph.EdgeCount() - edgesBefore
+	if newEdges < 4 {
+		t.Errorf("new edges: got %d, want >= 4 (2 per vtable)", newEdges)
+	}
+
+	if ssaRunCount < 2 {
+		t.Errorf("SSA ran %d times, want >= 2 (once per iteration)", ssaRunCount)
+	}
+	if vsaRunCount < 2 {
+		t.Errorf("VSA ran %d times, want >= 2", vsaRunCount)
+	}
+	if typeConstraintRunCount < 2 {
+		t.Errorf("type constraints ran %d times, want >= 2", typeConstraintRunCount)
+	}
+
+	history := ra.GetResolutionHistory()
+	if len(history) < 2 {
+		t.Errorf("resolution history: got %d records, want >= 2", len(history))
+	}
+
+	violations := builder.ConsistencyCheck()
+	if len(violations) != 0 {
+		t.Errorf("CFG consistency violations: %v", violations)
+	}
+}
+
+// TestEndToEnd_CyclicFeedbackHandlerTableResolution simulates a complete
+// cyclic feedback scenario for switch jump table resolution.
+func TestEndToEnd_CyclicFeedbackHandlerTableResolution(t *testing.T) {
+	builder, cfgGraph := buildHandlerTableCFG(t)
+
+	passesTriggered := make(map[string]int)
+	hooks := &ReAnalysisHooks{
+		OnDominatorTreeUpdated:    func(_ *DominatorTree) { passesTriggered["domtree"]++ },
+		OnSSARequired:             func(_ *CFG, _ *DominatorTree) error { passesTriggered["ssa"]++; return nil },
+		OnVSARequired:             func(_ *CFG, _ *DominatorTree) error { passesTriggered["vsa"]++; return nil },
+		OnReachingDefsRequired:    func(_ *CFG, _ *DominatorTree) error { passesTriggered["rdefs"]++; return nil },
+		OnTypeConstraintsRequired: func(_ *CFG) error { passesTriggered["typeconstraints"]++; return nil },
+	}
+
+	ra := NewIncrementalReAnalyzer(builder, hooks, 10)
+
+	edgesBefore := cfgGraph.EdgeCount()
+	allCases := []disasm.Address{0x5010, 0x5015, 0x501a, 0x501f, 0x5024}
+
+	result, err := ra.RunConvergenceLoop(func(unresolved []*UnresolvedIndirectJump) (map[disasm.Address]*ResolvedTargetSet, error) {
+		if len(unresolved) == 0 {
+			return nil, nil //nolint:nilnil
+		}
+		return map[disasm.Address]*ResolvedTargetSet{
+			0x5005: NewResolvedTargetSet("type_inference_handler", 0.75, allCases),
+		}, nil
+	})
+
+	if err != nil {
+		t.Fatalf("RunConvergenceLoop: %v", err)
+	}
+	if !result.Converged {
+		t.Error("expected convergence after resolving all switch cases")
+	}
+
+	newEdges := cfgGraph.EdgeCount() - edgesBefore
+	if newEdges != 5 {
+		t.Errorf("new edges: got %d, want 5", newEdges)
+	}
+
+	// all passes must have been triggered at least once
+	for _, pass := range []string{"domtree", "ssa", "vsa", "rdefs", "typeconstraints"} {
+		if passesTriggered[pass] == 0 {
+			t.Errorf("pass %q was never triggered during handler table resolution", pass)
+		}
+	}
+
+	violations := builder.ConsistencyCheck()
+	if len(violations) != 0 {
+		t.Errorf("CFG consistency violations: %v", violations)
+	}
+}

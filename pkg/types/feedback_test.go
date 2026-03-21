@@ -111,6 +111,9 @@ func TestConvergenceReason_String(t *testing.T) {
 	if got := ConvergenceIterationLimit.String(); got != "iteration_limit" {
 		t.Errorf("got %q", got)
 	}
+	if got := ConvergenceReason(99).String(); got != "unknown(99)" {
+		t.Errorf("unknown reason: got %q, want %q", got, "unknown(99)")
+	}
 }
 
 // ============================================================================
@@ -505,5 +508,327 @@ func TestFeedbackLoopResult_String(t *testing.T) {
 	s := r.String()
 	if s == "" {
 		t.Error("FeedbackLoopResult.String() returned empty string")
+	}
+}
+
+// ============================================================================
+// COMPREHENSIVE CYCLIC FEEDBACK LOOP TESTS
+// ============================================================================
+
+// TestFeedbackLoop_MultipleArraysPerIteration verifies that multiple arrays
+// discovered in a single iteration are all transmitted to the builder.
+func TestFeedbackLoop_MultipleArraysPerIteration(t *testing.T) {
+	arr1 := makeFuncPtrArray(0x1000, []ir.Address{0x2000}, ArrayKindVTable)
+	arr2 := makeFuncPtrArray(0x3000, []ir.Address{0x4000, 0x5000}, ArrayKindHandlerTable)
+	arr3 := makeFuncPtrArray(0x6000, []ir.Address{0x7000}, ArrayKindInterfaceTable)
+
+	discoverer := &mockDiscoverer{
+		perIterationArrays: [][]FunctionPointerArray{
+			{arr1, arr2, arr3},
+			nil,
+		},
+	}
+	builder := &mockCFGBuilder{}
+
+	loop := NewCyclicFeedbackLoop(discoverer, builder, 10)
+	result, err := loop.Run(emptySol())
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.TotalTargetsResolved != 4 {
+		t.Errorf("targets = %d, want 4 (1+2+1)", result.TotalTargetsResolved)
+	}
+	if result.ArraysDiscovered != 3 {
+		t.Errorf("arrays = %d, want 3", result.ArraysDiscovered)
+	}
+	if len(builder.calls) != 4 {
+		t.Errorf("builder calls = %d, want 4", len(builder.calls))
+	}
+}
+
+// TestFeedbackLoop_PartialDeduplication verifies that deduplication works
+// correctly when some targets are duplicated and others are new.
+func TestFeedbackLoop_PartialDeduplication(t *testing.T) {
+	arr1 := makeFuncPtrArray(0x1000, []ir.Address{0x2000, 0x3000}, ArrayKindVTable)
+	arr2 := makeFuncPtrArray(0x1000, []ir.Address{0x2000, 0x4000}, ArrayKindVTable)
+
+	discoverer := &mockDiscoverer{
+		perIterationArrays: [][]FunctionPointerArray{
+			{arr1},
+			{arr2},
+			nil,
+		},
+	}
+	builder := &mockCFGBuilder{}
+
+	loop := NewCyclicFeedbackLoop(discoverer, builder, 10)
+	result, err := loop.Run(emptySol())
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.TotalTargetsResolved != 3 {
+		t.Errorf("targets = %d, want 3 (0x2000, 0x3000, 0x4000)", result.TotalTargetsResolved)
+	}
+	if len(builder.calls) != 3 {
+		t.Errorf("builder calls = %d, want 3", len(builder.calls))
+	}
+}
+
+// TestFeedbackLoop_ProvenanceIterationTagging verifies that provenance
+// correctly encodes the iteration number.
+func TestFeedbackLoop_ProvenanceIterationTagging(t *testing.T) {
+	arr := makeFuncPtrArray(0x1000, []ir.Address{0x2000}, ArrayKindVTable)
+	discoverer := &mockDiscoverer{
+		perIterationArrays: [][]FunctionPointerArray{
+			{arr},
+			{arr},
+			nil,
+		},
+	}
+	builder := &mockCFGBuilder{}
+
+	loop := NewCyclicFeedbackLoop(discoverer, builder, 10)
+	_, _ = loop.Run(emptySol())
+
+	if len(builder.calls) < 1 {
+		t.Fatal("no builder calls recorded")
+	}
+
+	prov := builder.calls[0].provenance
+	if prov == nil {
+		t.Fatal("provenance is nil")
+	}
+
+	if prov.AnalysisPass != "type_inference_iter_1_vtable" {
+		t.Errorf("analysis pass = %q, want type_inference_iter_1_vtable", prov.AnalysisPass)
+	}
+}
+
+// TestFeedbackLoop_ConfidencePreserved verifies that array confidence is
+// preserved in the provenance passed to the builder.
+func TestFeedbackLoop_ConfidencePreserved(t *testing.T) {
+	arr := FunctionPointerArray{
+		Address:     0x1000,
+		ElementType: ir.FunctionType{ReturnType: ir.VoidType{}},
+		Elements:    []ir.Address{0x2000},
+		Kind:        ArrayKindVTable,
+		Confidence:  0.75,
+		Origin:      "test",
+	}
+
+	discoverer := &mockDiscoverer{
+		perIterationArrays: [][]FunctionPointerArray{{arr}},
+	}
+	builder := &mockCFGBuilder{}
+
+	loop := NewCyclicFeedbackLoop(discoverer, builder, 10)
+	_, _ = loop.Run(emptySol())
+
+	if len(builder.calls) == 0 {
+		t.Fatal("no builder calls recorded")
+	}
+
+	prov := builder.calls[0].provenance
+	if prov.Confidence != 0.75 {
+		t.Errorf("confidence = %.2f, want 0.75", prov.Confidence)
+	}
+}
+
+// TestFeedbackLoop_LargeNumberOfTargets verifies that arrays with many targets
+// are handled correctly.
+func TestFeedbackLoop_LargeNumberOfTargets(t *testing.T) {
+	targets := make([]ir.Address, 100)
+	for i := 0; i < 100; i++ {
+		targets[i] = ir.Address(0x2000 + i*0x100)
+	}
+
+	arr := FunctionPointerArray{
+		Address:     0x1000,
+		ElementType: ir.FunctionType{ReturnType: ir.VoidType{}},
+		Elements:    targets,
+		Kind:        ArrayKindHandlerTable,
+		Confidence:  0.8,
+		Origin:      "test",
+	}
+
+	discoverer := &mockDiscoverer{
+		perIterationArrays: [][]FunctionPointerArray{{arr}},
+	}
+	builder := &mockCFGBuilder{}
+
+	loop := NewCyclicFeedbackLoop(discoverer, builder, 10)
+	result, err := loop.Run(emptySol())
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.TotalTargetsResolved != 100 {
+		t.Errorf("targets = %d, want 100", result.TotalTargetsResolved)
+	}
+	if len(builder.calls) != 100 {
+		t.Errorf("builder calls = %d, want 100", len(builder.calls))
+	}
+}
+
+// TestFunctionPointerAnalyzer_MultipleVariables verifies that the analyzer
+// correctly identifies multiple function pointer arrays in a single solution.
+func TestFunctionPointerAnalyzer_MultipleVariables(t *testing.T) {
+	a := NewFunctionPointerAnalyzer()
+	sol := &TypeSolution{
+		Types: map[string]ir.Type{
+			"vtable_A": ir.ArrayType{
+				Element: ir.FunctionType{ReturnType: ir.VoidType{}},
+				Length:  3,
+			},
+			"vtable_B": ir.ArrayType{
+				Element: ir.FunctionType{ReturnType: ir.VoidType{}},
+				Length:  5,
+			},
+			"handlers": ir.ArrayType{
+				Element: ir.PointerType{Pointee: ir.FunctionType{ReturnType: ir.IntType{Width: ir.Size4}}},
+				Length:  4,
+			},
+			"plain_int": ir.IntType{Width: ir.Size8},
+		},
+	}
+
+	arrays := a.DiscoverFunctionPointers(sol)
+	if len(arrays) != 3 {
+		t.Fatalf("expected 3 arrays, got %d", len(arrays))
+	}
+
+	kinds := make(map[ArrayKind]int)
+	for _, arr := range arrays {
+		kinds[arr.Kind]++
+	}
+
+	if kinds[ArrayKindVTable] != 2 {
+		t.Errorf("vtable count = %d, want 2", kinds[ArrayKindVTable])
+	}
+	if kinds[ArrayKindHandlerTable] != 1 {
+		t.Errorf("handler table count = %d, want 1", kinds[ArrayKindHandlerTable])
+	}
+}
+
+// TestFunctionPointerAnalyzer_VariableNameClassification verifies that
+// variable names are correctly classified into array kinds.
+func TestFunctionPointerAnalyzer_VariableNameClassification(t *testing.T) {
+	a := NewFunctionPointerAnalyzer()
+
+	cases := []struct {
+		varName  string
+		wantKind ArrayKind
+	}{
+		{"vtable_MyClass", ArrayKindVTable},
+		{"vptr_Base", ArrayKindVTable},
+		{"itab_Reader", ArrayKindInterfaceTable},
+		{"jump_table", ArrayKindJumpTable},
+		{"handlers", ArrayKindHandlerTable},
+	}
+
+	for _, tc := range cases {
+		sol := &TypeSolution{
+			Types: map[string]ir.Type{
+				tc.varName: ir.ArrayType{
+					Element: ir.FunctionType{ReturnType: ir.VoidType{}},
+					Length:  2,
+				},
+			},
+		}
+
+		arrays := a.DiscoverFunctionPointers(sol)
+		if len(arrays) != 1 {
+			t.Fatalf("varName %q: expected 1 array, got %d", tc.varName, len(arrays))
+		}
+		if arrays[0].Kind != tc.wantKind {
+			t.Errorf("varName %q: kind = %v, want %v", tc.varName, arrays[0].Kind, tc.wantKind)
+		}
+	}
+}
+
+// TestFeedbackLoop_AllArrayKinds verifies that all array kinds are handled
+// correctly and produce appropriate provenance strings.
+func TestFeedbackLoop_AllArrayKinds(t *testing.T) {
+	kinds := []ArrayKind{
+		ArrayKindVTable,
+		ArrayKindHandlerTable,
+		ArrayKindJumpTable,
+		ArrayKindInterfaceTable,
+	}
+
+	for _, kind := range kinds {
+		arr := makeFuncPtrArray(0x1000, []ir.Address{0x2000}, kind)
+		discoverer := &mockDiscoverer{
+			perIterationArrays: [][]FunctionPointerArray{{arr}},
+		}
+		builder := &mockCFGBuilder{}
+
+		loop := NewCyclicFeedbackLoop(discoverer, builder, 10)
+		result, err := loop.Run(emptySol())
+
+		if err != nil {
+			t.Fatalf("kind %v: unexpected error: %v", kind, err)
+		}
+		if result.TotalTargetsResolved != 1 {
+			t.Errorf("kind %v: targets = %d, want 1", kind, result.TotalTargetsResolved)
+		}
+
+		if len(builder.calls) == 0 {
+			t.Fatalf("kind %v: no builder calls", kind)
+		}
+
+		prov := builder.calls[0].provenance
+		kindStr := kind.String()
+		if prov.Metadata["array_kind"] != kindStr {
+			t.Errorf("kind %v: metadata array_kind = %v, want %s",
+				kind, prov.Metadata["array_kind"], kindStr)
+		}
+	}
+}
+
+// TestFeedbackLoop_BuilderErrorDoesNotStopLoop verifies that builder errors
+// are non-fatal and the loop continues processing remaining targets.
+func TestFeedbackLoop_BuilderErrorDoesNotStopLoop(t *testing.T) {
+	arr := makeFuncPtrArray(0x1000, []ir.Address{0x2000, 0x3000, 0x4000}, ArrayKindVTable)
+	discoverer := &mockDiscoverer{
+		perIterationArrays: [][]FunctionPointerArray{{arr}},
+	}
+	builder := &mockCFGBuilder{failOnCall: 2}
+
+	loop := NewCyclicFeedbackLoop(discoverer, builder, 10)
+	result, err := loop.Run(emptySol())
+
+	if err == nil {
+		t.Error("expected error from builder failure")
+	}
+	if result.TotalTargetsResolved != 2 {
+		t.Errorf("targets = %d, want 2 (one failed, two succeeded)", result.TotalTargetsResolved)
+	}
+}
+
+// TestFeedbackLoop_ProvenanceMetadataComplete verifies that all expected
+// metadata fields are present in the provenance.
+func TestFeedbackLoop_ProvenanceMetadataComplete(t *testing.T) {
+	arr := makeFuncPtrArray(0xDEAD, []ir.Address{0x2000}, ArrayKindVTable)
+	discoverer := &mockDiscoverer{
+		perIterationArrays: [][]FunctionPointerArray{{arr}},
+	}
+	builder := &mockCFGBuilder{}
+
+	loop := NewCyclicFeedbackLoop(discoverer, builder, 10)
+	_, _ = loop.Run(emptySol())
+
+	if len(builder.calls) == 0 {
+		t.Fatal("no builder calls")
+	}
+
+	prov := builder.calls[0].provenance
+	requiredFields := []string{"array_kind", "array_address", "origin"}
+	for _, field := range requiredFields {
+		if _, ok := prov.Metadata[field]; !ok {
+			t.Errorf("provenance metadata missing required field: %s", field)
+		}
 	}
 }
