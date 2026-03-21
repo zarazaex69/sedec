@@ -172,7 +172,7 @@ func (s *Solver) SolveWithMaxSMT(constraints []typeinfer.TypeConstraint) (*MaxSM
 	result := opt.Check()
 	if result == z3.CheckUnknown {
 		// z3 timed out or gave up: fall back to greedy confidence-sorted selection
-		return s.greedyFallback(constraints), nil
+		return s.GreedyFallback(constraints), nil
 	}
 	if result == z3.CheckUnsat {
 		// hard constraints are unsatisfiable: this should not happen since we
@@ -289,13 +289,14 @@ func (s *Solver) extractResult(
 	return result
 }
 
-// greedyFallback implements a greedy confidence-sorted constraint selection
+// GreedyFallback implements a greedy confidence-sorted constraint selection
 // used when Z3 times out or returns unknown. it processes constraints in
 // descending confidence order and accepts each constraint if it does not
 // conflict with already-accepted constraints (detected via the Unifier).
 //
 // this is a best-effort approximation of MaxSMT with O(n log n) complexity.
-func (s *Solver) greedyFallback(constraints []typeinfer.TypeConstraint) *MaxSMTResult {
+// exported for direct use when Z3 is unavailable or for testing.
+func (s *Solver) GreedyFallback(constraints []typeinfer.TypeConstraint) *MaxSMTResult {
 	// sort by confidence descending
 	indexed := make([]struct {
 		c   typeinfer.TypeConstraint
