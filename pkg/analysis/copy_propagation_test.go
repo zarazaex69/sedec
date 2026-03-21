@@ -551,3 +551,69 @@ func TestCopyProp_BranchConditionReplaced(t *testing.T) {
 		t.Errorf("expected branch condition y_1, got %s", condVar.Var.String())
 	}
 }
+
+func TestCopyProp_IntrinsicArgsReplaced(t *testing.T) {
+	x1 := ssaVar("x", 1)
+	y1 := ssaVar("y", 1)
+	z1 := ssaVar("z", 1)
+
+	fn := copyPropFn(
+		&ir.Assign{Dest: x1, Source: &ir.VariableExpr{Var: y1}},
+		&ir.Intrinsic{
+			Dest: &z1,
+			Name: "bswap",
+			Args: []ir.Expression{&ir.VariableExpr{Var: x1}},
+		},
+	)
+
+	result, err := PropagateCopies(fn, nil, nil)
+	if err != nil {
+		t.Fatalf("PropagateCopies failed: %v", err)
+	}
+
+	if result.CopiesFound != 1 {
+		t.Errorf("expected 1 copy, got %d", result.CopiesFound)
+	}
+	if result.ReplacedCount < 1 {
+		t.Errorf("expected at least 1 replacement, got %d", result.ReplacedCount)
+	}
+
+	intr := fn.Blocks[0].Instructions[1].(*ir.Intrinsic) //nolint:forcetypeassert
+	argVar := intr.Args[0].(*ir.VariableExpr)            //nolint:forcetypeassert
+	if argVar.Var.Name != "y" || argVar.Var.Version != 1 {
+		t.Errorf("expected intrinsic arg y_1, got %s", argVar.Var.String())
+	}
+}
+
+func TestCopyProp_LoadExprAddressReplaced(t *testing.T) {
+	x1 := ssaVar("x", 1)
+	y1 := ssaVar("y", 1)
+	z1 := ssaVar("z", 1)
+
+	fn := copyPropFn(
+		&ir.Assign{Dest: x1, Source: &ir.VariableExpr{Var: y1}},
+		&ir.Assign{
+			Dest: z1,
+			Source: &ir.LoadExpr{
+				Address: &ir.VariableExpr{Var: x1},
+				Size:    ir.Size8,
+			},
+		},
+	)
+
+	result, err := PropagateCopies(fn, nil, nil)
+	if err != nil {
+		t.Fatalf("PropagateCopies failed: %v", err)
+	}
+
+	if result.ReplacedCount < 1 {
+		t.Errorf("expected at least 1 replacement, got %d", result.ReplacedCount)
+	}
+
+	assign := fn.Blocks[0].Instructions[1].(*ir.Assign) //nolint:forcetypeassert
+	loadExpr := assign.Source.(*ir.LoadExpr)            //nolint:forcetypeassert
+	addrVar := loadExpr.Address.(*ir.VariableExpr)      //nolint:forcetypeassert
+	if addrVar.Var.Name != "y" || addrVar.Var.Version != 1 {
+		t.Errorf("expected load address y_1, got %s", addrVar.Var.String())
+	}
+}

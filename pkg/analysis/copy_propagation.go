@@ -230,6 +230,13 @@ func (p *CopyPropagator) rewriteInstruction(instr ir.IRInstruction, resolved map
 			}
 		}
 
+	case *ir.Intrinsic:
+		for j, arg := range i.Args {
+			newArg, n := rewriteExpr(arg, resolved)
+			i.Args[j] = newArg
+			count += n
+		}
+
 	case *ir.Jump:
 		// no variable uses in unconditional jumps
 	}
@@ -293,6 +300,16 @@ func rewriteExpr(expr ir.Expression, resolved map[VarKey]VarKey) (ir.Expression,
 	default:
 		// ConstantExpr and other non-variable expressions: no rewrite needed
 		return expr, 0
+
+	case *ir.LoadExpr:
+		newAddr, n := rewriteExpr(e.Address, resolved)
+		e.Address = newAddr
+		return e, n
+
+	case ir.LoadExpr:
+		newAddr, n := rewriteExpr(e.Address, resolved)
+		e.Address = newAddr
+		return &e, n
 	}
 }
 
