@@ -703,6 +703,333 @@ func TestSteensgaard_SortStrings(t *testing.T) {
 }
 
 // ============================================================================
+// extractFromCall tests
+// ============================================================================
+
+func TestExtractPointerConstraints_Call_WithDest(t *testing.T) {
+	ptrI64 := ir.PointerType{Pointee: ir.IntType{Width: ir.Size8, Signed: false}}
+	dest := varPtr("result", ir.IntType{Width: ir.Size8, Signed: false})
+	arg0 := varPtr("arg0", ir.IntType{Width: ir.Size8, Signed: false})
+	arg1 := varInt("arg1")
+	target := ir.Variable{Name: "callee", Type: ir.FunctionType{
+		ReturnType: ptrI64,
+		Parameters: []ir.Type{ptrI64, ir.IntType{Width: ir.Size8, Signed: false}},
+	}}
+
+	fn := buildFn("test_call_dest", []ir.IRInstruction{
+		ir.Call{
+			Dest:   &dest,
+			Target: ir.VariableExpr{Var: target},
+			Args:   []ir.Variable{arg0, arg1},
+		},
+	})
+
+	cs := ExtractPointerConstraints(fn)
+
+	foundRetCopy := false
+	foundParam0 := false
+	foundParam1 := false
+	for _, c := range cs {
+		if c.Kind == PtrConstraintCopy && c.LHS == "result" && c.RHS == "$ret_callee" {
+			foundRetCopy = true
+		}
+		if c.Kind == PtrConstraintCopy && c.LHS == "$param_callee_0" && c.RHS == "arg0" {
+			foundParam0 = true
+		}
+		if c.Kind == PtrConstraintCopy && c.LHS == "$param_callee_1" && c.RHS == "arg1" {
+			foundParam1 = true
+		}
+	}
+	if !foundRetCopy {
+		t.Errorf("expected copy constraint from $ret_callee to result, got %v", cs)
+	}
+	if !foundParam0 {
+		t.Errorf("expected copy constraint from arg0 to $param_callee_0, got %v", cs)
+	}
+	if !foundParam1 {
+		t.Errorf("expected copy constraint from arg1 to $param_callee_1, got %v", cs)
+	}
+}
+
+func TestExtractPointerConstraints_Call_VoidReturn(t *testing.T) {
+	target := ir.Variable{Name: "sink", Type: ir.FunctionType{
+		ReturnType: ir.VoidType{},
+		Parameters: []ir.Type{ir.IntType{Width: ir.Size8, Signed: false}},
+	}}
+	arg := varInt("val")
+
+	fn := buildFn("test_call_void", []ir.IRInstruction{
+		ir.Call{
+			Dest:   nil,
+			Target: ir.VariableExpr{Var: target},
+			Args:   []ir.Variable{arg},
+		},
+	})
+
+	cs := ExtractPointerConstraints(fn)
+
+	for _, c := range cs {
+		if c.LHS == "result" || c.RHS == "$ret_sink" {
+			t.Errorf("void call should not produce return copy constraint, got %v", c)
+		}
+	}
+
+	foundParam := false
+	for _, c := range cs {
+		if c.Kind == PtrConstraintCopy && c.LHS == "$param_sink_0" && c.RHS == "val" {
+			foundParam = true
+		}
+	}
+	if !foundParam {
+		t.Errorf("expected parameter copy constraint for void call, got %v", cs)
+	}
+}
+
+// ============================================================================
+// extractFromAssign BinaryOp tests
+// ============================================================================
+
+func TestExtractPointerConstraints_Assign_BinaryOp(t *testing.T) {
+	ptrI64 := ir.PointerType{Pointee: ir.IntType{Width: ir.Size8, Signed: false}}
+	base := ir.Variable{Name: "base", Type: ptrI64}
+	offset := ir.Variable{Name: "offset", Type: ir.IntType{Width: ir.Size8, Signed: false}}
+	dest := ir.Variable{Name: "adjusted", Type: ptrI64}
+
+	fn := buildFn("test_binop", []ir.IRInstruction{
+		ir.Assign{
+			Dest: dest,
+			Source: ir.BinaryOp{
+				Op:    ir.BinOpAdd,
+				Left:  ir.VariableExpr{Var: base},
+				Right: ir.VariableExpr{Var: offset},
+			},
+		},
+	})
+
+	cs := ExtractPointerConstraints(fn)
+
+	found := false
+	for _, c := range cs {
+		if c.Kind == PtrConstraintCopy && c.LHS == "adjusted" && c.RHS == "base" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected copy constraint from base to adjusted for pointer arithmetic, got %v", cs)
+	}
+}
+
+// ============================================================================
+// exprRootVar Cast path test
+// ============================================================================
+
+func TestExtractPointerConstraints_Assign_NonPointerCast(t *testing.T) {
+	src := varInt("src_val")
+	dest := varInt("dest_val")
+
+	fn := buildFn("test_nonptr_cast", []ir.IRInstruction{
+		ir.Assign{
+			Dest: dest,
+			Source: ir.Cast{
+				Expr:       ir.VariableExpr{Var: src},
+				TargetType: ir.IntType{Width: ir.Size4, Signed: true},
+			},
+		},
+	})
+
+	cs := ExtractPointerConstraints(fn)
+
+	found := false
+	for _, c := range cs {
+		if c.Kind == PtrConstraintCopy && c.LHS == "dest_val" && c.RHS == "src_val" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected copy constraint for non-pointer cast, got %v", cs)
+	}
+}
+
+// ============================================================================
+// exprRootVar nested Cast in BinaryOp
+// ============================================================================
+
+func TestExprRootVar_NestedCast(t *testing.T) {
+	inner := ir.Variable{Name: "inner", Type: ir.IntType{Width: ir.Size8, Signed: false}}
+	expr := ir.Cast{
+		Expr:       ir.VariableExpr{Var: inner},
+		TargetType: ir.IntType{Width: ir.Size4, Signed: true},
+	}
+
+	got := exprRootVar(expr)
+	if got != "inner" {
+		t.Errorf("expected exprRootVar to extract 'inner' from Cast, got %q", got)
+	}
+}
+
+func TestExprRootVar_Nil(t *testing.T) {
+	got := exprRootVar(nil)
+	if got != "" {
+		t.Errorf("expected empty string for nil expression, got %q", got)
+	}
+}
+
+func TestExprRootVar_Constant(t *testing.T) {
+	expr := ir.ConstantExpr{Value: ir.IntConstant{Value: 42}}
+	got := exprRootVar(expr)
+	if got != "" {
+		t.Errorf("expected empty string for constant expression, got %q", got)
+	}
+}
+
+// ============================================================================
+// union edge case: higher rank left absorbs lower rank right
+// ============================================================================
+
+func TestSteensgaard_Union_HigherRankLeft(t *testing.T) {
+	a := NewSteensgaardAnalyzer()
+
+	n0 := a.newNode("n0")
+	n1 := a.newNode("n1")
+	n2 := a.newNode("n2")
+
+	a.union(n0, n1)
+
+	root := a.union(n0, n2)
+	rootNode := a.nodes[a.find(root)]
+	if rootNode.rank < 1 {
+		t.Errorf("expected root rank >= 1, got %d", rootNode.rank)
+	}
+
+	if a.find(n2) != a.find(n0) {
+		t.Error("n2 should be in the same equivalence class as n0 after union")
+	}
+}
+
+// ============================================================================
+// processLoad edge case: both x and yTarget have existing targets
+// ============================================================================
+
+func TestSteensgaard_Load_BothHaveTargets(t *testing.T) {
+	a := NewSteensgaardAnalyzer()
+
+	a.processAddressOf("x", "x_target")
+	a.processAddressOf("y", "y_deref")
+	a.processAddressOf("y_deref", "y_deep")
+
+	a.processLoad("x", "y")
+
+	ptsX := a.PointsTo("x")
+	if len(ptsX) == 0 {
+		t.Error("expected x to have a points-to set after load with both targets existing")
+	}
+}
+
+// ============================================================================
+// snapshotsEqual edge case: different lengths
+// ============================================================================
+
+func TestSnapshotsEqual_DifferentLengths(t *testing.T) {
+	a := map[string][2]int{"x": {0, 1}}
+	b := map[string][2]int{"x": {0, 1}, "y": {2, 3}}
+
+	if snapshotsEqual(a, b) {
+		t.Error("expected false for snapshots with different lengths")
+	}
+}
+
+// ============================================================================
+// Assign with constant source (no variable to extract)
+// ============================================================================
+
+func TestExtractPointerConstraints_Assign_ConstantSource(t *testing.T) {
+	dest := varInt("dest")
+
+	fn := buildFn("test_const_assign", []ir.IRInstruction{
+		ir.Assign{
+			Dest:   dest,
+			Source: ir.ConstantExpr{Value: ir.IntConstant{Value: 0}},
+		},
+	})
+
+	cs := ExtractPointerConstraints(fn)
+	if len(cs) != 0 {
+		t.Errorf("expected no constraints for constant assignment, got %v", cs)
+	}
+}
+
+// ============================================================================
+// Branch and Jump instructions produce no constraints
+// ============================================================================
+
+func TestExtractPointerConstraints_BranchAndJump(t *testing.T) {
+	cond := varInt("cond")
+
+	fn := buildFn("test_branch_jump", []ir.IRInstruction{
+		ir.Branch{
+			Condition:   ir.VariableExpr{Var: cond},
+			TrueTarget:  1,
+			FalseTarget: 2,
+		},
+		ir.Jump{Target: 3},
+		ir.Return{},
+	})
+
+	cs := ExtractPointerConstraints(fn)
+	if len(cs) != 0 {
+		t.Errorf("expected no constraints for branch/jump/return, got %v", cs)
+	}
+}
+
+// ============================================================================
+// Cast with constant inner expression (no variable)
+// ============================================================================
+
+func TestExtractPointerConstraints_Assign_CastConstant(t *testing.T) {
+	ptrI64 := ir.PointerType{Pointee: ir.IntType{Width: ir.Size8, Signed: false}}
+	dest := varPtr("dest", ir.IntType{Width: ir.Size8, Signed: false})
+
+	fn := buildFn("test_cast_const", []ir.IRInstruction{
+		ir.Assign{
+			Dest: dest,
+			Source: ir.Cast{
+				Expr:       ir.ConstantExpr{Value: ir.IntConstant{Value: 0x1000}},
+				TargetType: ptrI64,
+			},
+		},
+	})
+
+	cs := ExtractPointerConstraints(fn)
+	if len(cs) != 0 {
+		t.Errorf("expected no constraints for cast of constant to pointer, got %v", cs)
+	}
+}
+
+// ============================================================================
+// BinaryOp with constant left operand (no base pointer)
+// ============================================================================
+
+func TestExtractPointerConstraints_Assign_BinaryOp_ConstantBase(t *testing.T) {
+	dest := varInt("dest")
+
+	fn := buildFn("test_binop_const", []ir.IRInstruction{
+		ir.Assign{
+			Dest: dest,
+			Source: ir.BinaryOp{
+				Op:    ir.BinOpAdd,
+				Left:  ir.ConstantExpr{Value: ir.IntConstant{Value: 10}},
+				Right: ir.ConstantExpr{Value: ir.IntConstant{Value: 20}},
+			},
+		},
+	})
+
+	cs := ExtractPointerConstraints(fn)
+	if len(cs) != 0 {
+		t.Errorf("expected no constraints for binary op with constant operands, got %v", cs)
+	}
+}
+
+// ============================================================================
 // helpers
 // ============================================================================
 
