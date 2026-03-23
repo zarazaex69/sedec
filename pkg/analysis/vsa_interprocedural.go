@@ -712,6 +712,59 @@ func resolveCalleeName(target ir.Expression) string {
 }
 
 // ============================================================================
+// Program-level interprocedural VSA
+// ============================================================================
+
+// FunctionInput bundles the artifacts needed to analyse a single function.
+type FunctionInput struct {
+	Function *ir.Function
+	CFG      *cfg.CFG
+	DomTree  *cfg.DominatorTree
+}
+
+// ProgramVSAResult holds the results of analysing an entire program.
+type ProgramVSAResult struct {
+	FunctionResults map[string]*VSAResult
+	SummaryDB       *FunctionSummaryDB
+}
+
+// AnalyzeProgram performs interprocedural VSA over a set of functions in
+// bottom-up call graph order.  Functions that appear earlier in the slice are
+// analysed first; the caller is responsible for providing a topologically
+// sorted order (callees before callers).
+//
+// If a function fails analysis it is skipped and its summary defaults to top
+// for all return values, so callers conservatively lose precision rather than
+// aborting the entire program analysis.
+func (a *InterproceduralVSAAnalyzer) AnalyzeProgram(
+	functions []FunctionInput,
+) (*ProgramVSAResult, error) {
+	progResult := &ProgramVSAResult{
+		FunctionResults: make(map[string]*VSAResult, len(functions)),
+		SummaryDB:       a.summDB,
+	}
+
+	for _, fi := range functions {
+		if fi.Function == nil {
+			continue
+		}
+		result, err := a.AnalyzeFunction(fi.Function, fi.CFG, fi.DomTree)
+		if err != nil {
+			a.summDB.Store(fi.Function.Name, &FunctionSummary{
+				FunctionName:   fi.Function.Name,
+				ParamValueSets: make(map[int]*ValueSet),
+				ReturnValueSet: NewValueSetTop(),
+				Converged:      false,
+			})
+			continue
+		}
+		progResult.FunctionResults[fi.Function.Name] = result
+	}
+
+	return progResult, nil
+}
+
+// ============================================================================
 // VSAAnalyzer: summary-aware call handling
 // ============================================================================
 
