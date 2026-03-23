@@ -588,7 +588,6 @@ func pointsToSetsIntersect(ptsA, ptsB []string) bool {
 // for additional store/load dependency refinement when available, but the core
 // pointer assignment tracking works directly on IR instructions.
 func (a *AliasAnalyzer) computeFlowSensitiveAliases(result *AliasAnalysisResult) {
-	// traverse blocks in reverse postorder for deterministic processing
 	rpo := a.reversePostOrder()
 
 	for _, blockID := range rpo {
@@ -600,8 +599,6 @@ func (a *AliasAnalyzer) computeFlowSensitiveAliases(result *AliasAnalysisResult)
 		for instrIdx, instr := range block.Instructions {
 			point := ProgramPoint{BlockID: blockID, InstrIdx: instrIdx}
 
-			// at assignment instructions, check if the assigned value
-			// creates a must-alias relationship with the source
 			switch typed := instr.(type) {
 			case *ir.Assign:
 				a.refineAliasAtAssign(typed, point, result)
@@ -609,12 +606,93 @@ func (a *AliasAnalyzer) computeFlowSensitiveAliases(result *AliasAnalysisResult)
 				a.refineAliasAtAssign(&typed, point, result)
 			}
 
-			// at phi-nodes, the destination may-aliases all sources
 			switch typed := instr.(type) {
 			case *ir.Phi:
 				a.refineAliasAtPhi(typed, point, result)
 			case ir.Phi:
 				a.refineAliasAtPhi(&typed, point, result)
+			}
+		}
+	}
+
+	// Memory SSA refinement: use def-use chains to identify loads that
+	// read from the same memory version as a store, establishing must-alias
+	// between the store address and load address at those program points.
+	a.refineWithMemorySSA(result)
+}
+
+// refineWithMemorySSA uses Memory SSA def-use chains to refine alias information.
+// when a MemoryDef (store) has MemoryUse (load) consumers reading the same version,
+// and no intervening MemoryDef exists, the store and load addresses must-alias
+// if they access the same memory version without any clobbering def in between.
+func (a *AliasAnalyzer) refineWithMemorySSA(result *AliasAnalysisResult) {
+	if a.memSSA == nil {
+		return
+	}
+
+	for defVersion, uses := range a.memSSA.DefUseChains {
+		var defInstr ir.IRInstruction
+		for _, defs := range a.memSSA.Defs {
+			for _, d := range defs {
+				if d.Version == defVersion {
+					defInstr = d.Instruction
+					break
+				}
+			}
+			if defInstr != nil {
+				break
+			}
+		}
+		if defInstr == nil {
+			continue
+		}
+
+		storeAddr := extractMemoryAddress(defInstr)
+		if storeAddr == nil {
+			continue
+		}
+		storeVars := extractVarsFromExpression(storeAddr)
+		if len(storeVars) == 0 {
+			continue
+		}
+
+		for _, use := range uses {
+			loadAddr := extractMemoryAddress(use.Instruction)
+			if loadAddr == nil {
+				continue
+			}
+			loadVars := extractVarsFromExpression(loadAddr)
+			if len(loadVars) == 0 {
+				continue
+			}
+
+			// find the instruction index for this use in its block
+			useBlock, exists := a.function.Blocks[use.Block]
+			if !exists {
+				continue
+			}
+			useIdx := -1
+			for idx, bi := range useBlock.Instructions {
+				if bi == use.Instruction {
+					useIdx = idx
+					break
+				}
+			}
+			if useIdx < 0 {
+				continue
+			}
+
+			usePoint := ProgramPoint{BlockID: use.Block, InstrIdx: useIdx}
+
+			// the load reads from the exact memory version produced by the store.
+			// if both use the same single address variable, they must-alias at this point.
+			for _, sv := range storeVars {
+				for _, lv := range loadVars {
+					if sv.Name == lv.Name && sv.Version == lv.Version {
+						pointSet := a.getOrCreatePointSet(usePoint, result)
+						pointSet.Set(sv, lv, AliasMust)
+					}
+				}
 			}
 		}
 	}
@@ -818,7 +896,7 @@ func (k MemoryDependencyKind) String() string {
 // requirements: 25.6
 func QueryMemoryDependency(
 	instrA, instrB ir.IRInstruction,
-	pointA, _ ProgramPoint,
+	pointA, pointB ProgramPoint,
 	aliasResult *AliasAnalysisResult,
 ) MemoryDependencyKind {
 	addrA := extractMemoryAddress(instrA)
@@ -849,10 +927,12 @@ func QueryMemoryDependency(
 	worstCase := MemDepNone
 	for _, vA := range varsA {
 		for _, vB := range varsB {
-			kind := aliasResult.MayAliasAt(pointA, vA, vB)
-			if kind {
-				mustKind := aliasResult.MustAliasAt(pointA, vA, vB)
-				if mustKind {
+			mayA := aliasResult.MayAliasAt(pointA, vA, vB)
+			mayB := aliasResult.MayAliasAt(pointB, vA, vB)
+			if mayA || mayB {
+				mustA := aliasResult.MustAliasAt(pointA, vA, vB)
+				mustB := aliasResult.MustAliasAt(pointB, vA, vB)
+				if mustA || mustB {
 					return MemDepMust
 				}
 				worstCase = MemDepMay

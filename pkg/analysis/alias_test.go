@@ -5,6 +5,7 @@ import (
 
 	"github.com/zarazaex69/sedec/pkg/cfg"
 	"github.com/zarazaex69/sedec/pkg/ir"
+	"github.com/zarazaex69/sedec/pkg/ssa"
 )
 
 // ============================================================================
@@ -713,5 +714,237 @@ func TestPointsToSetsIntersect(t *testing.T) {
 				t.Errorf("pointsToSetsIntersect(%v, %v) = %v, want %v", tt.a, tt.b, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestAliasAnalysis_MemorySSAIntegration tests that Memory SSA def-use chains
+// refine alias information at load points.
+func TestAliasAnalysis_MemorySSAIntegration(t *testing.T) {
+	i32 := ir.IntType{Width: ir.Size4, Signed: true}
+	p1 := ptrVar("p", 1, i32)
+
+	storeInstr := &ir.Store{
+		Address: &ir.VariableExpr{Var: p1},
+		Value:   intConst(42),
+		Size:    ir.Size4,
+	}
+	loadInstr := &ir.Load{
+		Dest:    ssaVar("v", 1),
+		Address: &ir.VariableExpr{Var: p1},
+		Size:    ir.Size4,
+	}
+
+	fn := &ir.Function{
+		Name: "test_memssa_integration",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					storeInstr,
+					loadInstr,
+				},
+				Predecessors: []ir.BlockID{},
+				Successors:   []ir.BlockID{},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	cfgGraph := makeSimpleCFG()
+	domTree := makeSimpleDomTree(cfgGraph)
+
+	memVer1 := ssa.MemoryVersion{ID: 1, DefSite: 0}
+	memSSA := ssa.NewMemorySSAInfo()
+	memSSA.Defs[0] = []*ssa.MemoryDef{
+		{
+			Version:     memVer1,
+			PrevVersion: ssa.MemoryVersion{ID: 0, DefSite: 0},
+			Instruction: storeInstr,
+			Block:       0,
+		},
+	}
+	memSSA.Uses[0] = []*ssa.MemoryUse{
+		{
+			Version:     memVer1,
+			Instruction: loadInstr,
+			Block:       0,
+		},
+	}
+	memSSA.DefUseChains[memVer1] = []*ssa.MemoryUse{
+		{
+			Version:     memVer1,
+			Instruction: loadInstr,
+			Block:       0,
+		},
+	}
+
+	result, err := PerformAliasAnalysis(fn, cfgGraph, domTree, nil, memSSA)
+	if err != nil {
+		t.Fatalf("PerformAliasAnalysis failed: %v", err)
+	}
+
+	loadPoint := ProgramPoint{BlockID: 0, InstrIdx: 1}
+	if !result.MustAliasAt(loadPoint, p1, p1) {
+		t.Error("same pointer through Memory SSA def-use chain should must-alias at load point")
+	}
+}
+
+// TestAliasAnalysis_PhiFlowSensitive tests flow-sensitive alias refinement at phi-nodes.
+func TestAliasAnalysis_PhiFlowSensitive(t *testing.T) {
+	i32 := ir.IntType{Width: ir.Size4, Signed: true}
+	p1 := ptrVar("p", 1, i32)
+	q1 := ptrVar("q", 1, i32)
+	r1 := ptrVar("r", 1, i32)
+
+	fn := &ir.Function{
+		Name: "test_phi_flow",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Phi{
+						Dest: r1,
+						Sources: []ir.PhiSource{
+							{Block: 1, Var: p1},
+							{Block: 2, Var: q1},
+						},
+					},
+					&ir.Return{},
+				},
+				Predecessors: []ir.BlockID{1, 2},
+				Successors:   []ir.BlockID{},
+			},
+			1: {
+				ID: 1,
+				Instructions: []ir.IRInstruction{
+					&ir.Assign{Dest: p1, Source: ptrVarExpr("x", 0, i32)},
+				},
+				Predecessors: []ir.BlockID{},
+				Successors:   []ir.BlockID{0},
+			},
+			2: {
+				ID: 2,
+				Instructions: []ir.IRInstruction{
+					&ir.Assign{Dest: q1, Source: ptrVarExpr("y", 0, i32)},
+				},
+				Predecessors: []ir.BlockID{},
+				Successors:   []ir.BlockID{0},
+			},
+		},
+		EntryBlock: 1,
+	}
+
+	multiBlockCFG := &cfg.CFG{
+		Blocks: map[cfg.BlockID]*cfg.BasicBlock{
+			0: {ID: 0, Predecessors: []cfg.BlockID{1, 2}, Successors: []cfg.BlockID{}},
+			1: {ID: 1, Predecessors: []cfg.BlockID{}, Successors: []cfg.BlockID{0}},
+			2: {ID: 2, Predecessors: []cfg.BlockID{}, Successors: []cfg.BlockID{0}},
+		},
+		Entry: 1,
+		Exits: []cfg.BlockID{0},
+	}
+
+	domTree := cfg.NewDominatorTree(multiBlockCFG)
+	domTree.Idom = map[cfg.BlockID]cfg.BlockID{0: 1, 1: 1, 2: 1}
+	domTree.Children = map[cfg.BlockID][]cfg.BlockID{1: {0, 2}, 0: {}, 2: {}}
+
+	result, err := PerformAliasAnalysis(fn, multiBlockCFG, domTree, nil, nil)
+	if err != nil {
+		t.Fatalf("PerformAliasAnalysis failed: %v", err)
+	}
+
+	phiPoint := ProgramPoint{BlockID: 0, InstrIdx: 0}
+	if result.NoAliasAt(phiPoint, r1, p1) {
+		t.Error("phi destination r_1 should may-alias source p_1 at phi point")
+	}
+	if result.NoAliasAt(phiPoint, r1, q1) {
+		t.Error("phi destination r_1 should may-alias source q_1 at phi point")
+	}
+}
+
+// TestAliasAnalysis_MemoryDependencyKindString tests MemoryDependencyKind.String().
+func TestAliasAnalysis_MemoryDependencyKindString(t *testing.T) {
+	tests := []struct {
+		kind MemoryDependencyKind
+		want string
+	}{
+		{MemDepNone, "no-dep"},
+		{MemDepMay, "may-dep"},
+		{MemDepMust, "must-dep"},
+	}
+	for _, tt := range tests {
+		if got := tt.kind.String(); got != tt.want {
+			t.Errorf("MemoryDependencyKind(%d).String() = %q, want %q", tt.kind, got, tt.want)
+		}
+	}
+}
+
+// TestAliasAnalysis_NonMemoryInstructions tests QueryMemoryDependency with non-memory instructions.
+func TestAliasAnalysis_NonMemoryInstructions(t *testing.T) {
+	assignA := &ir.Assign{
+		Dest:   ssaVar("x", 1),
+		Source: intConst(10),
+	}
+	assignB := &ir.Assign{
+		Dest:   ssaVar("y", 1),
+		Source: intConst(20),
+	}
+
+	emptyResult := &AliasAnalysisResult{
+		GlobalAliases: NewAliasSet(),
+		PointAliases:  make(map[ProgramPoint]*AliasSet),
+	}
+
+	p0 := ProgramPoint{BlockID: 0, InstrIdx: 0}
+	p1 := ProgramPoint{BlockID: 0, InstrIdx: 1}
+
+	dep := QueryMemoryDependency(assignA, assignB, p0, p1, emptyResult)
+	if dep != MemDepNone {
+		t.Errorf("non-memory instructions should have no dependency, got %v", dep)
+	}
+}
+
+// TestAliasAnalysis_PerformAliasAnalysisTopLevel tests the top-level entry point.
+func TestAliasAnalysis_PerformAliasAnalysisTopLevel(t *testing.T) {
+	i32 := ir.IntType{Width: ir.Size4, Signed: true}
+	f64 := ir.FloatType{Width: ir.Size8}
+	p1 := ptrVar("p", 1, i32)
+	q1 := ptrVar("q", 1, f64)
+
+	fn := &ir.Function{
+		Name: "test_top_level",
+		Blocks: map[ir.BlockID]*ir.BasicBlock{
+			0: {
+				ID: 0,
+				Instructions: []ir.IRInstruction{
+					&ir.Assign{Dest: p1, Source: ptrVarExpr("x", 0, i32)},
+					&ir.Assign{Dest: q1, Source: ptrVarExpr("y", 0, f64)},
+					&ir.Return{},
+				},
+				Predecessors: []ir.BlockID{},
+				Successors:   []ir.BlockID{},
+			},
+		},
+		EntryBlock: 0,
+	}
+
+	cfgGraph := makeSimpleCFG()
+	domTree := makeSimpleDomTree(cfgGraph)
+
+	result, err := PerformAliasAnalysis(fn, cfgGraph, domTree, nil, nil)
+	if err != nil {
+		t.Fatalf("PerformAliasAnalysis failed: %v", err)
+	}
+
+	if len(result.PointerVars) == 0 {
+		t.Error("expected pointer variables to be collected")
+	}
+
+	if result.GlobalAliases == nil {
+		t.Error("expected global aliases to be initialized")
+	}
+
+	if result.PointAliases == nil {
+		t.Error("expected point aliases to be initialized")
 	}
 }
