@@ -8,37 +8,37 @@ package abi
 // in this analysis, so we normalize all aliases to the 64-bit form.
 func canonicalizeRegister(name string) string {
 	switch name {
-	case regRax, "eax", "ax", "al", "ah":
+	case regRax, subregEax, "ax", "al", "ah":
 		return regRax
-	case regRbx, "ebx", "bx", "bl", "bh":
+	case regRbx, subregEbx, "bx", "bl", "bh":
 		return regRbx
-	case regRcx, "ecx", "cx", "cl", "ch":
+	case regRcx, subregEcx, "cx", "cl", "ch":
 		return regRcx
-	case regRdx, "edx", "dx", "dl", "dh":
+	case regRdx, subregEdx, "dx", "dl", "dh":
 		return regRdx
-	case regRsi, "esi", "si", "sil":
+	case regRsi, subregEsi, "si", subregSil:
 		return regRsi
-	case regRdi, "edi", "di", "dil":
+	case regRdi, subregEdi, "di", subregDil:
 		return regRdi
-	case regRbp, "ebp", "bp", "bpl":
+	case regRbp, subregEbp, "bp", subregBpl:
 		return regRbp
-	case regRsp, "esp", "sp", "spl":
+	case regRsp, subregEsp, "sp", subregSpl:
 		return regRsp
-	case "r8", "r8d", "r8w", "r8b":
+	case "r8", subregR8d, subregR8w, subregR8b:
 		return "r8"
-	case "r9", "r9d", "r9w", "r9b":
+	case "r9", subregR9d, subregR9w, subregR9b:
 		return "r9"
-	case regR10, "r10d", "r10w", "r10b":
+	case regR10, subregR10d, subregR10w, subregR10b:
 		return regR10
-	case regR11, "r11d", "r11w", "r11b":
+	case regR11, subregR11d, subregR11w, subregR11b:
 		return regR11
-	case regR12, "r12d", "r12w", "r12b":
+	case regR12, subregR12d, subregR12w, subregR12b:
 		return regR12
-	case regR13, "r13d", "r13w", "r13b":
+	case regR13, subregR13d, subregR13w, subregR13b:
 		return regR13
-	case regR14, "r14d", "r14w", "r14b":
+	case regR14, subregR14d, subregR14w, subregR14b:
 		return regR14
-	case regR15, "r15d", "r15w", "r15b":
+	case regR15, subregR15d, subregR15w, subregR15b:
 		return regR15
 	case regXmm0:
 		return regXmm0

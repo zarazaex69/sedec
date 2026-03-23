@@ -15,28 +15,28 @@ func RegisterWidthFromName(name string) ir.Size {
 	switch name {
 	// 8-bit registers
 	case "al", "ah", "bl", "bh", "cl", "ch", "dl", "dh",
-		"sil", "dil", "bpl", "spl",
-		"r8b", "r9b", "r10b", "r11b", "r12b", "r13b", "r14b", "r15b":
+		subregSil, subregDil, subregBpl, subregSpl,
+		subregR8b, subregR9b, subregR10b, subregR11b, subregR12b, subregR13b, subregR14b, subregR15b:
 		return ir.Size1
 
 	// 16-bit registers
 	case "ax", "bx", "cx", "dx", "si", "di", "bp", "sp",
-		"r8w", "r9w", "r10w", "r11w", "r12w", "r13w", "r14w", "r15w":
+		subregR8w, subregR9w, subregR10w, subregR11w, subregR12w, subregR13w, subregR14w, subregR15w:
 		return ir.Size2
 
 	// 32-bit registers
-	case "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp",
-		"r8d", "r9d", "r10d", "r11d", "r12d", "r13d", "r14d", "r15d":
+	case subregEax, subregEbx, subregEcx, subregEdx, subregEsi, subregEdi, subregEbp, subregEsp,
+		subregR8d, subregR9d, subregR10d, subregR11d, subregR12d, subregR13d, subregR14d, subregR15d:
 		return ir.Size4
 
 	// 64-bit registers
-	case "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp",
-		"r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
+	case regRax, regRbx, regRcx, regRdx, regRsi, regRdi, regRbp, regRsp,
+		"r8", "r9", regR10, regR11, regR12, regR13, regR14, regR15,
 		"rip":
 		return ir.Size8
 
 	// xmm registers (128-bit)
-	case "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7",
+	case regXmm0, regXmm1, regXmm2, regXmm3, regXmm4, regXmm5, regXmm6, regXmm7,
 		"xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15":
 		return ir.Size16
 
