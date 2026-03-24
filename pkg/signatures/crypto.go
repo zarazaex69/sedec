@@ -344,6 +344,20 @@ var crc32Table = func() []byte {
 }()
 
 // ============================================================================
+// rc4 constants
+// ============================================================================
+
+// rc4 identity permutation (initial state of S-box before KSA).
+// the first 32 bytes of the 0..255 sequence are sufficient for identification.
+var rc4IdentityPermutation = func() []byte {
+	b := make([]byte, 32)
+	for i := range b {
+		b[i] = byte(i)
+	}
+	return b
+}()
+
+// ============================================================================
 // rsa / prime detection constants
 // ============================================================================
 
@@ -496,6 +510,14 @@ var builtinCryptoSignatures = []*CryptoSignature{
 		Name:        "RSA Public Exponent 65537",
 		Bytes:       rsaPublicExponents[0],
 		MinMatchLen: 4,
+	},
+	// rc4 identity permutation (initial S-box state)
+	{
+		Algorithm:   CryptoAlgorithmRC4,
+		Kind:        CryptoConstantLookupTable,
+		Name:        "RC4 Identity Permutation",
+		Bytes:       rc4IdentityPermutation,
+		MinMatchLen: 16,
 	},
 }
 

@@ -538,6 +538,170 @@ func TestCountPrefixMatch(t *testing.T) {
 }
 
 // ============================================================================
+// DES constants detection
+// ============================================================================
+
+func TestScanData_DESIPTable_Detected(t *testing.T) {
+	scanner := NewCryptoScanner()
+
+	data := make([]byte, 256)
+	copy(data[32:], desIPTable)
+
+	matches := scanner.ScanData(data)
+	found := false
+	for _, m := range matches {
+		if m.Signature.Algorithm == CryptoAlgorithmDES && m.Signature.Kind == CryptoConstantLookupTable {
+			found = true
+			if m.Offset != 32 {
+				t.Errorf("expected offset 32, got %d", m.Offset)
+			}
+		}
+	}
+	if !found {
+		t.Error("DES Initial Permutation Table not detected")
+	}
+}
+
+func TestScanData_DESSBox1_Detected(t *testing.T) {
+	scanner := NewCryptoScanner()
+
+	data := make([]byte, 256)
+	copy(data[16:], desSBox1)
+
+	matches := scanner.ScanData(data)
+	found := false
+	for _, m := range matches {
+		if m.Signature.Algorithm == CryptoAlgorithmDES && m.Signature.Kind == CryptoConstantSBox {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("DES S-Box 1 not detected")
+	}
+}
+
+// ============================================================================
+// Blowfish constants detection
+// ============================================================================
+
+func TestScanData_BlowfishPArray_Detected(t *testing.T) {
+	scanner := NewCryptoScanner()
+
+	data := make([]byte, 128)
+	copy(data[8:], blowfishPArray)
+
+	matches := scanner.ScanData(data)
+	found := false
+	for _, m := range matches {
+		if m.Signature.Algorithm == CryptoAlgorithmBlowfish {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("Blowfish P-Array not detected")
+	}
+}
+
+// ============================================================================
+// RC4 constants detection
+// ============================================================================
+
+func TestScanData_RC4IdentityPermutation_Detected(t *testing.T) {
+	scanner := NewCryptoScanner()
+
+	data := make([]byte, 128)
+	copy(data[16:], rc4IdentityPermutation)
+
+	matches := scanner.ScanData(data)
+	found := false
+	for _, m := range matches {
+		if m.Signature.Algorithm == CryptoAlgorithmRC4 {
+			found = true
+			if m.Offset != 16 {
+				t.Errorf("expected offset 16, got %d", m.Offset)
+			}
+		}
+	}
+	if !found {
+		t.Error("RC4 identity permutation not detected")
+	}
+}
+
+// ============================================================================
+// MD5 T-Table detection
+// ============================================================================
+
+func TestScanData_MD5TTable_Detected(t *testing.T) {
+	scanner := NewCryptoScanner()
+
+	data := make([]byte, 128)
+	copy(data[8:], md5TTable)
+
+	matches := scanner.ScanData(data)
+	found := false
+	for _, m := range matches {
+		if m.Signature.Algorithm == CryptoAlgorithmMD5 && m.Signature.Kind == CryptoConstantRoundConstant {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("MD5 T-Table constants not detected")
+	}
+}
+
+// ============================================================================
+// SHA-256 round constants detection
+// ============================================================================
+
+func TestScanData_SHA256RoundConst_Detected(t *testing.T) {
+	scanner := NewCryptoScanner()
+
+	data := make([]byte, 128)
+	copy(data[4:], sha256RoundConst)
+
+	matches := scanner.ScanData(data)
+	found := false
+	for _, m := range matches {
+		if m.Signature.Algorithm == CryptoAlgorithmSHA256 && m.Signature.Kind == CryptoConstantRoundConstant {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("SHA-256 round constants not detected")
+	}
+}
+
+// ============================================================================
+// modular arithmetic detection
+// ============================================================================
+
+func TestDetectModularArithmetic_WellKnownModulus(t *testing.T) {
+	data := make([]byte, 16)
+	binary.LittleEndian.PutUint64(data[0:], 0xFFFFFFFFFFFFFFFF)
+
+	results := DetectModularArithmetic(data)
+	found := false
+	for _, r := range results {
+		if r.Modulus == 0xFFFFFFFFFFFFFFFF {
+			found = true
+			if r.Algorithm != CryptoAlgorithmRSA {
+				t.Errorf("expected RSA algorithm, got %v", r.Algorithm)
+			}
+		}
+	}
+	if !found {
+		t.Error("well-known modulus 0xFFFFFFFFFFFFFFFF not detected")
+	}
+}
+
+func TestDetectModularArithmetic_EmptyData(t *testing.T) {
+	results := DetectModularArithmetic(nil)
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for nil data, got %d", len(results))
+	}
+}
+
+// ============================================================================
 // builtin signature database integrity
 // ============================================================================
 
@@ -576,6 +740,7 @@ func TestBuiltinSignatures_CoverAllAlgorithms(t *testing.T) {
 		CryptoAlgorithmSHA256,
 		CryptoAlgorithmSHA512,
 		CryptoAlgorithmMD5,
+		CryptoAlgorithmRC4,
 		CryptoAlgorithmChaCha20,
 		CryptoAlgorithmBlowfish,
 		CryptoAlgorithmCRC32,
